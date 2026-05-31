@@ -106,11 +106,12 @@ def build_chapter(chapter: Chapter, language: Optional[LanguageCode]) -> epub.Ep
         text = ctx.files.load_text(chapter.content_file)
     if not text:
         text = "<p><em>No content available</em></p>"
+
     content = RE_WHITESPACE.sub(
         "",
         f"""
     <div id="chapter">
-        <h4 style="opacity: 0.8">#{chapter.serial}</h4>
+        <h4 style="opacity: 0.75" aria-hidden="true">#{chapter.serial}</h4>
         <h1>{chapter.title}</h1>
         {text}
     </div>
