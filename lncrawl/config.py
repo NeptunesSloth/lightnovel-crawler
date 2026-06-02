@@ -493,6 +493,21 @@ class CrawlerConfig(_Section):
         self._set("can_use_browser", v)
 
     @property
+    def use_headless_mode(self) -> bool:
+        """Browser Headless Mode.
+
+        Run the browser in headless mode (no visible window) when doing browser-based crawling.
+        Off by default — a visible window is less likely to be detected as a bot and can handle
+        interactive challenges. Enable this on servers or in any environment where a display is
+        not available.
+        """
+        return self._get("use_headless_mode", False)
+
+    @use_headless_mode.setter
+    def use_headless_mode(self, v: bool) -> None:
+        self._set("use_headless_mode", v)
+
+    @property
     def selenium_grid(self) -> str:
         """Selenium Grid URL.
 

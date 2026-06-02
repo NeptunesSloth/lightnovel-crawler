@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-from lncrawl.core import BrowserTemplate
+from lncrawl.core import BrowserTemplate, SoupTemplate
 
 
-class NovelsOnline(BrowserTemplate):
+class NovelsOnline(SoupTemplate, BrowserTemplate):
     base_url = ["https://novelsonline.net/"]
     has_manga = False
     has_mtl = False

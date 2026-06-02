@@ -1,11 +1,11 @@
 import logging
 
-from lncrawl.core import BrowserTemplate, Chapter, PageSoup
+from lncrawl.core import BrowserTemplate, Chapter, PageSoup, SoupTemplate
 
 logger = logging.getLogger(__name__)
 
 
-class ReLibraryCrawler(BrowserTemplate):
+class ReLibraryCrawler(SoupTemplate, BrowserTemplate):
     base_url = [
         "https://re-library.com/",
     ]

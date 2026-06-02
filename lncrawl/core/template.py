@@ -1,14 +1,14 @@
-from functools import cached_property
+from contextlib import contextmanager
 from io import BytesIO
 import json
 import logging
+import sys
 from typing import Iterable, MutableMapping, Optional
 
 from requests.utils import CaseInsensitiveDict
 
 from ..context import ctx
 from ..exceptions import LNException, ScraperErrorGroup
-from ..utils.event_lock import EventLock
 from .crawler import Crawler
 from .models import Chapter, Novel, SearchResult, Volume
 from .soup import PageSoup
@@ -18,8 +18,6 @@ logger = logging.getLogger(__name__)
 
 class CrawlerTemplate(Crawler):
     """Class extended by all templates"""
-
-    pass
 
 
 # ----------------------------------------------------------------------------- #
@@ -294,12 +292,11 @@ class SoupTemplate(CrawlerTemplate):
 # ----------------------------------------------------------------------------- #
 
 
-class BrowserTemplate(SoupTemplate):
+class BrowserTemplate(CrawlerTemplate):
     """Attempts to crawl using scraper first, on failure use the browser."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._lock = EventLock()
         self._override_scraper_get_soup()
         self._override_scraper_get_image()
         self._override_scraper_get_json()
@@ -317,12 +314,10 @@ class BrowserTemplate(SoupTemplate):
             try:
                 return origin_method(url, *args, **kwargs)
             except ScraperErrorGroup:
-                if ctx.logger.is_debug:
-                    ctx.logger.error("Failed to get soup", exc_info=True)
-                with self._lock:
-                    self.browser.visit(url)
-                    self.browser.wait("body", By.TAG_NAME, timeout=60)
-                    return self.browser.soup
+                with self.create_browser() as browser:
+                    browser.visit(url)
+                    browser.wait("body", By.TAG_NAME, timeout=60)
+                    return browser.soup
 
         setattr(self.scraper, "get_soup", get_soup)
 
@@ -337,12 +332,10 @@ class BrowserTemplate(SoupTemplate):
             try:
                 return origin_method(url, *args, **kwargs)
             except ScraperErrorGroup:
-                if ctx.logger.is_debug:
-                    ctx.logger.error("Failed to get image", exc_info=True)
-                with self._lock:
-                    self.browser.visit(url)
-                    self.browser.wait("img", By.TAG_NAME, timeout=60)
-                    img = self.browser.find("img", By.TAG_NAME)
+                with self.create_browser() as browser:
+                    browser.visit(url)
+                    browser.wait("img", By.TAG_NAME, timeout=60)
+                    img = browser.find("img", By.TAG_NAME)
                     if img:
                         png = img.screenshot_as_png
                         return Image.open(BytesIO(png))
@@ -356,9 +349,6 @@ class BrowserTemplate(SoupTemplate):
             try:
                 return origin_method(url, headers, **kwargs)
             except ScraperErrorGroup:
-                if ctx.logger.is_debug:
-                    ctx.logger.error("Failed to get json", exc_info=True)
-
                 headers = CaseInsensitiveDict(headers or {})
                 url_js = json.dumps(url)
                 headers_js = json.dumps(dict(headers))
@@ -375,8 +365,8 @@ class BrowserTemplate(SoupTemplate):
                         }}
                     }})()
                 """
-                with self._lock:
-                    text = self.browser.execute_js(script, is_async=True)
+                with self.create_browser() as browser:
+                    text = browser.execute_js(script, is_async=True)
                     if not text:
                         raise LNException(f"Empty response from {url}")
 
@@ -395,40 +385,40 @@ class BrowserTemplate(SoupTemplate):
     # Browser interface
     # ------------------------------------------------------------------------- #
 
-    @cached_property
-    def browser(self):
+    @contextmanager
+    def create_browser(self):
         from .browser import Browser
 
-        if not ctx.config.crawler.can_use_browser:
-            raise RuntimeError("Browser is disabled in the configuration")
+        browser: Optional[Browser] = None
+        try:
+            if not ctx.config.crawler.can_use_browser:
+                if ctx.logger.has_exception:
+                    raise
+                raise RuntimeError("Browser is disabled in the configuration")
 
-        browser = Browser(
-            cookie_store=self.scraper.cookies,
-            headless=ctx.config.crawler.use_headless_mode,
-        )
+            ctx.logger.info(
+                f"Initializing browser. Headless={ctx.config.crawler.use_headless_mode}"
+            )
+            browser = Browser(
+                cookie_store=self.scraper.cookies,
+                headless=ctx.config.crawler.use_headless_mode,
+            )
 
-        _close = browser.close
-        _visit = browser.visit
+            _close = browser.close
+            _visit = browser.visit
 
-        def override_close() -> None:
-            _close()
-            self.__dict__.pop("browser", None)  # type: ignore
+            def override_close() -> None:
+                _close()
 
-        def override_visit(url: str) -> None:
-            _visit(url)
-            if browser.current_url:
-                self.scraper.last_soup_url = browser.current_url
+            def override_visit(url: str) -> None:
+                _visit(url)
+                if browser.current_url:
+                    self.scraper.last_soup_url = browser.current_url
 
-        setattr(browser, "close", override_close)
-        setattr(browser, "visit", override_visit)
+            setattr(browser, "close", override_close)
+            setattr(browser, "visit", override_visit)
 
-        return browser
-
-    def close(self) -> None:
-        super().close()
-        self._lock.abort()
-        if "browser" in self.__dict__:
-            self.browser.close()
-
-    def visit(self, url: str) -> None:
-        self.browser.visit(url)
+            yield browser
+        finally:
+            if browser:
+                browser.close()
