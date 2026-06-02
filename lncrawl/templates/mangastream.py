@@ -1,10 +1,10 @@
 from typing import Iterable, Optional
 from urllib.parse import urlencode
 
-from ..core import BrowserTemplate, Novel, PageSoup, SoupTemplate, Volume
+from ..core import Novel, PageSoup, SoupTemplate, Volume
 
 
-class MangaStreamTemplate(SoupTemplate, BrowserTemplate):
+class MangaStreamTemplate(SoupTemplate):
     is_template = True
 
     search_item_list_selector = ".listupd > article"

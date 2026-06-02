@@ -1,7 +1,7 @@
-from lncrawl.core import BrowserTemplate, Chapter, SoupTemplate
+from lncrawl.core import Chapter, SoupTemplate
 
 
-class NovelCool(SoupTemplate, BrowserTemplate):
+class NovelCool(SoupTemplate):
     has_manga = True
     base_url = "https://www.novelcool.com/"
 

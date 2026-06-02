@@ -2,12 +2,12 @@
 import logging
 from typing import List
 
-from lncrawl.core import BrowserTemplate, Novel, PageSoup, SearchResult, SoupTemplate
+from lncrawl.core import Novel, PageSoup, SearchResult, SoupTemplate
 
 logger = logging.getLogger(__name__)
 
 
-class YongLibraryCrawler(SoupTemplate, BrowserTemplate):
+class YongLibraryCrawler(SoupTemplate):
     base_url = [
         "https://yonglibrary.com/",
     ]

@@ -3,12 +3,12 @@ import logging
 import re
 from typing import Iterable, Optional
 
-from lncrawl.core import BrowserTemplate, Chapter, Novel, PageSoup, SoupTemplate, Volume
+from lncrawl.core import Chapter, Novel, PageSoup, SoupTemplate, Volume
 
 logger = logging.getLogger(__name__)
 
 
-class KatReadingCafeCrawler(SoupTemplate, BrowserTemplate):
+class KatReadingCafeCrawler(SoupTemplate):
     has_mtl = False
     base_url = "https://katreadingcafe.com/"
 

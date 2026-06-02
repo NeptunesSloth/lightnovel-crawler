@@ -6,14 +6,14 @@ import re
 from pyease_grpc import RpcSession
 from requests.utils import CaseInsensitiveDict
 
-from lncrawl.core import BrowserTemplate, Chapter, Novel, SoupTemplate, Volume
+from lncrawl.core import Chapter, Novel, SoupTemplate, Volume
 from lncrawl.core.browser import Browser, By
 from lncrawl.exceptions import FallbackToBrowser, ScraperErrorGroup
 
 logger = logging.getLogger(__name__)
 
 
-class WuxiaworldComCrawler(SoupTemplate, BrowserTemplate):
+class WuxiaworldComCrawler(SoupTemplate):
     base_url = [
         "https://www.wuxiaworld.com/",
     ]

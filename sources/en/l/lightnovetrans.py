@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-from lncrawl.core import BrowserTemplate, Novel, PageSoup, SoupTemplate
+from lncrawl.core import Novel, PageSoup, SoupTemplate
 
 
-class LNTCrawler(SoupTemplate, BrowserTemplate):
+class LNTCrawler(SoupTemplate):
     base_url = ["https://lightnovelstranslations.com/"]
 
     has_manga = False

@@ -1,13 +1,13 @@
 import re
 from typing import Iterable, Optional
 
-from ..core import BrowserTemplate, Chapter, Novel, PageSoup, SoupTemplate, Volume
+from ..core import Chapter, Novel, PageSoup, SoupTemplate, Volume
 from ..exceptions import LNException
 
 digit_regex = re.compile(r"page[-,=](\d+)")
 
 
-class NovelPubTemplate(SoupTemplate, BrowserTemplate):
+class NovelPubTemplate(SoupTemplate):
     is_template = True
 
     search_item_list_selector = ".novel-list .novel-item a"

@@ -7,7 +7,6 @@ from typing import Iterable
 from urllib.parse import urlencode, urlparse
 
 from lncrawl.core import (
-    BrowserTemplate,
     Chapter,
     Novel,
     PageSoup,
@@ -20,7 +19,7 @@ from lncrawl.exceptions import FallbackToBrowser, LNException
 logger = logging.getLogger(__name__)
 
 
-class WebnovelCrawler(SoupTemplate, BrowserTemplate):
+class WebnovelCrawler(SoupTemplate):
     base_url = [
         "https://m.webnovel.com/",
         "https://www.webnovel.com/",
