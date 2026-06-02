@@ -1,5 +1,5 @@
 {
-  "v": 1780428351,
+  "v": 1780428647,
   "app": {
     "windows": "https://go.bitanon.dev/lncrawl-windows",
     "linux": "https://go.bitanon.dev/lncrawl-linux",
@@ -606,8 +606,8 @@
       "id": "0280d2ad55af148cebbcc23b01f76501",
       "base_urls": [
         "https://novelfull.com/",
-        "http://novelfull.com/",
-        "https://novelfull.net/"
+        "https://novelfull.net/",
+        "http://novelfull.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/n/novelfull.py"
     },
@@ -671,8 +671,8 @@
       ],
       "id": "03c5adf369bf077bc498608b92ffe914",
       "base_urls": [
-        "https://fsapk.com/",
-        "https://bestoflightnovels.com/"
+        "https://bestoflightnovels.com/",
+        "https://fsapk.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/f/fsapk.py"
     },
@@ -935,7 +935,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/l/lightnovelpub.py"
     },
     "0b826eeed91f9b60eb5a7802ac9fad2d": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "b2738e7cf8d73b64c886bff828ec7b15",
       "file_path": "sources/en/w/webnovel.py",
       "language": "",
@@ -943,7 +943,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 101,
+      "total_commits": 102,
       "contributors": [
         "dipu-bd",
         "idMysteries",
@@ -1220,7 +1220,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/p/pandanovelorg.py"
     },
     "1217119972255c67094062ca3dc645f6": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "fe809035f75590beb3905496ab3d63a8",
       "file_path": "sources/pt/novelmania_com_br.py",
       "language": "",
@@ -1228,7 +1228,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 8,
+      "total_commits": 9,
       "contributors": [
         "dipu-bd"
       ],
@@ -1274,10 +1274,10 @@
       ],
       "id": "13731ad27f3abb8a72932375df633b1f",
       "base_urls": [
-        "https://www.readlightnovel.me/",
-        "https://readlightnovel.today/",
+        "https://www.readlightnovel.today/",
         "https://readlightnovel.me/",
-        "https://www.readlightnovel.today/"
+        "https://www.readlightnovel.me/",
+        "https://readlightnovel.today/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/r/readlightnovelorg.py"
     },
@@ -1297,8 +1297,8 @@
       ],
       "id": "13c4aa000336a93270cfe74d8d306faf",
       "base_urls": [
-        "https://yukinovel.me/",
-        "https://yukinovel.id/"
+        "https://yukinovel.id/",
+        "https://yukinovel.me/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/id/yukinovel.py"
     },
@@ -1847,13 +1847,13 @@
       ],
       "id": "237ab5f56e40e5e27d38b6c776064362",
       "base_urls": [
-        "http://zhi-end.blogspot.com/",
-        "http://zhi-end.blogspot.co.id/"
+        "http://zhi-end.blogspot.co.id/",
+        "http://zhi-end.blogspot.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/id/zhiend.py"
     },
     "258340a1925835bbd2033a38fb658d32": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "00713657f2ab2557903f7e5b231cc0b0",
       "file_path": "sources/en/r/ranobes.py",
       "language": "",
@@ -1861,7 +1861,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 35,
+      "total_commits": 36,
       "contributors": [
         "dipu-bd",
         "zerty"
@@ -2119,7 +2119,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/pt/blnovels.py"
     },
     "2c529108c1fd6d790a05e51c02f9bb9c": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "76cf0e3f146b3133426be34da98fe1b1",
       "file_path": "sources/multi/novelupdates.py",
       "language": "",
@@ -2127,7 +2127,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 13,
+      "total_commits": 14,
       "contributors": [
         "dipu-bd"
       ],
@@ -2351,7 +2351,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/pt/illusia.py"
     },
     "3519343beb8629554c0960ee8fe9c05e": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "fd77767f8768c38385fecfe6a3397a8c",
       "file_path": "sources/en/r/relibrary.py",
       "language": "",
@@ -2359,7 +2359,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 15,
+      "total_commits": 16,
       "contributors": [
         "CryZFix",
         "dipu-bd",
@@ -2701,10 +2701,10 @@
       ],
       "id": "3d2d575996fc57d75742cfc78a8c4ae3",
       "base_urls": [
-        "https://www.69shuba.pro/",
-        "https://www.69xinshu.com/",
         "https://www.69shu.pro/",
+        "https://www.69xinshu.com/",
         "https://www.69shu.com/",
+        "https://www.69shuba.pro/",
         "https://www.69shuba.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/zh/69shuba.py"
@@ -2967,7 +2967,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/fr/novelfrance.py"
     },
     "45d5088af4c73a3dd1121d12825a28e9": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "62b84314dc375c28f3e81ddd136c9401",
       "file_path": "sources/en/y/yonglibrary.py",
       "language": "",
@@ -2975,7 +2975,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 9,
+      "total_commits": 10,
       "contributors": [
         "dipu-bd"
       ],
@@ -3067,8 +3067,8 @@
       ],
       "id": "4882a44c662d96dcda14c3fe33ce4c6b",
       "base_urls": [
-        "https://home.novel-gate.com/",
-        "https://novelgate.net/"
+        "https://novelgate.net/",
+        "https://home.novel-gate.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/n/novelgate.py"
     },
@@ -3116,7 +3116,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/4/4scanlation.py"
     },
     "492d028ee4507260f0ea8b1703861104": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "6b15aacea4d2c0d7d0cf36a67973c611",
       "file_path": "sources/en/l/lightnovetrans.py",
       "language": "",
@@ -3124,7 +3124,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 19,
+      "total_commits": 20,
       "contributors": [
         "SirGryphin",
         "dipu-bd",
@@ -3158,10 +3158,10 @@
       ],
       "id": "4a7f2dd3ebdb72eb35b9aa50cdebe390",
       "base_urls": [
+        "https://foxaholic.com/",
         "https://global.foxaholic.com/",
         "https://www.foxaholic.com/",
-        "https://18.foxaholic.com/",
-        "https://foxaholic.com/"
+        "https://18.foxaholic.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/multi/foxaholic.py"
     },
@@ -3331,7 +3331,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/f/fenrirealm.py"
     },
     "501a9aa027d2fb448ae39be45a197473": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "03ea7a82ae477bf62e9acf825ca3f933",
       "file_path": "sources/en/n/novelsonline.py",
       "language": "",
@@ -3339,7 +3339,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 81,
+      "total_commits": 82,
       "contributors": [
         "SirGryphin",
         "dipu-bd",
@@ -3512,22 +3512,22 @@
       ],
       "id": "560dfc4e6b4f4026553927f23eb1a9dd",
       "base_urls": [
+        "https://es.mtlnovel.com/",
         "https://www.mtlnovel.com/",
-        "https://es.mtlnovels.com/",
-        "http://fr.mtlnovels.com/",
         "http://www.mtlnovel.com/",
         "http://es.mtlnovels.com/",
-        "http://es.mtlnovel.com/",
-        "http://id.mtlnovel.com/",
-        "http://www.mtlnovels.com/",
-        "https://www.mtlnovels.com/",
-        "http://id.mtlnovels.com/",
-        "https://id.mtlnovel.com/",
-        "https://id.mtlnovels.com/",
         "https://fr.mtlnovel.com/",
         "https://fr.mtlnovels.com/",
+        "https://id.mtlnovel.com/",
+        "http://fr.mtlnovels.com/",
+        "https://es.mtlnovels.com/",
+        "http://id.mtlnovel.com/",
+        "https://id.mtlnovels.com/",
+        "http://www.mtlnovels.com/",
         "http://fr.mtlnovel.com/",
-        "https://es.mtlnovel.com/"
+        "http://id.mtlnovels.com/",
+        "https://www.mtlnovels.com/",
+        "http://es.mtlnovel.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/multi/mtlnovel.py"
     },
@@ -3634,19 +3634,19 @@
       ],
       "id": "5955ede148817d13e8ef04255da4237d",
       "base_urls": [
-        "https://batotwo.com/",
-        "https://batocc.com/",
-        "https://mangatoto.net/",
-        "https://battwo.com/",
-        "https://mto.to/",
-        "https://bato.to/",
-        "https://batotoo.com/",
         "https://wto.to/",
-        "https://comiko.net/",
-        "https://dto.to/",
-        "https://mangatoto.org/",
         "https://mangatoto.com/",
-        "https://hto.to/"
+        "https://batotoo.com/",
+        "https://hto.to/",
+        "https://mangatoto.net/",
+        "https://mangatoto.org/",
+        "https://comiko.net/",
+        "https://batocc.com/",
+        "https://batotwo.com/",
+        "https://bato.to/",
+        "https://battwo.com/",
+        "https://dto.to/",
+        "https://mto.to/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/b/bato.py"
     },
@@ -3715,7 +3715,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/n/novelsrock.py"
     },
     "59ddd8952893c7d9bb4cb4667ca23249": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "41761e2e9635a1ed84a592a9c61fa8f2",
       "file_path": "sources/en/s/scribblehub.py",
       "language": "",
@@ -3723,7 +3723,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 49,
+      "total_commits": 50,
       "contributors": [
         "Epicpkmn11",
         "dipu-bd",
@@ -3836,8 +3836,8 @@
       ],
       "id": "5e962751f7928b75a7bbfd7a777fd629",
       "base_urls": [
-        "https://www.novels.pl/",
-        "https://novels.pl/"
+        "https://novels.pl/",
+        "https://www.novels.pl/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/n/novelspl.py"
     },
@@ -3921,8 +3921,8 @@
       ],
       "id": "60d429e97ac524370768e42640020b05",
       "base_urls": [
-        "https://www.mtlreader.com/",
-        "https://mtlreader.com/"
+        "https://mtlreader.com/",
+        "https://www.mtlreader.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/m/mtlreader.py"
     },
@@ -4286,7 +4286,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/8/88tang.py"
     },
     "6b823650e90e6aded6791efc2cb91f31": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "a126c0beb435c70191fde05fb25f4ef6",
       "file_path": "sources/ja/syosetuorg.py",
       "language": "",
@@ -4294,7 +4294,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 8,
+      "total_commits": 9,
       "contributors": [
         "dipu-bd"
       ],
@@ -4391,7 +4391,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/m/mtlednovels.py"
     },
     "6ef17917ddbd5d2bbea8b18cb55d5876": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "2799674e80aa5e27e5b9ac7fc23c287c",
       "file_path": "sources/en/w/wuxiaworldcom.py",
       "language": "",
@@ -4399,7 +4399,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 4,
+      "total_commits": 5,
       "contributors": [
         "dipu-bd"
       ],
@@ -4802,8 +4802,8 @@
       ],
       "id": "798d96c887453defdb9709c78ba8ece0",
       "base_urls": [
-        "https://daotranslate.com/",
-        "https://daotranslate.us/"
+        "https://daotranslate.us/",
+        "https://daotranslate.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/d/daotranslate.py"
     },
@@ -4846,8 +4846,8 @@
       ],
       "id": "7ab1621ed587050135b8fa1ab8f59e9d",
       "base_urls": [
-        "https://chapmanganato.com/",
-        "https://readmanganato.com/"
+        "https://readmanganato.com/",
+        "https://chapmanganato.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/r/readmanganato.py"
     },
@@ -5069,8 +5069,8 @@
       ],
       "id": "882e970a2872b8944179a14088aa5138",
       "base_urls": [
-        "http://www.fujitranslation.com/",
-        "https://fujitranslation.com/"
+        "https://fujitranslation.com/",
+        "http://www.fujitranslation.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/f/fujitrans.py"
     },
@@ -5196,8 +5196,8 @@
       ],
       "id": "8cd2d2f2b7696a6cffc29e9aa7820d30",
       "base_urls": [
-        "https://www.wuxiaworld.co/",
-        "https://m.wuxiaworld.co/"
+        "https://m.wuxiaworld.co/",
+        "https://www.wuxiaworld.co/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/w/wuxiaworldco.py"
     },
@@ -5278,10 +5278,10 @@
       ],
       "id": "9110b676d1c560cd4517d3028a05f01b",
       "base_urls": [
-        "https://wnmtl.org/",
         "https://www.wnmtl.org/",
-        "http://www.wnmtl.org/",
-        "http://wnmtl.org/"
+        "http://wnmtl.org/",
+        "https://wnmtl.org/",
+        "http://www.wnmtl.org/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/w/wnmtl.py"
     },
@@ -5323,9 +5323,9 @@
       "id": "91c5206fdb455e0ef8ccfc47afc9e342",
       "base_urls": [
         "https://lightnovels.me/",
+        "https://lightnovels.live/",
         "http://lightnovels.me/",
-        "http://lightnovels.live/",
-        "https://lightnovels.live/"
+        "http://lightnovels.live/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/l/lightnovelme.py"
     },
@@ -5547,9 +5547,9 @@
       ],
       "id": "960d88753fe3337dd74a1c4299a7956f",
       "base_urls": [
+        "https://aquamanga.org/",
         "https://aquamanga.com/",
-        "https://aquareader.net/",
-        "https://aquamanga.org/"
+        "https://aquareader.net/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/a/aquamanga.py"
     },
@@ -5629,8 +5629,8 @@
       ],
       "id": "96b9a9c6b35c6960eb5c06ff20918555",
       "base_urls": [
-        "https://www.readlightnovel.cc/",
-        "https://m.readlightnovel.cc/"
+        "https://m.readlightnovel.cc/",
+        "https://www.readlightnovel.cc/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/r/readlightnovelcc.py"
     },
@@ -5784,8 +5784,8 @@
       ],
       "id": "98febb53ce66264b8a06f4f372c71d40",
       "base_urls": [
-        "https://novgo.net/",
         "https://allnovelfull.com/",
+        "https://novgo.net/",
         "https://allnovelfull.net/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/a/allnovelfull.py"
@@ -5923,7 +5923,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/ru/bestmanga.py"
     },
     "9e2742c39f51ddf98c85831bc58ce8a1": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "33e67120b801b18787061809680649b9",
       "file_path": "sources/en/n/novelcool.py",
       "language": "",
@@ -5931,7 +5931,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 39,
+      "total_commits": 40,
       "contributors": [
         "SirGryphin",
         "dipu-bd",
@@ -6066,9 +6066,9 @@
       ],
       "id": "a36f44760b527424ecb888af646cad51",
       "base_urls": [
-        "https://faqwiki.xyz/",
+        "https://www.faqwiki.us/",
         "https://faqwiki.us/",
-        "https://www.faqwiki.us/"
+        "https://faqwiki.xyz/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/f/faqwiki.py"
     },
@@ -6351,9 +6351,9 @@
       ],
       "id": "ac753793428bb51739b9cdda4ca200d6",
       "base_urls": [
-        "https://www.p2wt.com/",
+        "https://www.shw5.cc/",
         "https://www.bq99.cc/",
-        "https://www.shw5.cc/"
+        "https://www.p2wt.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/zh/shw5.py"
     },
@@ -6393,8 +6393,8 @@
       ],
       "id": "ac87e43e23ae0349c3cdaf47608a0523",
       "base_urls": [
-        "https://www.asianovel.net/",
-        "https://www.wuxiasky.net/"
+        "https://www.wuxiasky.net/",
+        "https://www.asianovel.net/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/a/asianovel_net.py"
     },
@@ -6657,7 +6657,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/id/indomtl.py"
     },
     "b9ff1e5f9a4a4fab67f84a7569f426e6": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "6846ace8321070c8b71f71944d5f9003",
       "file_path": "sources/en/n/novelight.py",
       "language": "",
@@ -6665,7 +6665,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 16,
+      "total_commits": 17,
       "contributors": [
         "dipu-bd",
         "kardigun"
@@ -6773,8 +6773,8 @@
       ],
       "id": "bb4e1f8840fccb0e267e8071d7746ffc",
       "base_urls": [
-        "https://ancientheartloss.wordpress.com/",
-        "https://ancientheartloss.com/"
+        "https://ancientheartloss.com/",
+        "https://ancientheartloss.wordpress.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/a/ancientheartloss.py"
     },
@@ -6920,7 +6920,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/m/mangarosie.py"
     },
     "c0a3610807e73628eb7808e2fb29c820": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "c906b4c10ea24e77331ee6434a0b0771",
       "file_path": "sources/en/n/novelbuddy.py",
       "language": "",
@@ -6928,7 +6928,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": true,
-      "total_commits": 7,
+      "total_commits": 8,
       "contributors": [
         "RlmUwU",
         "dipu-bd"
@@ -7081,8 +7081,8 @@
       ],
       "id": "c7a362a3c314755965c90d3399f62daa",
       "base_urls": [
-        "https://my.w.tt/",
-        "https://www.wattpad.com/"
+        "https://www.wattpad.com/",
+        "https://my.w.tt/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/multi/wattpad.py"
     },
@@ -7208,8 +7208,8 @@
       ],
       "id": "cae098f1ccac37a75d27a51478fce26d",
       "base_urls": [
-        "https://myreadingmanga.fit/",
-        "https://beautymanga.com/"
+        "https://beautymanga.com/",
+        "https://myreadingmanga.fit/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/b/beautymanga.py"
     },
@@ -7248,10 +7248,10 @@
       ],
       "id": "cbb7a70d622bdffa28b6c9c7fd6275f5",
       "base_urls": [
-        "https://ixdzs8.com/",
-        "https://www.aixdzs.com/",
+        "https://ixdzs8.tw/",
         "https://tw.m.ixdzs.com/",
-        "https://ixdzs8.tw/"
+        "https://ixdzs8.com/",
+        "https://www.aixdzs.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/zh/ixdzs.py"
     },
@@ -7383,7 +7383,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/i/isotls.py"
     },
     "d138992787c95ecbbcb37bf2aada1379": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "2447e832882352142833392a91ecf1bd",
       "file_path": "sources/en/k/katreadingcafe.py",
       "language": "",
@@ -7391,7 +7391,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 6,
+      "total_commits": 7,
       "contributors": [
         "dipu-bd"
       ],
@@ -7418,8 +7418,8 @@
       ],
       "id": "d24292543093bd95f8e2e3145516946e",
       "base_urls": [
-        "https://novelbin.me/",
-        "https://novel-bin.com/"
+        "https://novel-bin.com/",
+        "https://novelbin.me/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/n/novel-bin.py"
     },
@@ -7483,8 +7483,8 @@
       ],
       "id": "d37ecb5158dd9515c7150ee270ae2807",
       "base_urls": [
-        "https://rpgnoob.wordpress.com/",
-        "https://rpgnovels.com/"
+        "https://rpgnovels.com/",
+        "https://rpgnoob.wordpress.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/r/rpgnovels.py"
     },
@@ -7569,11 +7569,11 @@
       ],
       "id": "d62869404e4b5dd6b19addc645f7fd81",
       "base_urls": [
-        "https://www.lightnovelreader.me/",
-        "https://lightnovelreader.me/",
         "https://www.lnreader.org/",
-        "http://readlightnovel.online/",
         "https://readlitenovel.com/",
+        "https://lightnovelreader.me/",
+        "https://www.lightnovelreader.me/",
+        "http://readlightnovel.online/",
         "https://lnreader.org/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/l/lightnovelreader.py"
@@ -7597,8 +7597,8 @@
       ],
       "id": "d640938bfa63f359f714ebe430ea1d22",
       "base_urls": [
-        "https://www.wuxiap.com/",
-        "https://www.readwn.com/"
+        "https://www.readwn.com/",
+        "https://www.wuxiap.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/r/readwn.py"
     },
@@ -7823,11 +7823,11 @@
       ],
       "id": "dd8df57f35925084fa5a41d345c4db7a",
       "base_urls": [
-        "https://tw.27k.net/",
-        "https://so.27k.net/",
         "https://www.27k.net/",
-        "https://m.27k.net/",
-        "https://www.lreads.com/"
+        "https://so.27k.net/",
+        "https://www.lreads.com/",
+        "https://tw.27k.net/",
+        "https://m.27k.net/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/zh/27k.py"
     },
@@ -7966,9 +7966,9 @@
       ],
       "id": "e2a0a1f66eec221866f52e14af342c50",
       "base_urls": [
+        "https://www.ptwxz.com/",
         "https://www.piaotia.com/",
-        "https://www.piaotian.com/",
-        "https://www.ptwxz.com/"
+        "https://www.piaotian.com/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/zh/piaotian.py"
     },
@@ -8033,7 +8033,7 @@
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/w/wuxiax.py"
     },
     "e4e4872da0e3ca5e2331d3d8a2657f34": {
-      "version": 1780428316,
+      "version": 1780428614,
       "md5": "2695cd42a44ee612da36faef0ae0288f",
       "file_path": "sources/es/novelasligera_com.py",
       "language": "",
@@ -8041,7 +8041,7 @@
       "can_login": false,
       "can_search": false,
       "has_mtl": false,
-      "total_commits": 5,
+      "total_commits": 6,
       "contributors": [
         "dipu-bd"
       ],
@@ -8071,8 +8071,8 @@
       ],
       "id": "e8ad3afbddacf31ce1488a15a3ba9c65",
       "base_urls": [
-        "https://www.mangaweebs.in/",
-        "https://mangaweebs.in/"
+        "https://mangaweebs.in/",
+        "https://www.mangaweebs.in/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/en/m/mangaweebs.py"
     },
@@ -8653,8 +8653,8 @@
       ],
       "id": "f74bd0aac01ea4c4dfe8dfd34ff9c562",
       "base_urls": [
-        "https://meionovel.id/",
-        "https://meionovels.com/"
+        "https://meionovels.com/",
+        "https://meionovel.id/"
       ],
       "github_url": "https://github.com/lncrawl/lightnovel-crawler/blob/dev/sources/id/meionovel.py"
     },
