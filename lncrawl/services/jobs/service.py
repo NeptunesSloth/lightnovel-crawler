@@ -58,10 +58,6 @@ class JobService:
             conditions: List[Any] = []
             if user_id is not None:
                 conditions.append(Job.user_id == user_id)
-            if parent_job_id is not None:
-                conditions.append(Job.parent_job_id == parent_job_id)
-            else:
-                conditions.append(sq.col(Job.parent_job_id).is_(None))
             if job_type is not None:
                 conditions.append(Job.type == job_type)
             if status is not None:
@@ -70,6 +66,15 @@ class JobService:
                 conditions.append(sq.col(Job.is_done).is_(True))
             if priority is not None:
                 conditions.append(Job.priority == priority)
+            if parent_job_id is not None:
+                conditions.append(Job.parent_job_id == parent_job_id)
+            else:
+                conditions.append(
+                    sq.or_(
+                        Job.status == JobStatus.PAUSED,
+                        sq.col(Job.parent_job_id).is_(None),
+                    )
+                )
 
             if conditions:
                 stmt = stmt.where(*conditions)

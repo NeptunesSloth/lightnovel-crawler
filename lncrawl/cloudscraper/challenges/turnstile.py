@@ -19,22 +19,24 @@ class TurnstileHandler(ChallengeHandler):
 
     def is_challenge(self, response: Response) -> bool:
         try:
+            if not response.headers.get("Server", "").startswith("cloudflare"):
+                return False
+            if response.status_code not in (403, 429, 503):
+                return False
+            text = response.text
             return (
-                response.headers.get("Server", "").startswith("cloudflare")
-                and response.status_code in (403, 429, 503)
-                and (
-                    bool(re.search(r'class="cf-turnstile"', response.text, re.M | re.S))
-                    or bool(
-                        re.search(
-                            r'src="https://challenges\.cloudflare\.com/turnstile/v0/api\.js',
-                            response.text,
-                            re.M | re.S,
-                        )
-                    )
-                    or bool(
-                        re.search(r'data-sitekey="[0-9A-Za-z]{40}"', response.text, re.M | re.S)
+                # Traditional explicit Turnstile embed
+                bool(re.search(r'class="cf-turnstile"', text, re.M | re.S))
+                or bool(
+                    re.search(
+                        r'src="https://challenges\.cloudflare\.com/turnstile/v0/api\.js',
+                        text,
+                        re.M | re.S,
                     )
                 )
+                or bool(re.search(r'data-sitekey="[0-9A-Za-z_-]{10,}"', text, re.M | re.S))
+                # Modern managed challenge — Turnstile loaded dynamically by CF JS orchestrator
+                or bool(re.search(r"window\._cf_chl_opt\s*=", text, re.M | re.S))
             )
         except AttributeError:
             return False

@@ -402,7 +402,10 @@ class BrowserTemplate(SoupTemplate):
         if not ctx.config.crawler.can_use_browser:
             raise RuntimeError("Browser is disabled in the configuration")
 
-        browser = Browser(cookie_store=self.scraper.cookies, headless=True)
+        browser = Browser(
+            cookie_store=self.scraper.cookies,
+            headless=ctx.config.crawler.use_headless_mode,
+        )
 
         _close = browser.close
         _visit = browser.visit
