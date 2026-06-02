@@ -38,8 +38,8 @@ class Scraper(CloudScraper):
             rotate_tls_ciphers=True,  # Avoids cipher detection
             # Enhanced protection
             auto_refresh_on_403=False,  # Auto-recover from 403 errors
-            max_403_retries=2,  # Max retry attempts
-            session_refresh_interval=900,  # Session refresh time in seconds
+            max_403_retries=3,  # Max retry attempts
+            session_refresh_interval=300,  # Session refresh time in seconds
             # Optimized stealth mode
             enable_stealth=True,
             stealth_options={
