@@ -42,7 +42,7 @@ services:
     image: peterdavehello/tor-socks-proxy
     restart: unless-stopped
     volumes:
-      - ./tor_data:/var/lib/tor
+      - tor_data:/var/lib/tor
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -52,3 +52,6 @@ services:
           memory: "256M"
         reservations:
           memory: "64M"
+
+volumes:
+  tor_data:
