@@ -57,6 +57,7 @@ class CloudscraperSessionState:
     def reset_403(self) -> None:
         with self._lock:
             self._retry_403 = 0
+            self._last_403 = 0.0
 
     def register_403(self, limit: int) -> bool:
         """Record a 403 retry attempt; return True if still under *limit*."""

@@ -98,9 +98,13 @@ class Scraper(CloudScraper):
     def ping(self, url: str, timeout=5, **kwargs):
         return self.request("head", url, **kwargs, timeout=timeout)
 
-    def get(self, url, **kwargs):
-        kwargs.setdefault("timeout", (7, 301))
+    def get(self, url, **kwargs) -> Response:  # type: ignore[override]
+        kwargs.setdefault("timeout", (15, 301))
         return super().get(url, **kwargs)
+
+    def post(self, url, **kwargs) -> Response:  # type: ignore[override]
+        kwargs.setdefault("timeout", (15, 301))
+        return super().post(url, **kwargs)
 
     def submit_form(
         self,
