@@ -39,12 +39,13 @@ services:
           memory: "512M"
 
   torproxy:
-    image: peterdavehello/tor-socks-proxy
+    image: sdipu/tor-proxy:latest
     restart: unless-stopped
-    volumes:
-      - tor_data:/var/lib/tor
-    security_opt:
-      - no-new-privileges:true
+    environment:
+      SOCKS_HOST: 0.0.0.0
+      CONTROL_HOST: 0.0.0.0
+      CONTROL_PASSWORD: "secret"
+      SOCKS_POLICY: accept 127.0.0.1,accept 10.0.0.0/8,accept 172.16.0.0/12,accept 192.168.0.0/16
     deploy:
       resources:
         limits:
@@ -52,6 +53,3 @@ services:
           memory: "256M"
         reservations:
           memory: "64M"
-
-volumes:
-  tor_data:
