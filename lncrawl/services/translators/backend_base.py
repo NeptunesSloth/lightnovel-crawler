@@ -3,8 +3,8 @@ from threading import Event
 from typing import Generator, Iterable, Optional, Union
 
 from bs4 import BeautifulSoup, Tag
+from scraper import Scraper
 
-from ...core.scraper import Scraper
 from ...core.taskman import TaskManager
 from ...enums import LanguageCode
 from ...utils.event_lock import EventLock

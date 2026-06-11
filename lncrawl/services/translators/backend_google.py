@@ -42,8 +42,6 @@ class GoogleMobileTranslate(ChunkedBackendBase):
         signal: Optional[Event] = None,
     ) -> str:
         with self.lock:
-            if signal is not None:
-                self.scraper.signal = signal
             soup = self.scraper.get_soup(
                 "https://translate.google.com/m",
                 params={
@@ -52,6 +50,7 @@ class GoogleMobileTranslate(ChunkedBackendBase):
                     "q": text,
                 },
                 timeout=60,
+                signal=signal,
             )
             result = soup.select_one("div.result-container")
             if not result:
@@ -70,8 +69,6 @@ class GoogleClient5Translate(ChunkedBackendBase):
         signal: Optional[Event] = None,
     ) -> str:
         with self.lock:
-            if signal is not None:
-                self.scraper.signal = signal
             data = self.scraper.get_json(
                 "https://clients5.google.com/translate_a/t",
                 params={
@@ -81,6 +78,7 @@ class GoogleClient5Translate(ChunkedBackendBase):
                     "q": text,
                 },
                 timeout=60,
+                signal=signal,
             )
             return "".join(part[0] for part in data if part[0])
 
@@ -96,8 +94,6 @@ class GoogleGtxTranslate(ChunkedBackendBase):
         signal: Optional[Event] = None,
     ) -> str:
         with self.lock:
-            if signal is not None:
-                self.scraper.signal = signal
             data = self.scraper.get_json(
                 "https://translate.googleapis.com/translate_a/single",
                 params={
@@ -108,5 +104,6 @@ class GoogleGtxTranslate(ChunkedBackendBase):
                     "q": text,
                 },
                 timeout=60,
+                signal=signal,
             )
             return "".join(part[0] for part in data[0] if part[0])

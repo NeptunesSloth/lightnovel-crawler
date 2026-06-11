@@ -5,8 +5,7 @@ from typing import Any, Dict, List, Set, TypeVar, Union
 import unicodedata
 
 from bs4 import Comment, Tag
-
-from .soup import PageSoup
+from scraper import PageSoup
 
 T = TypeVar("T")
 

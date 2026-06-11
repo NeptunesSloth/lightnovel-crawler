@@ -5,12 +5,12 @@ import logging
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from requests.cookies import RequestsCookieJar
+from scraper import PageSoup
 
 from ..context import ctx
 from ..utils.async_loop import run_async
 from ..webdriver import create_new
 from ..webdriver.storage import BrowserStorage
-from .soup import PageSoup
 
 if TYPE_CHECKING:
     from nodriver import Browser as UCBrowser, Element, Tab

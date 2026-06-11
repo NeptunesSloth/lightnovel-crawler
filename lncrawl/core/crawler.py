@@ -57,13 +57,21 @@ class Crawler(ABC):
         if not origin or origin not in self.base_url:
             origin = self.base_url[0]
 
+        from scraper import Scraper, default_config
+
         from .cleaner import TextCleaner
-        from .scraper import Scraper
         from .taskman import TaskManager
 
         self.cleaner = TextCleaner()
         self.taskman = TaskManager(workers=workers)
-        self.scraper = Scraper(origin=origin, parser=parser)
+
+        config = default_config()
+        if ctx.config.crawler.proxy_url:
+            config.proxy.proxy_urls = [ctx.config.crawler.proxy_url]
+            config.proxy.tor_control_host = ctx.config.crawler.tor_control_host
+            config.proxy.tor_control_port = ctx.config.crawler.tor_control_port
+            config.proxy.tor_control_password = ctx.config.crawler.tor_control_password
+        self.scraper = Scraper(origin=origin, parser=parser, config=config)
 
     def close(self) -> None:
         self.scraper.close()

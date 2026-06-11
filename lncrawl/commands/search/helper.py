@@ -104,5 +104,6 @@ def search_job(source: "SourceItem", query: str, signal: Event):
     results = crawler.search(query)
     results = [SearchResult(**item) for item in results]
     crawler.close()
+
     logger.info(f"[green]{url}[/green] Found {len(results)} results")
     return results

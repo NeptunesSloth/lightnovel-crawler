@@ -7,9 +7,8 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from PIL import UnidentifiedImageError
 from requests.exceptions import RequestException
+from scraper._engine.exceptions import AbortedException, CloudflareException
 from urllib3.exceptions import HTTPError
-
-from .cloudscraper.exceptions import AbortedException, CloudflareException
 
 __all__ = [
     "LNException",

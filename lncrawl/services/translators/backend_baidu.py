@@ -60,8 +60,6 @@ class BaiduTranslate(ChunkedBackendBase):
         sign = md5(f"{app_id}{text}{salt}{secret_key}".encode()).hexdigest()
 
         with self.lock:
-            if signal is not None:
-                self.scraper.signal = signal
             data = self.scraper.get_json(
                 "https://fanyi-api.baidu.com/api/trans/vip/translate",
                 params={
@@ -73,6 +71,7 @@ class BaiduTranslate(ChunkedBackendBase):
                     "sign": sign,
                 },
                 timeout=60,
+                signal=signal,
             )
 
         if "error_code" in data:

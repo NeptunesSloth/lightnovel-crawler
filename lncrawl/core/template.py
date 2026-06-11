@@ -5,12 +5,12 @@ import logging
 from typing import Iterable, MutableMapping, Optional
 
 from requests.utils import CaseInsensitiveDict
+from scraper import PageSoup
 
 from ..context import ctx
 from ..exceptions import LNException, ScraperErrorGroup
 from .crawler import Crawler
 from .models import Chapter, Novel, SearchResult, Volume
-from .soup import PageSoup
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,6 @@ class BrowserTemplate(CrawlerTemplate):
                 f"Initializing browser. Headless={ctx.config.crawler.use_headless_mode}"
             )
             browser = Browser(
-                cookie_store=self.scraper.cookies,
                 headless=ctx.config.crawler.use_headless_mode,
             )
 

@@ -19,7 +19,7 @@ class LegacyCrawler(BrowserTemplate):
         self.home_url = self.base_url[0]
 
         super().__init__(
-            origin=self.home_url,
+            origin=origin,
             workers=workers,
             parser=parser,
         )
@@ -86,7 +86,7 @@ class LegacyCrawler(BrowserTemplate):
 
     @property
     def cookies(self) -> Dict[str, Optional[str]]:
-        return {x.name: x.value for x in self.scraper.cookies}
+        return dict(self.scraper.cookies)
 
     def get_response(self, *args: Any, **kwargs: Any):
         return self.scraper.get(*args, **kwargs)

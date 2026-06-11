@@ -1,10 +1,10 @@
+from scraper import PageSoup, Scraper
+
 from .browser import Browser
 from .cleaner import TextCleaner
 from .crawler import Crawler
 from .legacy import LegacyCrawler
 from .models import Chapter, CombinedSearchResult, Novel, SearchResult, Volume
-from .scraper import Scraper
-from .soup import PageSoup
 from .taskman import TaskManager
 from .template import BrowserTemplate, CrawlerTemplate, SoupTemplate
 
