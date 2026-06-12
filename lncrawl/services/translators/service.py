@@ -43,7 +43,7 @@ class TranslationService:
         for backend in self._backends:
             if not backend.is_enabled(language):
                 continue
-            last_fail = self._failing.get(backend, 0)
+            last_fail = self._failing.get(backend, float("-inf"))
             if time.monotonic() - last_fail < 5 * 60:
                 continue
             yield backend

@@ -72,6 +72,12 @@ app.include_router(api, prefix="/api")
 app.mount("/static", CustomStaticFiles(), name="static")
 
 
+# Lightweight liveness probe — no auth, used by Docker healthcheck
+@app.get("/health", include_in_schema=False)
+async def health():
+    return {"status": "ok", "version": get_version()}
+
+
 # Mount frontend
 @app.get("/{fallback:path}", include_in_schema=False)
 async def serve_web(fallback: str):

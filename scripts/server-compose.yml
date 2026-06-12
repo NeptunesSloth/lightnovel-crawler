@@ -6,12 +6,24 @@ services:
     command: -ll server -p 8080
     environment:
       - LNCRAWL_DATA_PATH=/data
-      - TOR_CONTROL_HOST=torproxy
-      - TOR_PROXY_URL=socks5://torproxy:9150
+      # - TOR_CONTROL_HOST=torproxy
+      # - TOR_PROXY_URL=socks5h://torproxy:9150
       - DATABASE_URL=postgresql+psycopg://pguser:pgpass@postgres:5432/lncrawl
     volumes:
       - ./appdata:/data
     restart: unless-stopped
+    labels:
+      - autoheal=true
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
     deploy:
       resources:
         limits:
@@ -19,7 +31,17 @@ services:
           memory: "5G"
         reservations:
           cpus: "2.00"
-          memory: "512M"
+          memory: "1G"
+
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 30
+      AUTOHEAL_START_PERIOD: 90
 
   postgres:
     image: postgres:alpine
@@ -38,18 +60,18 @@ services:
         reservations:
           memory: "512M"
 
-  torproxy:
-    image: sdipu/tor-proxy:latest
-    restart: unless-stopped
-    environment:
-      SOCKS_HOST: 0.0.0.0
-      CONTROL_HOST: 0.0.0.0
-      CONTROL_PASSWORD: "secret"
-      SOCKS_POLICY: accept 127.0.0.1,accept 10.0.0.0/8,accept 172.16.0.0/12,accept 192.168.0.0/16
-    deploy:
-      resources:
-        limits:
-          cpus: "0.50"
-          memory: "256M"
-        reservations:
-          memory: "64M"
+  # torproxy:
+  #   image: sdipu/tor-proxy:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     SOCKS_HOST: 0.0.0.0
+  #     CONTROL_HOST: 0.0.0.0
+  #     CONTROL_PASSWORD: "secret"
+  #     SOCKS_POLICY: accept 127.0.0.1,accept 10.0.0.0/8,accept 172.16.0.0/12,accept 192.168.0.0/16
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: "0.50"
+  #         memory: "256M"
+  #       reservations:
+  #         memory: "64M"
