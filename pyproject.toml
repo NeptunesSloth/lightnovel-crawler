@@ -10,8 +10,13 @@ classifiers = [
   "Development Status :: 5 - Production/Stable",
   "Natural Language :: English",
   "Intended Audience :: Developers",
+  "Intended Audience :: End Users/Desktop",
   "Topic :: Games/Entertainment",
+  "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
   "Environment :: Console",
+  "Environment :: Web Environment",
+  "Framework :: FastAPI",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
@@ -59,9 +64,9 @@ dependencies = [
   "uvicorn>=0.32.0",
   "zstd>=1.5.7.0",
 ]
-description = "Download lightnovels from various online sources and generate output in different formats, e.g. epub, mobi, json, text, docx, pdf, html etc."
+description = "Download lightnovels from 300+ sources and export to EPUB, MOBI, PDF, DOCX, and more — with a CLI, REST API, and web UI."
 dynamic = ["version"]
-keywords = ["lightnovel", "crawler", "lncrawl", "novel", "pdf", "epub", "mobi", "scraper"]
+keywords = ["lightnovel", "webnovel", "crawler", "scraper", "downloader", "novel", "ebook", "epub", "mobi", "pdf"]
 license = "GPL-3.0-or-later"
 name = "lightnovel-crawler"
 readme = "README.rst"
@@ -99,6 +104,7 @@ lsp = [
 extra-index-url = ["https://piwheels.org"]
 
 [project.urls]
+"Changelog" = "https://github.com/lncrawl/lightnovel-crawler/blob/master/CHANGELOG.md"
 "Documentation" = "https://github.com/lncrawl/lightnovel-crawler/blob/master/README.md"
 "Issue Tracker" = "https://github.com/lncrawl/lightnovel-crawler/issues"
 "Source Code" = "https://github.com/lncrawl/lightnovel-crawler"
