@@ -163,7 +163,10 @@ class Crawler(ABC):
             ctx.logger.debug(f"Cover saved: {cover_url} -> {cover_file}")
             return
         except Exception as e:
-            ctx.logger.warn(f"Cover download failed: {cover_url} -> {cover_file}", exc_info=True)
+            ctx.logger.warn(
+                f"Cover download failed: {cover_url} -> {cover_file}",
+                exc_info=ctx.logger.is_debug,
+            )
             if not self.auto_generate_cover:
                 raise LNException("Failed to download cover") from e
 
