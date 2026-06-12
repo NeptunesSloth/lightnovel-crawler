@@ -115,6 +115,9 @@ class ServerErrors:
     job_limit_reached = ServerError(
         status.HTTP_429_TOO_MANY_REQUESTS, "Active job limit reached for your tier"
     )
+    search_job_limit_reached = ServerError(
+        status.HTTP_429_TOO_MANY_REQUESTS, "Search job limit reached for your tier"
+    )
     library_limit_reached = ServerError(
         status.HTTP_429_TOO_MANY_REQUESTS, "Library limit reached for your tier"
     )

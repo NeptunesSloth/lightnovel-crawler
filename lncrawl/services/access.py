@@ -31,6 +31,11 @@ class AccessManager:
         UserTier.PREMIUM: 50,
         UserTier.VIP: None,
     }
+    _MAX_ACTIVE_SEARCH_JOBS = {
+        UserTier.BASIC: 1,
+        UserTier.PREMIUM: 10,
+        UserTier.VIP: None,
+    }
     _MAX_LIBRARIES = {
         UserTier.BASIC: 10,
         UserTier.PREMIUM: 100,
@@ -87,6 +92,9 @@ class AccessManager:
 
     def max_active_jobs(self, user: User) -> Optional[int]:
         return self._MAX_ACTIVE_JOBS[user.tier]
+
+    def max_active_search_jobs(self, user: User) -> Optional[int]:
+        return self._MAX_ACTIVE_SEARCH_JOBS[user.tier]
 
     def max_libraries(self, user: User) -> Optional[int]:
         return self._MAX_LIBRARIES[user.tier]

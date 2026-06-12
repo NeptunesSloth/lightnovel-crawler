@@ -1,4 +1,7 @@
-from typing import Any, Callable, List
+from difflib import SequenceMatcher
+from typing import Any, Callable, List, Optional, TypeVar
+
+T = TypeVar("T")
 
 
 def binary_search(
@@ -17,3 +20,20 @@ def binary_search(
         else:
             return mid
     return None
+
+
+def sort_by_rank(
+    items: List[T],
+    query: str,
+    key: Optional[Callable[[T], Any]],
+    reverse: bool = False,
+):
+    if not key:
+        key = str
+    items.sort(
+        reverse=not reverse,
+        key=lambda x: SequenceMatcher(
+            a=key(x),
+            b=query,
+        ).ratio(),
+    )

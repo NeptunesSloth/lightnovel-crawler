@@ -1,3 +1,4 @@
+from difflib import SequenceMatcher
 import logging
 from threading import Event
 from typing import List, Optional, Union
@@ -231,5 +232,7 @@ class CrawlerService:
         if signal:
             crawler.scraper.signal = signal
 
-        results = crawler.search(query)
+        results = list(crawler.search(query))
+        results.sort(key=lambda x: -SequenceMatcher(a=x.title, b=query).ratio())
+
         return list(results)

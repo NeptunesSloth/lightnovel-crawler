@@ -89,7 +89,7 @@ def replay_job(
     return ctx.jobs._create(
         user=user,
         type=job.type,
-        data=job.extra,
+        data=dict(**job.extra),
         depends_on=job.depends_on,
     )
 

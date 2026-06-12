@@ -1,3 +1,4 @@
+from difflib import SequenceMatcher
 from functools import cached_property
 import logging
 from threading import Event
@@ -205,10 +206,10 @@ class JobRunner:
             return
 
         if self.job.parent_job_id:
-            parent = ctx.jobs.get_root(self.job.id)
-            if not parent:
+            root = ctx.jobs.get_root(self.job.id)
+            if not root:
                 return
-            runner = JobRunner(parent, self.signal)
+            runner = JobRunner(root, self.signal)
             runner.user = self.user
             return runner.__send_mail()
 
@@ -878,28 +879,33 @@ class JobRunner:
             if not query or len(query) < 2:
                 return self.__set_done("Search query must be at least 2 characters long")
 
-            domain_id_map = {}
+            added_domains = set()
             if self.job.is_running:
-                domain_id_map = {job.extra.get("domain"): job.id for job in self.children}
+                added_domains = set([job.extra.get("domain") for job in self.children])
             else:
+                self.__set_extra(search_results=[])
                 self.__set_running()
 
             sources = ctx.sources.list(
                 include_rejected=False,
                 can_search=True,
             )
-            for source in sources:
-                if source.domain in domain_id_map:
-                    continue
+            domains = [source.domain for source in sources if source.domain not in added_domains]
+            if not domains:
+                return self.__set_done()
+
+            domain_usage = ctx.novels.list_domains()
+            domains.sort(key=lambda x: domain_usage.get(x) or 0, reverse=True)
+
+            for domain in domains:
                 if self.signal.is_set():
                     raise AbortedException()
-                job = ctx.jobs.search_single_source(
+                ctx.jobs.search_single_source(
                     self.user,
                     query,
-                    source.domain,
+                    domain,
                     parent_id=self.job.id,
                 )
-                domain_id_map[source.domain] = job.id
 
             return self.__increment()
         except AbortedException:
@@ -922,17 +928,30 @@ class JobRunner:
 
             from ...core import SearchResult
 
+            # get cached results if available, and skip searching
             results = [SearchResult(**item) for item in self.job.extra.get("search_results") or []]
             if not results:
+                # get search results
                 results = ctx.crawler.search_novel(
                     user_id=self.user.id,
                     query=query,
                     domain=domain,
                     signal=self.signal,
                 )
-                self.__set_extra(
-                    search_results=[result.to_dict() for result in results],
-                )
+                search_results = [result.to_dict() for result in results]
+                self.__set_extra(search_results=search_results)
+
+                # aggregate search results in the root job
+                if search_results:
+                    root = ctx.jobs.get_root(self.job.id)
+                    if root and root.id != self.job.id:
+                        extra = dict(**root.extra)
+                        combined = search_results + extra["search_results"]
+                        combined.sort(key=lambda x: -SequenceMatcher(a=x["title"], b=query).ratio())
+                        extra["search_results"] = combined
+                        with ctx.db.session() as sess:
+                            ctx.jobs._update(sess, root.id, extra=extra)
+                            sess.commit()
 
             if not results:
                 return self.__set_done()
@@ -941,6 +960,8 @@ class JobRunner:
                 if job.type == JobType.NOVEL_BATCH:
                     break
             else:
+                if self.signal.is_set():
+                    raise AbortedException()
                 ctx.jobs.fetch_many_novels(
                     self.user,
                     *(item.url for item in results),

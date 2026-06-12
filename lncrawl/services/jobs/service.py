@@ -160,11 +160,10 @@ class JobService:
 
     def get_root(self, job_id: str) -> Optional[Job]:
         with ctx.db.session() as sess:
-            sa_pars = select_ancestors(job_id)
             return sess.exec(
                 sq.select(Job)
-                .where(sq.col(Job.id).in_(sa_pars))
                 .where(sq.col(Job.parent_job_id).is_(None))
+                .where(sq.col(Job.id).in_(select_ancestors(job_id)))
                 .limit(1)
             ).first()
 
@@ -603,6 +602,7 @@ class JobService:
         depends_on: Optional[str] = None,
         **data: Any,
     ) -> Job:
+        data["search_results"] = []
         data["query"] = str(query).strip().casefold()
         return self._create(
             user=user,
@@ -623,6 +623,7 @@ class JobService:
         **data: Any,
     ) -> Job:
         data["domain"] = domain
+        data["search_results"] = []
         data["query"] = str(query).strip().casefold()
         source = ctx.sources.get_source(domain)
         if not source.can_search:
@@ -684,6 +685,43 @@ class JobService:
     # -------------------------------------------------------------------------
     #                            Internal Methods
     # -------------------------------------------------------------------------
+    def _get_active_job_count(
+        self,
+        sess: Session,
+        user_id: str,
+        types: Optional[List[JobType]] = None,
+    ):
+        stmt = sq.select(sq.func.count())
+        stmt = stmt.select_from(Job)
+        stmt = stmt.where(
+            Job.user_id == user_id,
+            sq.col(Job.is_done).is_(False),
+            sq.col(Job.parent_job_id).is_(None),
+        )
+        if types:
+            stmt = stmt.where(sq.col(Job.type).in_(types))
+        return sess.scalar(stmt) or 0
+
+    def _ensure_user_acess_limit(self, sess: Session, user: User):
+        limit = ctx.tier.max_active_jobs(user)
+        if limit is not None:
+            active = self._get_active_job_count(sess, user.id)
+            if active >= limit:
+                raise ServerErrors.job_limit_reached.with_extra(active)
+
+        search_limit = ctx.tier.max_active_search_jobs(user)
+        if search_limit is not None:
+            active = self._get_active_job_count(
+                sess,
+                user.id,
+                types=[
+                    JobType.SEARCH_SOURCE,
+                    JobType.SEARCH_ALL_SOURCES,
+                ],
+            )
+            if active >= search_limit:
+                raise ServerErrors.search_job_limit_reached.with_extra(active)
+
     def _create(
         self,
         user: User,
@@ -692,23 +730,9 @@ class JobService:
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
     ) -> Job:
-        limit = ctx.tier.max_active_jobs(user)
         with ctx.db.session() as sess:
-            if parent_id is None and limit is not None:
-                active = (
-                    sess.scalar(
-                        sq.select(sq.func.count())
-                        .select_from(Job)
-                        .where(
-                            Job.user_id == user.id,
-                            sq.col(Job.parent_job_id).is_(None),
-                            sq.col(Job.is_done).is_(False),
-                        )
-                    )
-                    or 0
-                )
-                if active >= limit:
-                    raise ServerErrors.job_limit_reached
+            if parent_id is None:
+                self._ensure_user_acess_limit(sess, user)
 
             job = Job(
                 type=type,
@@ -785,7 +809,13 @@ class JobService:
 
     def _update(self, sess: Session, job_id: str, **values) -> None:
         with self._update_lock:
-            sess.exec(sq.update(Job).where(sq.col(Job.id) == job_id).values(**values))
+            sess.exec(
+                sq.update(Job)
+                .where(
+                    sq.col(Job.id) == job_id,
+                )
+                .values(**values)
+            )
 
     def _update_up(
         self,

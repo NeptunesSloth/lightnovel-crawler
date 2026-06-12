@@ -45,5 +45,5 @@ class TranslateChaptersRequest(BaseModel):
 
 
 class SearchSourceRequest(BaseModel):
-    query: str = Field(description="Search query")
+    query: str = Field(description="Search query", min_length=2, max_length=50)
     domain: Optional[str] = Field(default=None, description="Search in a specific source only")
