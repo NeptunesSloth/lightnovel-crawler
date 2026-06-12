@@ -1,4 +1,3 @@
-from difflib import SequenceMatcher
 from functools import cached_property
 import logging
 from threading import Event
@@ -941,17 +940,11 @@ class JobRunner:
                 search_results = [result.to_dict() for result in results]
                 self.__set_extra(search_results=search_results)
 
-                # aggregate search results in the root job
+                # aggregate search results in the root job (atomic read-modify-write)
                 if search_results:
                     root = ctx.jobs.get_root(self.job.id)
                     if root and root.id != self.job.id:
-                        extra = dict(**root.extra)
-                        combined = search_results + extra["search_results"]
-                        combined.sort(key=lambda x: -SequenceMatcher(a=x["title"], b=query).ratio())
-                        extra["search_results"] = combined
-                        with ctx.db.session() as sess:
-                            ctx.jobs._update(sess, root.id, extra=extra)
-                            sess.commit()
+                        ctx.jobs._append_search_results(root.id, search_results, query)
 
             if not results:
                 return self.__set_done()

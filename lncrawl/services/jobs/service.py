@@ -1,3 +1,4 @@
+from difflib import SequenceMatcher
 from typing import Any, Iterable, List, Optional, TypeVar
 
 from sqlalchemy.orm import aliased
@@ -702,7 +703,7 @@ class JobService:
             stmt = stmt.where(sq.col(Job.type).in_(types))
         return sess.scalar(stmt) or 0
 
-    def _ensure_user_acess_limit(self, sess: Session, user: User):
+    def _ensure_user_access_limit(self, sess: Session, user: User):
         limit = ctx.tier.max_active_jobs(user)
         if limit is not None:
             active = self._get_active_job_count(sess, user.id)
@@ -732,7 +733,7 @@ class JobService:
     ) -> Job:
         with ctx.db.session() as sess:
             if parent_id is None:
-                self._ensure_user_acess_limit(sess, user)
+                self._ensure_user_access_limit(sess, user)
 
             job = Job(
                 type=type,
@@ -884,6 +885,20 @@ class JobService:
             inclusive=True,
             done=Job.done + step,
         )
+
+    def _append_search_results(self, root_id: str, new_results: List[dict], query: str) -> None:
+        """Atomically append search results to a root job's extra under the update lock."""
+        with ctx.db.session() as sess:
+            with self._update_lock:
+                root = sess.get(Job, root_id)
+                if not root:
+                    return
+                extra = dict(**root.extra)
+                combined = new_results + (extra.get("search_results") or [])
+                combined.sort(key=lambda x: -SequenceMatcher(a=x["title"], b=query).ratio())
+                extra["search_results"] = combined
+                sess.exec(sq.update(Job).where(sq.col(Job.id) == root_id).values(extra=extra))
+                sess.commit()
 
     def _count_pending(self, sess: Session, job_id: str) -> int:
         return sess.exec(sq.select(Job.total - Job.done).where(Job.id == job_id)).one()
