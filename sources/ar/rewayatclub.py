@@ -3,7 +3,7 @@ import json
 import logging
 import math
 
-import quickjs
+import exejs
 
 from lncrawl.core import Chapter, LegacyCrawler, PageSoup
 
@@ -80,8 +80,7 @@ class RewayatClubCrawler(LegacyCrawler):
         script = soup.find(name="script", string=lambda s: s.startswith("window.__NUXT__"))
         script_content = script.text.replace("window.__NUXT__=", "")[:-1]
 
-        _ctx = quickjs.Context()
-        data = json.loads(_ctx.eval(f"JSON.stringify(({script_content}))"))
+        data = json.loads(exejs.evaluate(f"JSON.stringify(({script_content}))"))
         assert isinstance(data, dict)
 
         return data

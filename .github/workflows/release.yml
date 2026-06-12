@@ -58,7 +58,11 @@ jobs:
           uv sync --all-extras --all-groups
           uv run python -m build -w
           uv run python setup_pyi.py
+
+      - name: 🧪 Test Executable
+        run: |
           .\dist\lncrawl\lncrawl.exe -ll sources list
+          .\dist\lncrawl\lncrawl.exe -ll crawl 'https://novelfull.com/dungeon-defense.html' --first 2 --format epub --noin
 
       - name: 📦 Build Installer
         run: |
