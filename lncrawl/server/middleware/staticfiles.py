@@ -9,7 +9,7 @@ from ...context import ctx
 from ...dao import ActivityType
 from ...exceptions import ServerErrors
 
-_WHITELIST = frozenset(["novels", "images"])
+_WHITELIST = frozenset(["novels", "images", "sources"])
 
 
 class StaticFilesGuard:
