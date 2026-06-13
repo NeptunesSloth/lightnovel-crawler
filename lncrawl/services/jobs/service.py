@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from difflib import SequenceMatcher
 from typing import Any, Callable, Iterable, List, Optional, TypeVar, Union
 
 from sqlalchemy.orm import aliased
@@ -21,7 +20,6 @@ from ...dao import (
 )
 from ...exceptions import ServerErrors
 from ...server.models import Paginated
-from ...utils.event_lock import EventLock
 from ...utils.time_utils import current_timestamp
 from .utils import select_ancestors, select_descendants
 
@@ -35,9 +33,6 @@ job_canceled_literal = sq.cast(sq.literal(JobStatus.CANCELED.name), job_status_t
 
 
 class JobService:
-    def __init__(self) -> None:
-        self._update_lock = EventLock()
-
     # -------------------------------------------------------------------------
     #                               GET Jobs
     # -------------------------------------------------------------------------
@@ -101,6 +96,10 @@ class JobService:
                 limit=limit,
                 items=list(items),
             )
+
+    def count(self) -> int:
+        with ctx.db.session() as sess:
+            return sess.scalar(sq.select(sq.func.count()).select_from(Job)) or 0
 
     def get(self, job_id: str) -> Job:
         with ctx.db.session() as sess:
@@ -812,14 +811,13 @@ class JobService:
             return sess.exec(stmt.limit(1)).first()
 
     def _update(self, sess: Session, job_id: str, **values) -> None:
-        with self._update_lock:
-            sess.exec(
-                sq.update(Job)
-                .where(
-                    sq.col(Job.id) == job_id,
-                )
-                .values(**values)
+        sess.exec(
+            sq.update(Job)
+            .where(
+                sq.col(Job.id) == job_id,
             )
+            .values(**values)
+        )
 
     def _update_up(
         self,
@@ -851,40 +849,38 @@ class JobService:
         )
 
         sa_pars = select_ancestors(job_id, inclusive)
-        with self._update_lock:
-            sess.exec(
-                sq.update(Job)
-                .where(sq.col(Job.id).in_(sa_pars))
-                .where(sq.col(Job.is_done).is_(False))
-                .values(
-                    done=sa_done,
-                    total=sa_total,
-                    failed=sa_failed,
-                    status=sa_status,
-                    is_done=sa_is_done,
-                    started_at=sa_started_at,
-                    finished_at=sa_finished_at,
-                )
+        sess.exec(
+            sq.update(Job)
+            .where(sq.col(Job.id).in_(sa_pars))
+            .where(sq.col(Job.is_done).is_(False))
+            .values(
+                done=sa_done,
+                total=sa_total,
+                failed=sa_failed,
+                status=sa_status,
+                is_done=sa_is_done,
+                started_at=sa_started_at,
+                finished_at=sa_finished_at,
             )
+        )
 
     def _cancel_down(self, sess: Session, job_id: str, inclusive=False) -> None:
         now = current_timestamp()
         sa_deps = select_descendants(job_id, inclusive)
-        with self._update_lock:
-            sess.exec(
-                sq.update(Job)
-                .where(
-                    sq.col(Job.id).in_(sa_deps),
-                    sq.col(Job.is_done).is_(False),
-                )
-                .values(
-                    is_done=True,
-                    status=job_canceled_literal,
-                    error="Canceled by one of the parent",
-                    started_at=sq.func.coalesce(Job.started_at, now),
-                    finished_at=sq.func.coalesce(Job.finished_at, now),
-                )
+        sess.exec(
+            sq.update(Job)
+            .where(
+                sq.col(Job.id).in_(sa_deps),
+                sq.col(Job.is_done).is_(False),
             )
+            .values(
+                is_done=True,
+                status=job_canceled_literal,
+                error="Canceled by one of the parent",
+                started_at=sq.func.coalesce(Job.started_at, now),
+                finished_at=sq.func.coalesce(Job.finished_at, now),
+            )
+        )
 
     def _increment_up(self, sess: Session, job_id: str, step: int = 1) -> None:
         self._update_up(
@@ -893,20 +889,6 @@ class JobService:
             inclusive=True,
             done=Job.done + step,
         )
-
-    def _append_search_results(self, root_id: str, new_results: List[dict], query: str) -> None:
-        """Atomically append search results to a root job's extra under the update lock."""
-        with ctx.db.session() as sess:
-            with self._update_lock:
-                root = sess.get(Job, root_id)
-                if not root:
-                    return
-                extra = dict(**root.extra)
-                combined = new_results + (extra.get("search_results") or [])
-                combined.sort(key=lambda x: -SequenceMatcher(a=x["title"], b=query).ratio())
-                extra["search_results"] = combined
-                sess.exec(sq.update(Job).where(sq.col(Job.id) == root_id).values(extra=extra))
-                sess.commit()
 
     def _count_pending(self, sess: Session, job_id: str) -> int:
         return sess.exec(sq.select(Job.total - Job.done).where(Job.id == job_id)).one()
@@ -952,19 +934,18 @@ class JobService:
         job: Union[Job, str],
         updates: Union[dict, Callable[[dict], None]],
     ) -> None:
-        with self._update_lock:
-            with ctx.db.session() as sess:
-                job_id = job.id if isinstance(job, Job) else job
-                current = sess.scalar(sq.select(Job.extra).where(Job.id == job_id))
+        with ctx.db.session() as sess:
+            job_id = job.id if isinstance(job, Job) else job
+            current = sess.scalar(sq.select(Job.extra).where(Job.id == job_id))
 
-                extra = dict(current or {})
-                if callable(updates):
-                    updates(extra)
-                else:
-                    extra.update(updates)
+            extra = dict(current or {})
+            if callable(updates):
+                updates(extra)
+            else:
+                extra.update(updates)
 
-                sess.exec(sq.update(Job).where(sq.col(Job.id) == job_id).values(extra=extra))
-                sess.commit()
+            sess.exec(sq.update(Job).where(sq.col(Job.id) == job_id).values(extra=extra))
+            sess.commit()
 
-                if isinstance(job, Job):
-                    job.extra = extra
+            if isinstance(job, Job):
+                job.extra = extra

@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 import mimetypes
 from pathlib import Path
@@ -75,7 +76,14 @@ app.mount("/static", CustomStaticFiles(), name="static")
 # Lightweight liveness probe — no auth, used by Docker healthcheck
 @app.get("/health", include_in_schema=False)
 async def health():
-    return {"status": "ok", "version": get_version()}
+    job_count = ctx.jobs.count()
+    user_count = ctx.users.count()
+    return {
+        "status": "ok",
+        "version": get_version(),
+        "users": user_count,
+        "jobs": job_count,
+    }
 
 
 # Mount frontend
@@ -84,7 +92,8 @@ async def serve_web(fallback: str):
     target_file = web_dir.joinpath(fallback)
     if not target_file.is_relative_to(web_dir):
         raise ServerErrors.not_found
-    if not target_file.is_file():
+    loop = asyncio.get_event_loop()
+    if not await loop.run_in_executor(None, target_file.is_file):
         target_file = web_dir / "index.html"
     mime_type, _ = mimetypes.guess_type(target_file)
     if not mime_type:

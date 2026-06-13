@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 from jose import jwt
 from passlib.context import CryptContext
 from sqlalchemy.exc import IntegrityError
-import sqlmodel as sa
+import sqlmodel as sq
 
 from ..context import ctx
 from ..dao import NotificationItem, User, UserRole, UserTier, UserToken
@@ -43,7 +43,7 @@ class UserService:
         email = ctx.config.app.admin_email
         password = ctx.config.app.admin_password
         with ctx.db.session() as sess:
-            user = sess.exec(sa.select(User).where(User.email == email).limit(1)).first()
+            user = sess.exec(sq.select(User).where(User.email == email).limit(1)).first()
             if not user:
                 logger.info("Adding admin user")
                 user = User(
@@ -109,6 +109,10 @@ class UserService:
             raise ServerErrors.forbidden
         return self.get(user_id)
 
+    def count(self) -> int:
+        with ctx.db.session() as sess:
+            return sess.scalar(sq.select(sq.func.count()).select_from(User)) or 0
+
     def list(
         self,
         offset: int = 0,
@@ -119,34 +123,34 @@ class UserService:
         referrer: Optional[str] = None,
     ) -> Paginated[User]:
         with ctx.db.session() as sess:
-            stmt = sa.select(User)
-            cnt = sa.select(sa.func.count()).select_from(User)
+            stmt = sq.select(User)
+            cnt = sq.select(sq.func.count()).select_from(User)
 
             # Apply filters
             conditions: List[Any] = []
             if search:
                 q = f"%{search}%"
                 conditions.append(
-                    sa.or_(
-                        sa.col(User.name).ilike(q),
-                        sa.col(User.email).ilike(q),
-                        sa.cast(User.role, sa.String).ilike(q),
-                        sa.cast(User.tier, sa.String).ilike(q),
+                    sq.or_(
+                        sq.col(User.name).ilike(q),
+                        sq.col(User.email).ilike(q),
+                        sq.cast(User.role, sq.String).ilike(q),
+                        sq.cast(User.tier, sq.String).ilike(q),
                     )
                 )
             if referrer:
                 conditions.append(User.referrer_id == referrer)
             if is_verified is not None:
-                conditions.append(sa.col(User.is_verified).is_(is_verified))
+                conditions.append(sq.col(User.is_verified).is_(is_verified))
             if is_active is not None:
-                conditions.append(sa.col(User.is_active).is_(is_active))
+                conditions.append(sq.col(User.is_active).is_(is_active))
 
             if conditions:
                 cnt = cnt.where(*conditions)
                 stmt = stmt.where(*conditions)
 
             # Apply sorting
-            stmt = stmt.order_by(sa.asc(User.created_at))
+            stmt = stmt.order_by(sq.asc(User.created_at))
 
             # Apply pagination
             stmt = stmt.offset(offset).limit(limit)
@@ -176,7 +180,7 @@ class UserService:
 
     def verify(self, creds: LoginRequest) -> User:
         with ctx.db.session() as sess:
-            q = sa.select(User).where(User.email == creds.email)
+            q = sq.select(User).where(User.email == creds.email)
             user = sess.exec(q).first()
             if not user:
                 raise ServerErrors.no_such_user
@@ -188,7 +192,7 @@ class UserService:
 
     def create(self, body: CreateRequest) -> User:
         with ctx.db.session() as sess:
-            q = sa.select(sa.func.count()).where(User.email == body.email)
+            q = sq.select(sq.func.count()).where(User.email == body.email)
             if sess.exec(q).one() != 0:
                 raise ServerErrors.user_exists
             user = User(
@@ -248,7 +252,7 @@ class UserService:
 
     def set_verified(self, email: str) -> None:
         with ctx.db.session() as sess:
-            user = sess.exec(sa.select(User).where(User.email == email)).first()
+            user = sess.exec(sq.select(User).where(User.email == email)).first()
             if not user:
                 raise ServerErrors.no_such_user
             if user.is_verified:
@@ -268,7 +272,7 @@ class UserService:
 
     def send_otp(self, email: str) -> str:
         with ctx.db.session() as sess:
-            user = sess.exec(sa.select(User).where(User.email == email).limit(1)).first()
+            user = sess.exec(sq.select(User).where(User.email == email).limit(1)).first()
             if user and user.is_verified:
                 raise ServerErrors.email_already_verified
 
@@ -297,7 +301,7 @@ class UserService:
 
     def send_password_reset_link(self, email: str) -> None:
         with ctx.db.session() as sess:
-            q = sa.select(User).where(User.email == email)
+            q = sq.select(User).where(User.email == email)
             user = sess.exec(q).first()
             if not user:
                 raise ServerErrors.no_such_user
@@ -311,7 +315,7 @@ class UserService:
 
     def send_invite_email(self, inviter: User, recipient_email: str) -> None:
         with ctx.db.session() as sess:
-            q = sa.select(sa.func.count()).where(User.email == recipient_email)
+            q = sq.select(sq.func.count()).where(User.email == recipient_email)
             if sess.exec(q).one() != 0:
                 raise ServerErrors.user_exists
 
@@ -328,9 +332,9 @@ class UserService:
         with ctx.db.session() as sess:
             # check for existing token
             latest_token = sess.exec(
-                sa.select(UserToken)
+                sq.select(UserToken)
                 .where(UserToken.user_id == user.id)
-                .order_by(sa.desc(UserToken.expires_at))
+                .order_by(sq.desc(UserToken.expires_at))
             ).first()
             if latest_token and latest_token.expires_at > now + 3 * day:
                 return latest_token.token
@@ -367,9 +371,9 @@ class UserService:
     def list_user_tokens(self, user_id: str) -> List[UserToken]:
         with ctx.db.session() as sess:
             tokens = sess.exec(
-                sa.select(UserToken)
+                sq.select(UserToken)
                 .where(UserToken.user_id == user_id)
-                .order_by(sa.desc(UserToken.expires_at))
+                .order_by(sq.desc(UserToken.expires_at))
             ).all()
             return list(tokens)
 
