@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.8.0] - 2026-06-14
+
+### Added
+
+- **Job notifications** — `JobNotificationService` dispatches email on job state changes (pending → running → success/failure) via a background `TaskManager`; triggered from handler helpers (`_set_running`, `_set_success`, etc.)
+- **Docker healthcheck** — server container now exposes a `/health` probe
+
+### Changed
+
+- **Job runner refactored into typed handlers** — `JobRunner` now dispatches via a `_HANDLER_REGISTRY` of `BaseHandler`/`BatchHandler` subclasses; each job type has its own module under `scheduler/handlers/`
+- **Web app synced before Docker build** — `lncrawl-web` artifacts are pulled in as part of the Docker build step
+- **`crawler_version` stamped on novel/chapter updates** — upserts now use a merge strategy to preserve existing data
+
+### Fixed
+
+- **Server hangup** — root cause of hang addressed (event lock contention / crawler resource leak)
+- **Server crash** — crawler resource leak on shutdown fixed; Docker healthcheck added
+- **`crawl.py`** (#3030) — regression in CLI crawl flow corrected
+- **Torproxy** — re-enabled after an unintended regression
+
 ## [4.7.0] - 2026-06-13
 
 ### Added
