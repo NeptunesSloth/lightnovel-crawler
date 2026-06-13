@@ -3,11 +3,9 @@ from threading import Event
 from typing import Generator, Iterable, Optional, Union
 
 from bs4 import BeautifulSoup, Tag
-from scraper import Scraper
 
 from ...core.taskman import TaskManager
 from ...enums import LanguageCode
-from ...utils.event_lock import EventLock
 
 
 class BackendBase(ABC):
@@ -17,18 +15,14 @@ class BackendBase(ABC):
         ratelimit: Optional[float] = None,
     ) -> None:
         self._default_chunk_size = 1000
-        self.lock = EventLock()
-        self.scraper = Scraper()
-        self.taskman = TaskManager(max_workers, ratelimit)
+        self._taskman = TaskManager(max_workers, ratelimit)
 
     @property
     def name(self):
         return self.__class__.__name__
 
     def close(self):
-        self.lock.abort()
-        self.scraper.close()
-        self.taskman.close()
+        self._taskman.close()
 
     @abstractmethod
     def is_enabled(self, language: LanguageCode) -> bool:
@@ -125,10 +119,10 @@ class ChunkedBackendBase(BackendBase):
         signal: Optional[Event] = None,
     ) -> Iterable[str]:
         futures = (
-            self.taskman.submit_task(self.translate, chunk, target, signal)
+            self._taskman.submit_task(self.translate, chunk, target, signal)
             for chunk in self._build(texts)
         )
-        self.taskman.resolve(
+        self._taskman.resolve(
             futures,
             fail_fast=True,
             desc="Translating",

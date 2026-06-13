@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from difflib import SequenceMatcher
-from typing import Any, Iterable, List, Optional, TypeVar
+from typing import Any, Callable, Iterable, List, Optional, TypeVar, Union
 
 from sqlalchemy.orm import aliased
 import sqlmodel as sq
@@ -120,15 +122,15 @@ class JobService:
             raise ServerErrors.forbidden
         return user_id
 
-    def get_children_ids(self, parent_job_id: str) -> Iterable[str]:
+    def get_children_ids(self, parent_job_id: str) -> List[str]:
         with ctx.db.session() as sess:
             stmt = sq.select(Job.id).where(Job.parent_job_id == parent_job_id)
-            return sess.exec(stmt).all()
+            return list(sess.exec(stmt).all())
 
-    def get_children(self, parent_job_id: str) -> Iterable[Job]:
+    def get_children(self, parent_job_id: str) -> List[Job]:
         with ctx.db.session() as sess:
             stmt = sq.select(Job).where(Job.parent_job_id == parent_job_id)
-            return sess.exec(stmt).all()
+            return list(sess.exec(stmt).all())
 
     def get_chapter_job(self, user_id: str, chapter_id: str) -> Optional[Job]:
         with ctx.db.session() as sess:
@@ -161,12 +163,12 @@ class JobService:
 
     def get_root(self, job_id: str) -> Optional[Job]:
         with ctx.db.session() as sess:
-            return sess.exec(
+            return sess.scalar(
                 sq.select(Job)
                 .where(sq.col(Job.parent_job_id).is_(None))
                 .where(sq.col(Job.id).in_(select_ancestors(job_id)))
                 .limit(1)
-            ).first()
+            )
 
     # -------------------------------------------------------------------------
     #                              CREATE Jobs
@@ -792,7 +794,8 @@ class JobService:
             if skip_user_ids:
                 stmt = stmt.where(
                     sq.or_(
-                        Job.priority != JobPriority.LOW, sq.col(Job.user_id).not_in(skip_user_ids)
+                        Job.priority != JobPriority.LOW,
+                        sq.col(Job.user_id).not_in(skip_user_ids),
                     )
                 )
 
@@ -834,12 +837,17 @@ class JobService:
         sa_failed = failed
         sa_is_done = sa_done == sa_total
 
-        sa_status = sq.case((sa_is_done, job_success_literal), else_=Job.status)
+        sa_status = sq.case(
+            (sa_is_done, job_success_literal),
+            else_=Job.status,
+        )
         sa_started_at = sq.case(
-            (sq.and_(sa_is_done, sq.col(Job.started_at).is_(None)), now), else_=Job.started_at
+            (sq.and_(sa_is_done, sq.col(Job.started_at).is_(None)), now),
+            else_=Job.started_at,
         )
         sa_finished_at = sq.case(
-            (sq.and_(sa_is_done, sq.col(Job.finished_at).is_(None)), now), else_=Job.finished_at
+            (sq.and_(sa_is_done, sq.col(Job.finished_at).is_(None)), now),
+            else_=Job.finished_at,
         )
 
         sa_pars = select_ancestors(job_id, inclusive)
@@ -938,3 +946,25 @@ class JobService:
                     sess.commit()
 
         return True
+
+    def update_extra(
+        self,
+        job: Union[Job, str],
+        updates: Union[dict, Callable[[dict], None]],
+    ) -> None:
+        with self._update_lock:
+            with ctx.db.session() as sess:
+                job_id = job.id if isinstance(job, Job) else job
+                current = sess.scalar(sq.select(Job.extra).where(Job.id == job_id))
+
+                extra = dict(current or {})
+                if callable(updates):
+                    updates(extra)
+                else:
+                    extra.update(updates)
+
+                sess.exec(sq.update(Job).where(sq.col(Job.id) == job_id).values(extra=extra))
+                sess.commit()
+
+                if isinstance(job, Job):
+                    job.extra = extra

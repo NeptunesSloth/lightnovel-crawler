@@ -6,7 +6,7 @@ from typing import Optional
 
 from ...context import ctx
 from ...enums import LanguageCode
-from .backend_base import ChunkedBackendBase
+from ._base import ChunkedBackendBase
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +59,8 @@ class BaiduTranslate(ChunkedBackendBase):
         salt = str(random.randint(10000, 99999))
         sign = md5(f"{app_id}{text}{salt}{secret_key}".encode()).hexdigest()
 
-        with self.lock:
-            data = self.scraper.get_json(
+        with ctx.http.session(signal) as sess:
+            data = sess.get_json(
                 "https://fanyi-api.baidu.com/api/trans/vip/translate",
                 params={
                     "q": text,
@@ -71,7 +71,6 @@ class BaiduTranslate(ChunkedBackendBase):
                     "sign": sign,
                 },
                 timeout=60,
-                signal=signal,
             )
 
         if "error_code" in data:

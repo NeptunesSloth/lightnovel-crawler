@@ -86,10 +86,13 @@ def replay_job(
     job_id: str = Path(),
 ) -> Job:
     job = ctx.jobs.get(job_id)
+    data = dict(**job.extra)
+    if job.type in (JobType.SEARCH_ALL_SOURCES, JobType.SEARCH_SOURCE):
+        data["search_results"] = []
     return ctx.jobs._create(
         user=user,
+        data=data,
         type=job.type,
-        data=dict(**job.extra),
         depends_on=job.depends_on,
     )
 

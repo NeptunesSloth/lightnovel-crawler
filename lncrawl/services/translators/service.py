@@ -10,8 +10,8 @@ from ...context import ctx
 from ...dao import Chapter, ChapterTranslation, Novel, NovelTranslation, Volume, VolumeTranslation
 from ...enums import LanguageCode
 from ...exceptions import ServerErrors
+from ._base import BackendBase
 from .backend_baidu import BaiduTranslate
-from .backend_base import BackendBase
 from .backend_bing import BingTranslate
 from .backend_google import GoogleClient5Translate, GoogleGtxTranslate, GoogleMobileTranslate
 from .backend_lingva import LingvaTranslate

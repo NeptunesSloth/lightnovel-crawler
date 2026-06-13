@@ -4,8 +4,11 @@ from threading import Event
 import time
 from typing import Iterable, Optional
 
+from scraper import Scraper
+
+from ...context import ctx
 from ...enums import LanguageCode
-from .backend_base import BackendBase
+from ._base import BackendBase
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +46,15 @@ class BingTranslate(BackendBase):
     ) -> None:
         super().__init__(max_workers, ratelimit)
         self._token: str = ""
-        self._token_expiry: float = 0.0
+        self._token_expiry: float = float("-inf")
 
     def is_enabled(self, language: LanguageCode) -> bool:
         return language in _LANG_MAP
 
-    def _get_token(self) -> str:
+    def _get_token(self, sess: Scraper) -> str:
         if time.monotonic() < self._token_expiry:
             return self._token
-        self._token = self.scraper.get(
+        self._token = sess.get(
             "https://edge.microsoft.com/translate/auth",
             timeout=30,
         ).text.strip()
@@ -66,13 +69,12 @@ class BingTranslate(BackendBase):
     ) -> Iterable[str]:
         if target not in _LANG_MAP:
             raise ValueError(f"Bing Translate does not support: {target}")
-        with self.lock:
-            data = self.scraper.post_json(
+        with ctx.http.session(signal) as sess:
+            data = sess.post_json(
                 "https://api.cognitive.microsofttranslator.com/translate",
                 data=json.dumps([{"Text": t} for t in texts]),
-                headers={"Authorization": f"Bearer {self._get_token()}"},
+                headers={"Authorization": f"Bearer {self._get_token(sess)}"},
                 params={"api-version": "3.0", "to": _LANG_MAP[target]},
                 timeout=60,
-                signal=signal,
             )
         return (item["translations"][0]["text"] for item in data)

@@ -18,9 +18,6 @@ _month = 30 * _day
 
 
 class Scrubber:
-    def __init__(self, signal=Event()) -> None:
-        self.signal = signal
-
     @staticmethod
     def run(signal: Event):
         scrubber = Scrubber(signal)
@@ -29,6 +26,9 @@ class Scrubber:
         scrubber.cancel_long_jobs()
         scrubber.delete_expired_tokens()
         scrubber.delete_inactive_users()
+
+    def __init__(self, signal=Event()) -> None:
+        self.signal = signal
 
     def free_disk_space(self):
         # Check if disk size limit is set
