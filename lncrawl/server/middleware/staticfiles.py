@@ -1,9 +1,9 @@
+import asyncio
 from pathlib import Path
 from urllib.parse import quote, unquote
 
-from fastapi.responses import Response
-from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.staticfiles import StaticFiles
 
 from ...context import ctx
 from ...dao import ActivityType
@@ -12,38 +12,43 @@ from ...exceptions import ServerErrors
 _WHITELIST = frozenset(["novels", "images"])
 
 
-class StaticFilesGuard(BaseHTTPMiddleware):
+class StaticFilesGuard:
     def __init__(self, app, prefix: str = "/static") -> None:
+        self.app = app
         self.prefix = prefix
-        super().__init__(app)
 
-    @property
-    def prefix_len(self):
-        return len(self.prefix) + 1
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-    async def dispatch(self, request, call_next) -> Response:
-        path = unquote(request.url.path)
+        path = unquote(scope["path"])
         if not path.startswith(self.prefix):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        file_path = path[self.prefix_len :]
+        file_path = path[len(self.prefix) + 1 :]
         first_part = file_path.split("/")[0]
         if first_part not in _WHITELIST or not ctx.files.exists(file_path):
-            return ServerErrors.no_such_file.to_response()
+            await ServerErrors.no_such_file.to_response()(scope, receive, send)
+            return
 
         # Propagate decoded path so StaticFiles finds the file (handles Unicode filenames)
-        request.scope["path"] = path
+        scope["path"] = path
 
-        token = request.query_params.get("token")
+        token = Request(scope, receive).query_params.get("token")
         if not token:
-            return ServerErrors.forbidden.to_response()
+            await ServerErrors.forbidden.to_response()(scope, receive, send)
+            return
 
-        user = ctx.users.verify_token(token, [])
+        loop = asyncio.get_event_loop()
+        user = await loop.run_in_executor(None, lambda: ctx.users.verify_token(token, []))
         if not user.is_active:
-            return ServerErrors.inactive_user.to_response()
+            await ServerErrors.inactive_user.to_response()(scope, receive, send)
+            return
 
-        request.scope["user"] = user
-        return await call_next(request)
+        scope["user"] = user
+        await self.app(scope, receive, send)
 
 
 class CustomStaticFiles(StaticFiles):

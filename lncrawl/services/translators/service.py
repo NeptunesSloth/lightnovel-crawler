@@ -10,8 +10,8 @@ from ...context import ctx
 from ...dao import Chapter, ChapterTranslation, Novel, NovelTranslation, Volume, VolumeTranslation
 from ...enums import LanguageCode
 from ...exceptions import ServerErrors
+from ._base import BackendBase
 from .backend_baidu import BaiduTranslate
-from .backend_base import BackendBase
 from .backend_bing import BingTranslate
 from .backend_google import GoogleClient5Translate, GoogleGtxTranslate, GoogleMobileTranslate
 from .backend_lingva import LingvaTranslate
@@ -43,7 +43,7 @@ class TranslationService:
         for backend in self._backends:
             if not backend.is_enabled(language):
                 continue
-            last_fail = self._failing.get(backend, 0)
+            last_fail = self._failing.get(backend, float("-inf"))
             if time.monotonic() - last_fail < 5 * 60:
                 continue
             yield backend

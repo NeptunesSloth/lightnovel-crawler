@@ -39,15 +39,22 @@ def build_command():
         "--noconfirm",
         "--name=lncrawl",
         f"--icon={ROOT / 'res' / 'lncrawl.ico'}",
-        "--collect-all=pylsp",
         f"--distpath={DIST_DIR}",
         f"--specpath={SPEC_DIR}",
         f"--workpath={BUILD_DIR}",
     ]
+    command += gather_packages()
     command += gather_data_files()
     command += gather_hidden_imports()
     command += gather_excluded_modules()
     return command
+
+
+def gather_packages():
+    packages = [
+        "pylsp",
+    ]
+    return [f"--collect-all={pkg}" for pkg in packages]
 
 
 def gather_data_files():

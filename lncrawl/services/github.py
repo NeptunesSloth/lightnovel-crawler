@@ -19,7 +19,7 @@ class GitHubService:
     def __init__(self) -> None:
         self._lock = EventLock()
         self._index: CrawlerIndex
-        self._last_index_fetch = 0.0
+        self._last_index_fetch = float("-inf")
 
     def close(self):
         self._lock.abort()

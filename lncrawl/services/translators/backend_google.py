@@ -2,8 +2,9 @@ import logging
 from threading import Event
 from typing import Optional
 
+from ...context import ctx
 from ...enums import LanguageCode
-from .backend_base import ChunkedBackendBase
+from ._base import ChunkedBackendBase
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,8 @@ class GoogleMobileTranslate(ChunkedBackendBase):
         target: LanguageCode,
         signal: Optional[Event] = None,
     ) -> str:
-        with self.lock:
-            soup = self.scraper.get_soup(
+        with ctx.http.session(signal) as sess:
+            soup = sess.get_soup(
                 "https://translate.google.com/m",
                 params={
                     "sl": "auto",
@@ -50,7 +51,6 @@ class GoogleMobileTranslate(ChunkedBackendBase):
                     "q": text,
                 },
                 timeout=60,
-                signal=signal,
             )
             result = soup.select_one("div.result-container")
             if not result:
@@ -68,8 +68,8 @@ class GoogleClient5Translate(ChunkedBackendBase):
         target: LanguageCode,
         signal: Optional[Event] = None,
     ) -> str:
-        with self.lock:
-            data = self.scraper.get_json(
+        with ctx.http.session(signal) as sess:
+            data = sess.get_json(
                 "https://clients5.google.com/translate_a/t",
                 params={
                     "client": "dict-chrome-ex",
@@ -78,7 +78,6 @@ class GoogleClient5Translate(ChunkedBackendBase):
                     "q": text,
                 },
                 timeout=60,
-                signal=signal,
             )
             return "".join(part[0] for part in data if part[0])
 
@@ -93,8 +92,8 @@ class GoogleGtxTranslate(ChunkedBackendBase):
         target: LanguageCode,
         signal: Optional[Event] = None,
     ) -> str:
-        with self.lock:
-            data = self.scraper.get_json(
+        with ctx.http.session(signal) as sess:
+            data = sess.get_json(
                 "https://translate.googleapis.com/translate_a/single",
                 params={
                     "client": "gtx",
@@ -104,6 +103,5 @@ class GoogleGtxTranslate(ChunkedBackendBase):
                     "q": text,
                 },
                 timeout=60,
-                signal=signal,
             )
             return "".join(part[0] for part in data[0] if part[0])

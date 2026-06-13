@@ -1,7 +1,7 @@
 from email.mime.text import MIMEText
+from functools import cached_property
 import logging
 from smtplib import SMTP
-from typing import Optional
 
 import lxml.etree
 import lxml.html
@@ -9,7 +9,8 @@ import lxml.html
 from ..assets import emails
 from ..context import ctx
 from ..dao import Job, JobStatus, User
-from ..exceptions import ServerErrors
+from ..exceptions import ServerError, ServerErrors
+from ..utils.event_lock import EventLock
 from ..utils.file_tools import format_size
 
 logger = logging.getLogger(__name__)
@@ -17,18 +18,15 @@ logger = logging.getLogger(__name__)
 
 class MailService:
     def __init__(self) -> None:
-        self.server: Optional[SMTP] = None
+        self._lock = EventLock()
         self.sender = ctx.config.mail.smtp_sender or ctx.config.mail.smtp_username
 
     def close(self):
-        if self.server:
-            self.server.close()
-            self.server = None
+        self._lock.abort()
+        self.__dict__.pop("server", None)
 
-    def prepare(self):
-        if self.server:
-            return
-
+    @cached_property
+    def server(self) -> SMTP:
         smtp_server = ctx.config.mail.smtp_server
         smtp_port = ctx.config.mail.smtp_port
         smtp_user = ctx.config.mail.smtp_username
@@ -36,20 +34,18 @@ class MailService:
         if not all([smtp_server, smtp_port, smtp_user, smtp_pass]):
             raise ServerErrors.smtp_server_unavailable
 
+        logger.info("Preparing mail server")
+        server = SMTP(smtp_server, smtp_port)
         try:
-            logger.info("Preparing mail server")
-            self.server = SMTP(smtp_server, smtp_port)
-            self.server.starttls()
-            self.server.login(smtp_user, smtp_pass)
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
             logger.info(f"Connected with SMTP server: {smtp_server}")
+            return server
         except Exception as e:
-            self.close()
+            server.close()
             raise ServerErrors.smtp_server_login_fail from e
 
     def send(self, email: str, subject: str, html_body: str):
-        # Prepare mail server
-        self.prepare()
-
         # Minify HTML
         tree = lxml.html.fromstring(html_body)
         minified = lxml.etree.tostring(tree, encoding="unicode", pretty_print=False)
@@ -61,8 +57,10 @@ class MailService:
         msg["To"] = email
 
         try:
-            assert self.server
-            self.server.sendmail(msg["From"], [msg["To"]], msg.as_string())
+            with self._lock:
+                self.server.sendmail(msg["From"], [msg["To"]], msg.as_string())
+        except ServerError:
+            raise
         except Exception as e:
             raise ServerErrors.email_send_failure from e
 

@@ -7,11 +7,23 @@ services:
     environment:
       - LNCRAWL_DATA_PATH=/data
       - TOR_CONTROL_HOST=torproxy
-      - TOR_PROXY_URL=socks5://torproxy:9150
+      - TOR_PROXY_URL=socks5h://torproxy:9150
       - DATABASE_URL=postgresql+psycopg://pguser:pgpass@postgres:5432/lncrawl
     volumes:
       - ./appdata:/data
     restart: unless-stopped
+    labels:
+      - autoheal=true
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
     deploy:
       resources:
         limits:
@@ -19,7 +31,17 @@ services:
           memory: "5G"
         reservations:
           cpus: "2.00"
-          memory: "512M"
+          memory: "1G"
+
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 30
+      AUTOHEAL_START_PERIOD: 90
 
   postgres:
     image: postgres:alpine

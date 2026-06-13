@@ -3,8 +3,9 @@ from threading import Event
 from typing import Optional
 from urllib.parse import quote
 
+from ...context import ctx
 from ...enums import LanguageCode
-from .backend_base import ChunkedBackendBase
+from ._base import ChunkedBackendBase
 from .backend_google import _LANG_MAP
 
 logger = logging.getLogger(__name__)
@@ -22,10 +23,9 @@ class LingvaTranslate(ChunkedBackendBase):
         target: LanguageCode,
         signal: Optional[Event] = None,
     ) -> str:
-        with self.lock:
-            data = self.scraper.get_json(
+        with ctx.http.session(signal) as sess:
+            data = sess.get_json(
                 f"https://lingva.ml/api/v1/auto/{target}/{quote(text, safe='')}",
                 timeout=60,
-                signal=signal,
             )
             return data["translation"]

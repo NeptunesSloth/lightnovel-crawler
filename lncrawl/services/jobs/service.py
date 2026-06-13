@@ -1,5 +1,6 @@
-from difflib import SequenceMatcher
-from typing import Any, Iterable, List, Optional, TypeVar
+from __future__ import annotations
+
+from typing import Any, Callable, Iterable, List, Optional, TypeVar, Union
 
 from sqlalchemy.orm import aliased
 import sqlmodel as sq
@@ -19,7 +20,6 @@ from ...dao import (
 )
 from ...exceptions import ServerErrors
 from ...server.models import Paginated
-from ...utils.event_lock import EventLock
 from ...utils.time_utils import current_timestamp
 from .utils import select_ancestors, select_descendants
 
@@ -33,9 +33,6 @@ job_canceled_literal = sq.cast(sq.literal(JobStatus.CANCELED.name), job_status_t
 
 
 class JobService:
-    def __init__(self) -> None:
-        self._update_lock = EventLock()
-
     # -------------------------------------------------------------------------
     #                               GET Jobs
     # -------------------------------------------------------------------------
@@ -100,6 +97,10 @@ class JobService:
                 items=list(items),
             )
 
+    def count(self) -> int:
+        with ctx.db.session() as sess:
+            return sess.scalar(sq.select(sq.func.count()).select_from(Job)) or 0
+
     def get(self, job_id: str) -> Job:
         with ctx.db.session() as sess:
             job = sess.get(Job, job_id)
@@ -120,15 +121,15 @@ class JobService:
             raise ServerErrors.forbidden
         return user_id
 
-    def get_children_ids(self, parent_job_id: str) -> Iterable[str]:
+    def get_children_ids(self, parent_job_id: str) -> List[str]:
         with ctx.db.session() as sess:
             stmt = sq.select(Job.id).where(Job.parent_job_id == parent_job_id)
-            return sess.exec(stmt).all()
+            return list(sess.exec(stmt).all())
 
-    def get_children(self, parent_job_id: str) -> Iterable[Job]:
+    def get_children(self, parent_job_id: str) -> List[Job]:
         with ctx.db.session() as sess:
             stmt = sq.select(Job).where(Job.parent_job_id == parent_job_id)
-            return sess.exec(stmt).all()
+            return list(sess.exec(stmt).all())
 
     def get_chapter_job(self, user_id: str, chapter_id: str) -> Optional[Job]:
         with ctx.db.session() as sess:
@@ -161,12 +162,12 @@ class JobService:
 
     def get_root(self, job_id: str) -> Optional[Job]:
         with ctx.db.session() as sess:
-            return sess.exec(
+            return sess.scalar(
                 sq.select(Job)
                 .where(sq.col(Job.parent_job_id).is_(None))
                 .where(sq.col(Job.id).in_(select_ancestors(job_id)))
                 .limit(1)
-            ).first()
+            )
 
     # -------------------------------------------------------------------------
     #                              CREATE Jobs
@@ -792,7 +793,8 @@ class JobService:
             if skip_user_ids:
                 stmt = stmt.where(
                     sq.or_(
-                        Job.priority != JobPriority.LOW, sq.col(Job.user_id).not_in(skip_user_ids)
+                        Job.priority != JobPriority.LOW,
+                        sq.col(Job.user_id).not_in(skip_user_ids),
                     )
                 )
 
@@ -809,14 +811,13 @@ class JobService:
             return sess.exec(stmt.limit(1)).first()
 
     def _update(self, sess: Session, job_id: str, **values) -> None:
-        with self._update_lock:
-            sess.exec(
-                sq.update(Job)
-                .where(
-                    sq.col(Job.id) == job_id,
-                )
-                .values(**values)
+        sess.exec(
+            sq.update(Job)
+            .where(
+                sq.col(Job.id) == job_id,
             )
+            .values(**values)
+        )
 
     def _update_up(
         self,
@@ -834,49 +835,52 @@ class JobService:
         sa_failed = failed
         sa_is_done = sa_done == sa_total
 
-        sa_status = sq.case((sa_is_done, job_success_literal), else_=Job.status)
+        sa_status = sq.case(
+            (sa_is_done, job_success_literal),
+            else_=Job.status,
+        )
         sa_started_at = sq.case(
-            (sq.and_(sa_is_done, sq.col(Job.started_at).is_(None)), now), else_=Job.started_at
+            (sq.and_(sa_is_done, sq.col(Job.started_at).is_(None)), now),
+            else_=Job.started_at,
         )
         sa_finished_at = sq.case(
-            (sq.and_(sa_is_done, sq.col(Job.finished_at).is_(None)), now), else_=Job.finished_at
+            (sq.and_(sa_is_done, sq.col(Job.finished_at).is_(None)), now),
+            else_=Job.finished_at,
         )
 
         sa_pars = select_ancestors(job_id, inclusive)
-        with self._update_lock:
-            sess.exec(
-                sq.update(Job)
-                .where(sq.col(Job.id).in_(sa_pars))
-                .where(sq.col(Job.is_done).is_(False))
-                .values(
-                    done=sa_done,
-                    total=sa_total,
-                    failed=sa_failed,
-                    status=sa_status,
-                    is_done=sa_is_done,
-                    started_at=sa_started_at,
-                    finished_at=sa_finished_at,
-                )
+        sess.exec(
+            sq.update(Job)
+            .where(sq.col(Job.id).in_(sa_pars))
+            .where(sq.col(Job.is_done).is_(False))
+            .values(
+                done=sa_done,
+                total=sa_total,
+                failed=sa_failed,
+                status=sa_status,
+                is_done=sa_is_done,
+                started_at=sa_started_at,
+                finished_at=sa_finished_at,
             )
+        )
 
     def _cancel_down(self, sess: Session, job_id: str, inclusive=False) -> None:
         now = current_timestamp()
         sa_deps = select_descendants(job_id, inclusive)
-        with self._update_lock:
-            sess.exec(
-                sq.update(Job)
-                .where(
-                    sq.col(Job.id).in_(sa_deps),
-                    sq.col(Job.is_done).is_(False),
-                )
-                .values(
-                    is_done=True,
-                    status=job_canceled_literal,
-                    error="Canceled by one of the parent",
-                    started_at=sq.func.coalesce(Job.started_at, now),
-                    finished_at=sq.func.coalesce(Job.finished_at, now),
-                )
+        sess.exec(
+            sq.update(Job)
+            .where(
+                sq.col(Job.id).in_(sa_deps),
+                sq.col(Job.is_done).is_(False),
             )
+            .values(
+                is_done=True,
+                status=job_canceled_literal,
+                error="Canceled by one of the parent",
+                started_at=sq.func.coalesce(Job.started_at, now),
+                finished_at=sq.func.coalesce(Job.finished_at, now),
+            )
+        )
 
     def _increment_up(self, sess: Session, job_id: str, step: int = 1) -> None:
         self._update_up(
@@ -885,20 +889,6 @@ class JobService:
             inclusive=True,
             done=Job.done + step,
         )
-
-    def _append_search_results(self, root_id: str, new_results: List[dict], query: str) -> None:
-        """Atomically append search results to a root job's extra under the update lock."""
-        with ctx.db.session() as sess:
-            with self._update_lock:
-                root = sess.get(Job, root_id)
-                if not root:
-                    return
-                extra = dict(**root.extra)
-                combined = new_results + (extra.get("search_results") or [])
-                combined.sort(key=lambda x: -SequenceMatcher(a=x["title"], b=query).ratio())
-                extra["search_results"] = combined
-                sess.exec(sq.update(Job).where(sq.col(Job.id) == root_id).values(extra=extra))
-                sess.commit()
 
     def _count_pending(self, sess: Session, job_id: str) -> int:
         return sess.exec(sq.select(Job.total - Job.done).where(Job.id == job_id)).one()
@@ -938,3 +928,24 @@ class JobService:
                     sess.commit()
 
         return True
+
+    def update_extra(
+        self,
+        job: Union[Job, str],
+        updates: Union[dict, Callable[[dict], None]],
+    ) -> None:
+        with ctx.db.session() as sess:
+            job_id = job.id if isinstance(job, Job) else job
+            current = sess.scalar(sq.select(Job.extra).where(Job.id == job_id))
+
+            extra = dict(current or {})
+            if callable(updates):
+                updates(extra)
+            else:
+                extra.update(updates)
+
+            sess.exec(sq.update(Job).where(sq.col(Job.id) == job_id).values(extra=extra))
+            sess.commit()
+
+            if isinstance(job, Job):
+                job.extra = extra

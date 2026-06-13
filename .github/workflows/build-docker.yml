@@ -9,7 +9,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  sync-web:
+    uses: ./.github/workflows/web.yml
+    permissions:
+      contents: write
+    secrets: inherit
+
   build:
+    needs: [sync-web]
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
 

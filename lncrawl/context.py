@@ -187,6 +187,12 @@ class __AppContext__:
 
         return JobScheduler()
 
+    @cached_property
+    def job_notifier(self):
+        from .services.notifications import JobNotificationService
+
+        return JobNotificationService()
+
     # ------------------------------------------------------------
     # Context management
     # ------------------------------------------------------------
@@ -208,6 +214,8 @@ class __AppContext__:
             self.lsp.stop()
         if "translations" in self.__dict__:
             self.translator.close()
+        if "http" in self.__dict__:
+            self.http.close()
 
     def setup(
         self,

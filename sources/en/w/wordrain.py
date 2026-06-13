@@ -30,7 +30,7 @@ class WordRain(WordpressTemplate):
         )
 
     def search(self, query: str) -> Iterable[SearchResult]:
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def parse_title(self, soup: PageSoup, novel: Novel) -> None:
         tag = soup.select_one('meta[property="og:title"]')
