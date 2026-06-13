@@ -220,9 +220,8 @@ Install [Calibre](https://calibre-ebook.com/download) to unlock the formats mark
 
 Contributions are welcome — bug fixes, new sources, documentation, and more.
 
-- [Architecture overview](.github/docs/ARCHITECTURE.md)
-- [Adding a new source crawler](.github/docs/CREATING_CRAWLERS.md)
-- [Docker details](.github/docs/DOCKER.md)
+See [**CONTRIBUTING.md**](.github/CONTRIBUTING.md) for setup instructions, code style, and how to add a source crawler.
+
 - [CI on forks](.github/FORKING.md)
 - [AI-assisted project overview (DeepWiki)](https://deepwiki.com/lncrawl/lightnovel-crawler)
 
