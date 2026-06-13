@@ -1,9 +1,10 @@
 ---
 name: Source Not Working
 about: A supported source is failing to crawl, returning wrong data, or missing chapters
-title: ''
+title: ""
+type: Bug
 labels: source-issue
-assignees: ''
+assignees: ""
 ---
 
 <!-- Before opening: check that you are on the latest version — the fix may already be out. -->
@@ -11,7 +12,8 @@ assignees: ''
 
 ## Source URL
 
-**Novel URL**: 
+**Novel URL**:
+
 <!-- Paste the exact novel page URL (not the site homepage). -->
 
 ## What's wrong?

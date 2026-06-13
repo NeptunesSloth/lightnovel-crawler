@@ -1,9 +1,10 @@
 ---
 name: Feature Request
 about: Suggest an improvement or new capability for the app, server, or CLI
-title: ''
+title: ""
+type: Feature
 labels: enhancement
-assignees: ''
+assignees: ""
 ---
 
 ## What problem does this solve?

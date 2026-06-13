@@ -2,6 +2,7 @@
 name: New Source Request
 about: Request support for a site that is not yet in the supported sources list
 title: ""
+type: Feature
 labels: source
 assignees: ""
 ---

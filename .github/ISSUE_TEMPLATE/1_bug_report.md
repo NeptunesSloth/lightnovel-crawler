@@ -1,9 +1,10 @@
 ---
 name: Bug Report
 about: Something in the app or server is broken — crashes, wrong output, unexpected behavior
-title: ''
+title: ""
+type: Bug
 labels: bug
-assignees: ''
+assignees: ""
 ---
 
 ## What happened?
@@ -12,9 +13,9 @@ assignees: ''
 
 ## Steps to reproduce
 
-1. 
-2. 
-3. 
+1.
+2.
+3.
 
 ## Error output
 
