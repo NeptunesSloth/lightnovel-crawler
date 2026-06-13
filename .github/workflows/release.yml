@@ -28,7 +28,7 @@ jobs:
     needs: [validate, sync-web]
     uses: ./.github/workflows/build-docker.yml
     permissions:
-      contents: write
+      contents: read
       packages: write
 
   build-windows:

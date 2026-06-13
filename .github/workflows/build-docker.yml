@@ -9,18 +9,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sync-web:
-    if: ${{ github.event_name != 'workflow_call' }}
-    uses: ./.github/workflows/web.yml
-    permissions:
-      contents: write
-    secrets: inherit
-
   build:
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
-    needs: [sync-web]
-    if: ${{ always() && (needs.sync-web.result == 'success' || needs.sync-web.result == 'skipped') }}
 
     permissions:
       contents: read
