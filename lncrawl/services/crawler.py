@@ -5,7 +5,6 @@ from threading import Event
 from typing import List, Optional, Union
 
 from pydantic import HttpUrl
-from sqlmodel import select
 
 from ..context import ctx
 from ..core import Chapter as CrawlerChapter, Crawler, Novel as CrawlerNovel, SearchResult
@@ -24,30 +23,33 @@ class CrawlerService:
     def prepare_crawler(
         self,
         user_id: str,
-        novel_url: str,
+        url: str,
         signal: Optional[Event] = None,
-        override_crawler: Optional[Crawler] = None,
+        custom_crawler: Optional[Crawler] = None,
     ):
-        use_custom = override_crawler is None
-        if use_custom:
-            crawler = ctx.sources.init_crawler(novel_url)
-        else:
-            crawler = override_crawler
+        crawler = custom_crawler
+        if crawler is None:
+            crawler = ctx.sources.init_crawler(url)
+
         prev_signal = crawler.scraper.signal
         if signal:
             crawler.scraper.signal = signal
+
         try:
+            # login
             can_login = getattr(crawler, "can_login", False)
             logged_in = getattr(crawler, "__logged_in__", False)
             if can_login and not logged_in:
-                login = ctx.secrets.get_login(user_id, novel_url)
+                login = ctx.secrets.get_login(user_id, url)
                 if login:
                     crawler.login(login.username, login.password)
                     setattr(crawler, "__logged_in__", True)
+
             yield crawler
+
         finally:
             crawler.scraper.signal = prev_signal
-            if use_custom:
+            if custom_crawler is None:
                 crawler.close()
 
     def fetch_novel(
@@ -55,7 +57,7 @@ class CrawlerService:
         user_id: str,
         url: Union[str, HttpUrl],
         signal: Optional[Event] = None,
-        custom_crawler: Optional[Crawler] = None,
+        custom: Optional[Crawler] = None,
     ) -> Novel:
         # validate url
         if isinstance(url, str):
@@ -64,7 +66,7 @@ class CrawlerService:
             raise ServerErrors.invalid_url.with_extra(url)
         novel_url = str(url)
 
-        with self.prepare_crawler(user_id, novel_url, signal, custom_crawler) as crawler:
+        with self.prepare_crawler(user_id, novel_url, signal, custom) as crawler:
             # fetch novel metadata
             model = CrawlerNovel(url=novel_url)
             crawler.read_novel(model)
@@ -74,33 +76,42 @@ class CrawlerService:
             assert model.volumes is not None
             assert model.chapters is not None
 
-            # save to database
-            with ctx.db.session() as sess:
-                # get or create novel
-                novel = sess.exec(select(Novel).where(Novel.url == novel_url)).first()
-                if not novel:
+            # get or create novel object
+            novel = ctx.novels.find_by_url(novel_url)
+            if not novel:
+                with ctx.db.session() as sess:
                     novel = Novel(
                         url=novel_url,
                         title=model.title,
                         cover_url=model.cover_url,
                         domain=extract_host(novel_url),
                     )
+                    sess.add(novel)
+                    sess.commit()
 
-                # update novel
-                novel.title = model.title
-                novel.authors = model.author
-                novel.cover_url = model.cover_url
-                novel.domain = extract_host(novel_url)
-                novel.manga = model.is_manga or crawler.has_manga
-                novel.mtl = model.is_mtl or crawler.has_mtl
-                novel.synopsis = model.synopsis
-                novel.tags = model.tags or []
-                novel.rtl = model.is_rtl or False
-                novel.language = model.language
-                novel.volume_count = len(model.volumes)
-                novel.chapter_count = len(model.chapters)
-                novel.extra.update(model.get_extras())
-                sess.add(novel)
+            # update novel info
+            novel.title = model.title
+            novel.authors = model.author
+            novel.cover_url = model.cover_url
+            novel.domain = extract_host(novel_url)
+            novel.manga = model.is_manga or crawler.has_manga
+            novel.mtl = model.is_mtl or crawler.has_mtl
+            novel.synopsis = model.synopsis
+            novel.tags = model.tags or []
+            novel.rtl = model.is_rtl or False
+            novel.language = model.language
+            novel.volume_count = len(model.volumes)
+            novel.chapter_count = len(model.chapters)
+
+            # update novel extra
+            extra = dict(**novel.extra)
+            extra.update(model.get_extras())
+            extra["crawler_version"] = crawler.version
+            novel.extra = extra
+
+            # save updates
+            with ctx.db.session() as sess:
+                sess.merge(novel)
                 sess.commit()
 
             # add or update tags
@@ -118,20 +129,20 @@ class CrawlerService:
                 ctx.files.resolve(novel.cover_file),
             )
 
-            # update output path time
+            # update output path time (prevents cleaner to delete it)
             ctx.files.utime(f"novels/{novel.id}")
 
-            logger.debug(
-                f"Fetched novel: {novel.title} - {novel.chapter_count} chapters | {novel.volume_count} volumes | {novel.url}"
-            )
-            return novel
+        logger.debug(
+            f"Fetched novel: {novel.title} - {novel.chapter_count} chapters | {novel.volume_count} volumes | {novel.url}"
+        )
+        return novel
 
     def fetch_chapter(
         self,
         user_id: str,
         chapter_id: str,
         signal: Optional[Event] = None,
-        custom_crawler: Optional[Crawler] = None,
+        custom: Optional[Crawler] = None,
         refresh: bool = False,
     ) -> Chapter:
         chapter = ctx.chapters.get(chapter_id)
@@ -143,7 +154,7 @@ class CrawlerService:
         if not url.host:
             raise ServerErrors.invalid_url
 
-        with self.prepare_crawler(user_id, novel.url, signal, custom_crawler) as crawler:
+        with self.prepare_crawler(user_id, novel.url, signal, custom) as crawler:
             # check if download is necessary
             if (
                 not refresh
@@ -170,12 +181,19 @@ class CrawlerService:
             # save chapter images
             ctx.images.sync(chapter, model.images)
 
+            # set extras
+            extra = dict(**chapter.extra)
+            extra.update(model.get_extras())
+            extra["crawler_version"] = crawler.version
+            chapter.extra = extra
+
+            # update title and status
+            chapter.is_done = True
+            chapter.title = model.title
+
             # update db
             with ctx.db.session() as sess:
-                chapter.is_done = True
-                chapter.title = model.title
-                chapter.extra.update(model.get_extras())
-                sess.add(chapter)
+                sess.merge(chapter)
                 sess.commit()
 
             logger.debug(f"Downloaded chapter: {novel.title}] - Chapter {chapter.serial}")
@@ -186,7 +204,7 @@ class CrawlerService:
         user_id: str,
         image_id: str,
         signal: Optional[Event] = None,
-        custom_crawler: Optional[Crawler] = None,
+        custom: Optional[Crawler] = None,
         refresh: bool = False,
     ) -> ChapterImage:
         image = ctx.images.get(image_id)
@@ -198,7 +216,7 @@ class CrawlerService:
         if not url.host:
             raise ServerErrors.invalid_url
 
-        with self.prepare_crawler(user_id, novel.url, signal, custom_crawler) as crawler:
+        with self.prepare_crawler(user_id, novel.url, signal, custom) as crawler:
             # check if download is necessary
             if (
                 not refresh
@@ -228,11 +246,11 @@ class CrawlerService:
         query: str,
         domain: str,
         signal: Optional[Event] = None,
-        custom_crawler: Optional[Crawler] = None,
+        custom: Optional[Crawler] = None,
     ) -> List[SearchResult]:
         # get crawler
         source = ctx.sources.get_source(domain)
-        with self.prepare_crawler(user_id, source.url, signal, custom_crawler) as crawler:
+        with self.prepare_crawler(user_id, source.url, signal, custom) as crawler:
             results = list(crawler.search(query))
             results.sort(key=lambda x: -SequenceMatcher(a=x.title, b=query).ratio())
             return list(results)
