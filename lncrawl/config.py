@@ -729,6 +729,18 @@ class ServerConfig(_Section):
     def token_expiry(self, v: int) -> None:
         self._set("token_expiry_minutes", v)
 
+    @property
+    def enable_browse_route(self) -> bool:
+        """Enable Browse.
+
+        This is just a proof-of-concept implementation. Not safe to use.
+        """
+        return self._get("enable_browse_route", False)
+
+    @enable_browse_route.setter
+    def enable_browse_route(self, v: bool) -> None:
+        self._set("enable_browse_route", v)
+
 
 # ------------------------------------------------------------------ #
 #                            Mail Section                            #

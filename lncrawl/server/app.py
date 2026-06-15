@@ -66,6 +66,13 @@ app.add_middleware(
 
 app.add_middleware(StaticFilesGuard, prefix="/static")
 
+# Experimental Features
+if ctx.config.server.enable_browse_route:
+    from .middleware.browser import BrowserNavigation
+
+    app.add_middleware(BrowserNavigation, prefix="/browse")
+
+
 # Add APIs
 app.include_router(api, prefix="/api")
 
