@@ -90,10 +90,11 @@ lncrawl -h
 _If `lncrawl` is not found, use `python -m lncrawl -h` instead._
 
 <!-- auto generated command line output -->
+
 ```text
 $ lncrawl -h
-Usage: lncrawl [OPTIONS] COMMAND [ARGS]...                                     
-                                                                                
+Usage: lncrawl [OPTIONS] COMMAND [ARGS]...
+
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
 │ --verbose             -l            Log levels: -l = warn, -ll = info, -lll  │
 │                                     = debug                                  │
@@ -115,6 +116,7 @@ Usage: lncrawl [OPTIONS] COMMAND [ARGS]...
 │ server   Run web server.                                                     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
+
 <!-- auto generated command line output -->
 
 ### 🐳 Docker
@@ -219,6 +221,8 @@ Install [Calibre](https://calibre-ebook.com/download) to unlock the formats mark
 ## Contributing
 
 Contributions are welcome — bug fixes, new sources, documentation, and more.
+
+![Repobeats](https://repobeats.axiom.co/api/embed/ecf3e93f676c27ba6404315e22523033d50aab45.svg "Repobeats analytics image")
 
 See [**CONTRIBUTING.md**](.github/CONTRIBUTING.md) for setup instructions, code style, and how to add a source crawler.
 
@@ -408,7 +412,6 @@ We are supporting 340 sources and 394 crawlers.
 </tbody>
 </table>
 
-
 ### `ar` Arabic
 
 <table>
@@ -435,7 +438,6 @@ We are supporting 340 sources and 394 crawlers.
 </tr>
 </tbody>
 </table>
-
 
 ### `en` English
 
@@ -1689,7 +1691,6 @@ We are supporting 340 sources and 394 crawlers.
 </tbody>
 </table>
 
-
 ### `es` Spanish; Castilian
 
 <table>
@@ -1716,7 +1717,6 @@ We are supporting 340 sources and 394 crawlers.
 </tr>
 </tbody>
 </table>
-
 
 ### `fr` French
 
@@ -1754,7 +1754,6 @@ We are supporting 340 sources and 394 crawlers.
 </tr>
 </tbody>
 </table>
-
 
 ### `id` Indonesian
 
@@ -1848,7 +1847,6 @@ We are supporting 340 sources and 394 crawlers.
 </tbody>
 </table>
 
-
 ### `ja` Japanese
 
 <table>
@@ -1870,7 +1868,6 @@ We are supporting 340 sources and 394 crawlers.
 </tr>
 </tbody>
 </table>
-
 
 ### `pt` Portuguese
 
@@ -1908,7 +1905,6 @@ We are supporting 340 sources and 394 crawlers.
 </tr>
 </tbody>
 </table>
-
 
 ### `ru` Russian
 
@@ -1977,7 +1973,6 @@ We are supporting 340 sources and 394 crawlers.
 </tbody>
 </table>
 
-
 ### `tr` Turkish
 
 <table>
@@ -1994,7 +1989,6 @@ We are supporting 340 sources and 394 crawlers.
 </tr>
 </tbody>
 </table>
-
 
 ### `vi` Vietnamese
 
@@ -2027,7 +2021,6 @@ We are supporting 340 sources and 394 crawlers.
 </tr>
 </tbody>
 </table>
-
 
 ### `zh` Chinese
 
