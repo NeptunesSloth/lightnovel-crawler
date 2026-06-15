@@ -67,7 +67,7 @@ services:
       SOCKS_HOST: 0.0.0.0
       CONTROL_HOST: 0.0.0.0
       CONTROL_PASSWORD: "secret"
-      SOCKS_POLICY: accept 127.0.0.1,accept 10.0.0.0/8,accept 172.16.0.0/12,accept 192.168.0.0/16
+      SOCKS_POLICY: accept *
     deploy:
       resources:
         limits:
