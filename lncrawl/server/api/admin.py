@@ -71,7 +71,9 @@ def get_activity_data(
     type: ActivityDataType = Query(..., description="Which dataset to return"),
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=20, ge=1, le=100),  # only used when type="top-users"
-) -> Union[GlobalActivitySummary, List[DailyActiveUsers], List[DailyTypeCount], List[TopUserActivity]]:
+) -> Union[
+    GlobalActivitySummary, List[DailyActiveUsers], List[DailyTypeCount], List[TopUserActivity]
+]:
     if type == "summary":
         return ctx.activity.get_admin_summary(days)
     elif type == "dau":
