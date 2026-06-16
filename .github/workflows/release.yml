@@ -31,9 +31,35 @@ jobs:
       contents: read
       packages: write
 
+  create-release:
+    name: Create GitHub Release
+    needs: [validate, sync-web]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 🏷️ Extract changelog
+        id: changelog
+        run: |
+          version=$(head -n 1 lncrawl/VERSION)
+          body=$(awk "/^## \[$version\]/{p=1; next} /^## \[/{if(p) exit} p" CHANGELOG.md)
+          echo "body<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$body" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: 🚀 Create draft release
+        uses: ncipollo/release-action@v1
+        with:
+          body: ${{ steps.changelog.outputs.body }}
+          draft: true
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   build-windows:
     name: Build & Publish (Windows)
-    needs: [validate, sync-web]
+    needs: [create-release]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -88,7 +114,7 @@ jobs:
 
   build-mac:
     name: Build & Publish (MacOS)
-    needs: [validate, sync-web]
+    needs: [create-release]
     runs-on: macos-latest
     permissions:
       contents: write
@@ -130,7 +156,7 @@ jobs:
 
   build-linux:
     name: Build & Publish (Linux)
-    needs: [validate, sync-web]
+    needs: [create-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -208,3 +234,10 @@ jobs:
         env:
           SHLINK_API_KEY: ${{ secrets.SHLINK_API_KEY }}
         run: sh ./scripts/bitanon.sh
+
+      - name: 🚀 Publish release
+        uses: ncipollo/release-action@v1
+        with:
+          draft: false
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
