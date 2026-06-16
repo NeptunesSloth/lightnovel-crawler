@@ -70,7 +70,7 @@ class Crawler(ABC):
             if not url.strip():
                 continue
             if url.startswith("tor;"):
-                host, port, control_port, control_pass = url.split(";")
+                _, host, port, control_port, control_pass = url.split(";")
                 tor_proxy = TorProxyUrl(
                     url=f"socks5h://{host}:{port}/",
                     control_host=host,
