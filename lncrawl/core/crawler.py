@@ -66,21 +66,22 @@ class Crawler(ABC):
         self.taskman = TaskManager(workers=workers)
 
         config = default_config()
-        config.proxy.fallback_to_direct = ctx.config.crawler.allow_fallback_on_proxy_miss
-        for url in ctx.config.crawler.proxy_urls.split(","):
-            if not url.strip():
-                continue
-            if url.startswith("tor;"):
-                _, host, port, control_port, control_pass = url.split(";")
-                tor_proxy = TorProxyUrl(
-                    url=f"socks5h://{host}:{port}/",
-                    control_host=host,
-                    control_password=control_pass,
-                    control_port=int(control_port),
-                )
-                config.proxy.proxy_urls.append(tor_proxy)
-            else:
-                config.proxy.proxy_urls.append(url)
+        if ctx.config.crawler.enable_proxy:
+            config.proxy.fallback_to_direct = ctx.config.crawler.allow_fallback_on_proxy_miss
+            for url in ctx.config.crawler.proxy_urls.split(","):
+                if not url.strip():
+                    continue
+                if url.startswith("tor;"):
+                    _, host, port, control_port, control_pass = url.split(";")
+                    tor_proxy = TorProxyUrl(
+                        url=f"socks5h://{host}:{port}/",
+                        control_host=host,
+                        control_password=control_pass,
+                        control_port=int(control_port),
+                    )
+                    config.proxy.proxy_urls.append(tor_proxy)
+                else:
+                    config.proxy.proxy_urls.append(url)
 
         self.scraper = Scraper(origin=origin, parser=parser, config=config)
 

@@ -628,6 +628,20 @@ class CrawlerConfig(_Section):
         self._set("proxy_urls", v)
 
     @property
+    def enable_proxy(self) -> bool:
+        """Enable Proxy.
+
+        When enabled, crawler requests are routed through the URLs listed in
+        `proxy_urls`. Disable to pass all traffic through a direct connection,
+        even if proxy URLs are configured. Enabled by default.
+        """
+        return self._get("enable_proxy", True)
+
+    @enable_proxy.setter
+    def enable_proxy(self, v: bool) -> None:
+        self._set("enable_proxy", v)
+
+    @property
     def allow_fallback_on_proxy_miss(self) -> bool:
         """Fallback to Direct on Proxy Miss.
 
