@@ -6,9 +6,8 @@ import pickle
 from urllib.parse import urljoin, urlparse
 
 from requests.structures import CaseInsensitiveDict
-from scraper import default_config
-from scraper._engine import ScraperEngine
-from scraper._engine.exceptions import CloudflareException
+from scraper import ScraperEngine, default_config
+from scraper.exceptions import CloudflareException
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 

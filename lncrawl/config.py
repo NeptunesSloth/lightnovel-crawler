@@ -8,7 +8,7 @@ import logging
 import os
 from pathlib import Path
 import time
-from typing import Annotated, Any, Callable, Dict, Optional, Type, TypeVar, Union, cast
+from typing import Annotated, Any, Callable, Type, TypeVar, cast
 import uuid
 
 import dotenv
@@ -118,8 +118,8 @@ def _update(target: dict, source: dict) -> dict:
 class Config(object):
     def __init__(self) -> None:
         dotenv.load_dotenv()
-        self.config_file: Optional[Path] = None
-        self._data: Dict[str, Any] = {}
+        self.config_file: Path | None = None
+        self._data: dict[str, Any] = {}
         _traverse(self)
         self._defaults = self._data.copy()
 
@@ -160,7 +160,7 @@ class Config(object):
 
     # -------------------------------------------------------------- #
 
-    def load(self, file: Optional[Path] = None) -> None:
+    def load(self, file: Path | None = None) -> None:
         """
         Loads configurations from given file, env var or default config.
 
@@ -210,7 +210,7 @@ class Config(object):
 
     # -------------------------------------------------------------- #
 
-    def get(self, section: str, key: str, default: Union[None, T, Callable[[], T]] = None) -> Any:
+    def get(self, section: str, key: str, default: T | Callable[[], T] | None = None) -> Any:
         sub: dict = self._data.setdefault(section, {})
         if key not in sub:
             if callable(default):
@@ -240,7 +240,7 @@ class _Section(object):
         if not self.section:
             raise ValueError(f"section is not defined for {self}")
 
-    def _get(self, key: str, default: Union[T, Callable[[], Any]]) -> T:
+    def _get(self, key: str, default: T | Callable[[], Any]) -> T:
         return self.root.get(self.section, key, default)
 
     def _set(self, key: str, value: Any) -> None:
@@ -609,65 +609,23 @@ class CrawlerConfig(_Section):
         self._set("runner_reset_interval", v)
 
     @property
-    def proxy_url(self) -> str:
-        """Proxy URL for Crawler HTTP Requests.
+    def proxy_urls(self) -> str:
+        """Proxy URLs to route crawler requests through.
 
-        Routes all crawler requests through a proxy. Works with Docker containers
-        such as `peterdavehello/tor-socks-proxy`:
+        Comma-separated list of proxy URLs. Can also be set via the PROXY_URLS
+        environment variable. Each entry is one of:
 
-          docker run -d -p 9150:9150 peterdavehello/tor-socks-proxy
+        - A plain proxy URL (e.g. http://host:port or socks5://host:port/).
+        - A Tor entry in the form tor;<host>;<port>;<control_port>;<control_password>
+          which is expanded to a SOCKS5 Tor proxy with control-port support.
 
-        Set this to `socks5://127.0.0.1:9150`, or any standard HTTP/SOCKS proxy
-        URL. Multiple comma-separated URLs are cycled in round-robin order.
-        Leave blank to disable. Default is `""`.
+        Blank entries are ignored.
         """
-        return self._get("proxy_url", os.getenv("TOR_PROXY_URL") or "")
+        return self._get("proxy_urls", os.getenv("PROXY_URLS") or "")
 
-    @proxy_url.setter
-    def proxy_url(self, v: str) -> None:
-        self._set("proxy_url", v)
-
-    @property
-    def tor_control_host(self) -> str:
-        """Tor Control Host.
-
-        Hostname or IP of the Tor control port. Default is `"127.0.0.1"`
-        for a local `peterdavehello/tor-socks-proxy` container.
-        """
-        return self._get("tor_control_host", os.getenv("TOR_CONTROL_HOST") or "127.0.0.1")
-
-    @tor_control_host.setter
-    def tor_control_host(self, v: str) -> None:
-        self._set("tor_control_host", v)
-
-    @property
-    def tor_control_port(self) -> int:
-        """Tor Control Port.
-
-        Port for sending `SIGNAL NEWNYM` to rotate the Tor exit IP.
-        Matches the control port exposed by `peterdavehello/tor-socks-proxy`
-        (default 9151). Set to `0` to disable identity rotation.
-        """
-        _default = int(os.getenv("TOR_CONTROL_PORT") or "9151")
-        return self._get("tor_control_port", _default)
-
-    @tor_control_port.setter
-    def tor_control_port(self, v: str) -> None:
-        self._set("tor_control_port", v)
-
-    @property
-    def tor_control_password(self) -> str:
-        """Tor Control Password.
-
-        Authentication password for the Tor control port. Leave blank
-        when `CookieAuthentication` or no auth is used (the default for
-        `peterdavehello/tor-socks-proxy`).
-        """
-        return self._get("tor_control_password", "")
-
-    @tor_control_password.setter
-    def tor_control_password(self, v: str) -> None:
-        self._set("tor_control_password", v)
+    @proxy_urls.setter
+    def proxy_urls(self, v: str) -> None:
+        self._set("proxy_urls", v)
 
 
 # ------------------------------------------------------------------ #
