@@ -1,6 +1,5 @@
 from typing import List, Optional
 
-from sqlalchemy.exc import IntegrityError
 import sqlmodel as sq
 
 from ..context import ctx
@@ -26,31 +25,18 @@ class UserActivityService:
     def _record(self, user_id: str, activity_type: ActivityType, target_id: str) -> None:
         ts = current_timestamp()
         with ctx.db.session() as sess:
-            try:
-                sess.add(
-                    UserActivity(
-                        user_id=user_id,
-                        activity_type=activity_type,
-                        target_id=target_id,
-                        updated_at=ts,
-                    )
-                )
-                sess.commit()
-            except IntegrityError:
-                sess.rollback()
-                sess.exec(
-                    sq.update(UserActivity)
-                    .where(
-                        sq.col(UserActivity.user_id) == user_id,
-                        sq.col(UserActivity.target_id) == target_id,
-                        sq.col(UserActivity.activity_type) == activity_type,
-                    )
-                    .values(
-                        visit_count=UserActivity.visit_count + 1,
-                        last_visited_at=ts,
-                    )
-                )
-                sess.commit()
+            activity = sess.get(UserActivity, (user_id, activity_type, target_id))
+            if activity is None:
+                sess.add(UserActivity(
+                    user_id=user_id,
+                    activity_type=activity_type,
+                    target_id=target_id,
+                    updated_at=ts,
+                ))
+            else:
+                activity.visit_count += 1
+                activity.updated_at = ts
+            sess.commit()
 
     def get_visit_count(self, target_id: str, activity_type: ActivityType) -> int:
         with ctx.db.session() as sess:
@@ -105,9 +91,14 @@ class UserActivityService:
     def _cutoff(self, days: int) -> int:
         return current_timestamp() - days * 86_400_000
 
+    def _day_label(self, col):
+        """Return an SQL expression that truncates a millisecond-epoch column to YYYY-MM-DD."""
+        if ctx.db.engine.dialect.name == "postgresql":
+            return sq.func.to_char(sq.func.to_timestamp(col / sq.literal(1000.0)), "YYYY-MM-DD")
+        return sq.func.strftime("%Y-%m-%d", sq.func.datetime(col / 1000, "unixepoch"))
+
     def get_admin_summary(self, days: int) -> GlobalActivitySummary:
         """Global totals: active users + event counts broken down by type."""
-        # TODO: PostgreSQL needs date_trunc instead of strftime
         cutoff = self._cutoff(days)
         with ctx.db.session() as sess:
             rows = sess.exec(
@@ -119,8 +110,10 @@ class UserActivityService:
                 .where(UserActivity.updated_at >= cutoff)
                 .group_by(sq.col(UserActivity.activity_type))
             ).all()
-        # derive totals from per-type rows
-        active_users = len({r[0] for r in rows})
+            active_users = sess.exec(
+                sq.select(sq.func.count(sq.distinct(UserActivity.user_id)))
+                .where(UserActivity.updated_at >= cutoff)
+            ).one()
         by_type = {ActivityType(int(r[0])): int(r[2]) for r in rows}
         total_events = sum(int(r[2]) for r in rows)
         total_users = ctx.users.count()
@@ -134,37 +127,26 @@ class UserActivityService:
     def get_admin_dau(self, days: int) -> List[DailyActiveUsers]:
         """Distinct active users per calendar day."""
         cutoff = self._cutoff(days)
+        day = self._day_label(UserActivity.updated_at).label("day")
         with ctx.db.session() as sess:
             rows = sess.exec(
-                sq.select(
-                    sq.func.strftime(
-                        "%Y-%m-%d",
-                        sq.func.datetime(UserActivity.updated_at / 1000, "unixepoch"),
-                    ).label("day"),
-                    sq.func.count(sq.distinct(UserActivity.user_id)),
-                )
+                sq.select(day, sq.func.count(sq.distinct(UserActivity.user_id)))
                 .where(UserActivity.updated_at >= cutoff)
-                .group_by("day")
-                .order_by("day")
+                .group_by(day)
+                .order_by(day)
             ).all()
         return [DailyActiveUsers(date=r[0], users=int(r[1])) for r in rows]
 
     def get_admin_type_trend(self, days: int) -> List[DailyTypeCount]:
         """Row count per (day, activity_type) for the multi-series line chart."""
         cutoff = self._cutoff(days)
+        day = self._day_label(UserActivity.updated_at).label("day")
         with ctx.db.session() as sess:
             rows = sess.exec(
-                sq.select(
-                    sq.func.strftime(
-                        "%Y-%m-%d",
-                        sq.func.datetime(UserActivity.updated_at / 1000, "unixepoch"),
-                    ).label("day"),
-                    sq.col(UserActivity.activity_type),
-                    sq.func.count(),
-                )
+                sq.select(day, sq.col(UserActivity.activity_type), sq.func.count())
                 .where(UserActivity.updated_at >= cutoff)
-                .group_by("day", sq.col(UserActivity.activity_type))
-                .order_by("day")
+                .group_by(day, sq.col(UserActivity.activity_type))
+                .order_by(day)
             ).all()
         return [
             DailyTypeCount(date=r[0], activity_type=ActivityType(int(r[1])), events=int(r[2]))
