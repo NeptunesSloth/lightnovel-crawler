@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -11,3 +11,29 @@ class UserActivityStats(BaseModel):
     visits: Dict[ActivityType, int] = Field(
         default_factory=dict, description="Visit count per activity type"
     )
+
+
+class DailyActiveUsers(BaseModel):
+    date: str  # "YYYY-MM-DD"
+    users: int
+
+
+class DailyTypeCount(BaseModel):
+    date: str
+    activity_type: ActivityType
+    events: int
+
+
+class GlobalActivitySummary(BaseModel):
+    total_users: int
+    active_users: int
+    total_events: int
+    by_type: Dict[ActivityType, int]
+
+
+class TopUserActivity(BaseModel):
+    user_id: str
+    username: str
+    email: str
+    total: int
+    by_type: Dict[ActivityType, int]
