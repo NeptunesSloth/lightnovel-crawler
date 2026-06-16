@@ -17,7 +17,7 @@ from ..utils.time_utils import current_timestamp
 
 class UserActivityService:
     def __init__(self) -> None:
-        self.taskman = TaskManager(3)
+        self.taskman = TaskManager(ctx.config.crawler.runner_concurrency)
 
     def record(self, user_id: str, activity_type: ActivityType, target_id: str) -> None:
         self.taskman.submit_task(self._record, user_id, activity_type, target_id)
