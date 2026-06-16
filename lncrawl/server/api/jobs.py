@@ -8,6 +8,8 @@ from ...exceptions import ServerErrors
 from ..models import (
     FetchChaptersRequest,
     FetchImagesRequest,
+    FetchLatestRequest,
+    FetchMissingChaptersRequest,
     FetchNovelsRequest,
     FetchVolumesRequest,
     MakeArtifactsRequest,
@@ -167,6 +169,28 @@ def make_artifacts(
         *formats,
         language=body.language,
     )
+
+
+@router.post(
+    "/create/fetch-missing",
+    summary="Create a job to fetch missing (not yet downloaded) chapters for a novel",
+)
+def fetch_missing_chapters(
+    user: User = Security(ensure_user),
+    body: FetchMissingChaptersRequest = Body(),
+) -> Job:
+    return ctx.jobs.fetch_missing_chapters(user, body.novel_id)
+
+
+@router.post(
+    "/create/fetch-latest",
+    summary="Refresh metadata, download missing chapters, then make artifacts",
+)
+def fetch_latest(
+    user: User = Security(ensure_user),
+    body: FetchLatestRequest = Body(),
+) -> Job:
+    return ctx.jobs.fetch_latest(user, body.novel_id)
 
 
 @router.post("/create/translate-novels", summary="Create a job to translate novels")

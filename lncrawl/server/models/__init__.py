@@ -10,6 +10,8 @@ from .feedback import (
 from .job import (
     FetchChaptersRequest,
     FetchImagesRequest,
+    FetchLatestRequest,
+    FetchMissingChaptersRequest,
     FetchNovelsRequest,
     FetchVolumesRequest,
     MakeArtifactsRequest,
@@ -70,6 +72,8 @@ __all__ = [
     "FetchVolumesRequest",
     "FetchChaptersRequest",
     "FetchImagesRequest",
+    "FetchMissingChaptersRequest",
+    "FetchLatestRequest",
     "MakeArtifactsRequest",
     "TranslateNovelsRequest",
     "TranslateVolumesRequest",

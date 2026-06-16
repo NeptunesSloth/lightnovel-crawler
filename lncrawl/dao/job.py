@@ -134,6 +134,12 @@ class Job(BaseTable, table=True):
             else:
                 return f"{novel_title}{', '.join(formats[:2])} & {len(formats) - 2} more"
 
+        if self.type == JobType.FETCH_MISSING:
+            return f'Fetch Missing · "{self.extra["novel_title"]}"'
+
+        if self.type == JobType.FETCH_LATEST:
+            return f'Fetch Latest · "{self.extra["novel_title"]}"'
+
         if self.type == JobType.SEARCH_ALL_SOURCES:
             query = self.extra.get("query")
             return f"Search '{query}' → in all sources"

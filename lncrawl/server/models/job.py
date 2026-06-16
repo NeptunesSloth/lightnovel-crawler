@@ -44,6 +44,14 @@ class TranslateChaptersRequest(BaseModel):
     language: LanguageCode = Field(description="Target language code")
 
 
+class FetchMissingChaptersRequest(BaseModel):
+    novel_id: str = Field(description="The novel id")
+
+
+class FetchLatestRequest(BaseModel):
+    novel_id: str = Field(description="The novel id")
+
+
 class SearchSourceRequest(BaseModel):
     query: str = Field(description="Search query", min_length=2, max_length=50)
     domain: Optional[str] = Field(default=None, description="Search in a specific source only")

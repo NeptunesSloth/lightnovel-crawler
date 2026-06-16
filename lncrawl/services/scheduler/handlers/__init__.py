@@ -9,6 +9,8 @@ from .chapter import ChapterHandler
 from .chapter_batch import ChapterBatchHandler
 from .chapter_translation import ChapterTranslationHandler
 from .chapter_translation_batch import ChapterTranslationBatchHandler
+from .fetch_latest import FetchLatestHandler
+from .fetch_missing import FetchMissingHandler
 from .image import ImageHandler
 from .image_batch import ImageBatchHandler
 from .novel import NovelHandler
@@ -28,6 +30,8 @@ _HANDLER_REGISTRY: List[Type[BaseHandler]] = [
     NovelBatchHandler,
     NovelTranslationHandler,
     NovelTranslationBatchHandler,
+    FetchMissingHandler,
+    FetchLatestHandler,
     VolumeHandler,
     VolumeBatchHandler,
     VolumeTranslationHandler,

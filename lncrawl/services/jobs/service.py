@@ -595,6 +595,54 @@ class JobService:
             type=JobType.ARTIFACT_BATCH,
         )
 
+    def fetch_missing_chapters(
+        self,
+        user: User,
+        novel_id: str,
+        *,
+        parent_id: Optional[str] = None,
+        depends_on: Optional[str] = None,
+        **data: Any,
+    ) -> Job:
+        novel = ctx.novels.get(novel_id)
+        data.update(
+            {
+                "novel_id": novel_id,
+                "novel_title": novel.title,
+            }
+        )
+        return self._create(
+            user=user,
+            data=data,
+            parent_id=parent_id,
+            depends_on=depends_on,
+            type=JobType.FETCH_MISSING,
+        )
+
+    def fetch_latest(
+        self,
+        user: User,
+        novel_id: str,
+        *,
+        parent_id: Optional[str] = None,
+        depends_on: Optional[str] = None,
+        **data: Any,
+    ) -> Job:
+        novel = ctx.novels.get(novel_id)
+        data.update(
+            {
+                "novel_id": novel_id,
+                "novel_title": novel.title,
+            }
+        )
+        return self._create(
+            user=user,
+            data=data,
+            parent_id=parent_id,
+            depends_on=depends_on,
+            type=JobType.FETCH_LATEST,
+        )
+
     def search_all_sources(
         self,
         user: User,
