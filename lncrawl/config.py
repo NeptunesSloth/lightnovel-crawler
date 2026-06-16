@@ -627,6 +627,20 @@ class CrawlerConfig(_Section):
     def proxy_urls(self, v: str) -> None:
         self._set("proxy_urls", v)
 
+    @property
+    def allow_fallback_on_proxy_miss(self) -> bool:
+        """Fallback to Direct on Proxy Miss.
+
+        When proxy URLs are configured but none can be reached, allow the scraper
+        to fall back to a direct (localhost) connection instead of failing outright.
+        Enabled by default - disable if you want to hide your IP behind proxy.
+        """
+        return self._get("allow_fallback_on_proxy_miss", True)
+
+    @allow_fallback_on_proxy_miss.setter
+    def allow_fallback_on_proxy_miss(self, v: bool) -> None:
+        self._set("allow_fallback_on_proxy_miss", v)
+
 
 # ------------------------------------------------------------------ #
 #                           Server Section                           #

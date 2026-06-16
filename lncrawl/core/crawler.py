@@ -66,6 +66,7 @@ class Crawler(ABC):
         self.taskman = TaskManager(workers=workers)
 
         config = default_config()
+        config.proxy.fallback_to_direct = ctx.config.crawler.allow_fallback_on_proxy_miss
         for url in ctx.config.crawler.proxy_urls.split(","):
             if not url.strip():
                 continue
