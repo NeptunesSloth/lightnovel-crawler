@@ -27,12 +27,13 @@ class UserActivityService:
         with ctx.db.session() as sess:
             activity = sess.get(UserActivity, (user_id, activity_type, target_id))
             if activity is None:
-                sess.add(UserActivity(
+                activity = UserActivity(
                     user_id=user_id,
                     activity_type=activity_type,
                     target_id=target_id,
                     updated_at=ts,
-                ))
+                )
+                sess.add(activity)
             else:
                 activity.visit_count += 1
                 activity.updated_at = ts
@@ -111,8 +112,9 @@ class UserActivityService:
                 .group_by(sq.col(UserActivity.activity_type))
             ).all()
             active_users = sess.exec(
-                sq.select(sq.func.count(sq.distinct(UserActivity.user_id)))
-                .where(UserActivity.updated_at >= cutoff)
+                sq.select(sq.func.count(sq.distinct(UserActivity.user_id))).where(
+                    UserActivity.updated_at >= cutoff
+                )
             ).one()
         by_type = {ActivityType(int(r[0])): int(r[2]) for r in rows}
         total_events = sum(int(r[2]) for r in rows)
