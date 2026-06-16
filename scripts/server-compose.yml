@@ -1,3 +1,19 @@
+x-torproxy: &torproxy
+  image: sdipu/tor-proxy:latest
+  restart: unless-stopped
+  environment:
+    SOCKS_HOST: 0.0.0.0
+    CONTROL_HOST: 0.0.0.0
+    CONTROL_PASSWORD: "secret"
+    SOCKS_POLICY: accept *
+  deploy:
+    resources:
+      limits:
+        cpus: "0.25"
+        memory: "128M"
+      reservations:
+        memory: "32M"
+
 services:
   server:
     image: ghcr.io/lncrawl/lightnovel-crawler:latest
@@ -8,9 +24,8 @@ services:
     restart: unless-stopped
     environment:
       - LNCRAWL_DATA_PATH=/data
-      - TOR_CONTROL_HOST=torproxy
-      - TOR_PROXY_URL=socks5h://torproxy:9150
       - DATABASE_URL=postgresql+psycopg://pguser:pgpass@postgres:5432/lncrawl
+      - PROXY_URLS=tor;torproxy-1;9150;9151;secret,tor;torproxy-2;9150;9151;secret,tor;torproxy-3;9150;9151;secret
     volumes:
       - ./appdata:/data
     labels:
@@ -29,7 +44,7 @@ services:
       resources:
         limits:
           cpus: "3.50"
-          memory: "5G"
+          memory: "4G"
         reservations:
           memory: "512M"
 
@@ -66,18 +81,11 @@ services:
         reservations:
           memory: "128M"
 
-  torproxy:
-    image: sdipu/tor-proxy:latest
-    restart: unless-stopped
-    environment:
-      SOCKS_HOST: 0.0.0.0
-      CONTROL_HOST: 0.0.0.0
-      CONTROL_PASSWORD: "secret"
-      SOCKS_POLICY: accept *
-    deploy:
-      resources:
-        limits:
-          cpus: "0.25"
-          memory: "128M"
-        reservations:
-          memory: "32M"
+  torproxy-1:
+    <<: *torproxy
+
+  torproxy-2:
+    <<: *torproxy
+
+  torproxy-3:
+    <<: *torproxy
