@@ -106,6 +106,7 @@ class ActivityType(IntEnum):
     SOURCES = 9
     REQUEST = 10
     DOWNLOAD = 11
+    ARTIFACT = 12
 
 
 class LanguageCode(str, Enum):

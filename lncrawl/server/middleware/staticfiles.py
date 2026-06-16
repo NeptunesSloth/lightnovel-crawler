@@ -57,23 +57,26 @@ class CustomStaticFiles(StaticFiles):
 
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)
-
-        if resp.status_code < 400:
-            if "/artifacts/" in path:
-                filename = Path(path).name
-
-                # RFC 5987: ASCII fallback + UTF-8 for non-ASCII filenames
-                ascii_fallback = filename.encode("ascii", "replace").decode("ascii")
-                utf8_encoded = quote(filename, safe="", encoding="utf-8")
-                resp.headers["content-disposition"] = (
-                    f"inline; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
-                )
-
-                if path.endswith(".epub"):
-                    resp.media_type = "application/epub+zip"
-                    resp.headers["content-type"] = "application/epub+zip"
-
         user = scope["user"]
-        ctx.activity.record(user.id, ActivityType.DOWNLOAD, path)
+
+        if resp.status_code >= 400:
+            return resp
+
+        if "/artifacts/" in path:
+            filename = Path(path).name
+            ctx.activity.record(user.id, ActivityType.ARTIFACT, path)
+
+            # RFC 5987: ASCII fallback + UTF-8 for non-ASCII filenames
+            ascii_fallback = filename.encode("ascii", "replace").decode("ascii")
+            utf8_encoded = quote(filename, safe="", encoding="utf-8")
+            resp.headers["content-disposition"] = (
+                f"inline; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
+            )
+
+            if path.endswith(".epub"):
+                resp.media_type = "application/epub+zip"
+                resp.headers["content-type"] = "application/epub+zip"
+        else:
+            ctx.activity.record(user.id, ActivityType.DOWNLOAD, path)
 
         return resp
