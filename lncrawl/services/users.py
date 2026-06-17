@@ -313,12 +313,12 @@ class UserService:
         link = f"{base_url}/reset-password?token={token}"
         ctx.mail.send_reset_password_link(email, link)
 
-    def send_invite_email(self, inviter: User, recipient_email: str) -> None:
+    def get_user_exists(self, email: str) -> bool:
         with ctx.db.session() as sess:
-            q = sq.select(sq.func.count()).where(User.email == recipient_email)
-            if sess.exec(q).one() != 0:
-                raise ServerErrors.user_exists
+            stmt = sq.select(sq.func.count()).where(User.email == email)
+            return sess.exec(stmt).one() != 0
 
+    def send_invite_email(self, inviter: User, recipient_email: str) -> None:
         token = self.get_signup_token(inviter)
         base_url = ctx.config.server.base_url
         search = urlencode({"referrer": token, "email": recipient_email})

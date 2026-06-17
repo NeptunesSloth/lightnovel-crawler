@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, Form, Query, Security
 
 from ...context import ctx
 from ...dao import ActivityType, User, UserToken
+from ...exceptions import ServerErrors
 from ..models import (
     ForgotPasswordRequest,
     LoginRequest,
@@ -149,5 +150,7 @@ def send_invite(
     user: User = Security(ensure_user),
     body: SendInviteRequest = Body(description="The invite request"),
 ) -> bool:
+    if ctx.users.get_user_exists(body.email):
+        raise ServerErrors.user_exists
     ctx.users.send_invite_email(user, body.email)
     return True
