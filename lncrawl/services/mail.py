@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 from email.mime.text import MIMEText
 from functools import cached_property
 import logging
 from smtplib import SMTP
+from threading import Event, Thread
 
+from imap_tools import AND, MailBox, MailBoxUnencrypted, MailMessage, MailMessageFlags
 import lxml.etree
 import lxml.html
 
@@ -15,29 +19,56 @@ from ..utils.file_tools import format_size
 
 logger = logging.getLogger(__name__)
 
+_IMAP_BACKOFF_BASE = 5
+_IMAP_BACKOFF_MAX = 300
+_IMAP_MAX_RETRIES = 10
+
 
 class MailService:
     def __init__(self) -> None:
-        self._lock = EventLock()
+        self._imap_lock: Event
+        self._imap_listener: Thread
+        self._smtp_lock = EventLock()
         self.sender = ctx.config.mail.smtp_sender or ctx.config.mail.smtp_username
 
+    def start(self):
+        if ctx.config.mail.imap_enabled:
+            logger.info("Starting Mailbox listener...")
+            self._imap_lock = Event()
+            self._imap_listener = Thread(
+                target=self._run_imap,
+                args=[self._imap_lock],
+                daemon=True,
+            )
+            self._imap_listener.start()
+
     def close(self):
-        self._lock.abort()
-        self.__dict__.pop("server", None)
+        self._smtp_lock.abort()
+        if hasattr(self, "_imap_lock"):
+            self._imap_lock.set()
+        if "server" in self.__dict__:
+            self.server.close()
+            self.__dict__.pop("server")
+        if hasattr(self, "_listener"):
+            self._imap_listener.join(timeout=5)
 
     @cached_property
     def server(self) -> SMTP:
+        if not ctx.config.mail.smtp_enabled:
+            raise ServerErrors.smtp_server_unavailable.with_extra("disabled")
+
         smtp_server = ctx.config.mail.smtp_server
         smtp_port = ctx.config.mail.smtp_port
         smtp_user = ctx.config.mail.smtp_username
         smtp_pass = ctx.config.mail.smtp_password
         if not all([smtp_server, smtp_port, smtp_user, smtp_pass]):
-            raise ServerErrors.smtp_server_unavailable
+            raise ServerErrors.smtp_server_unavailable.with_extra("missing config")
 
-        logger.info("Preparing mail server")
+        logger.info("Preparing mail server...")
         server = SMTP(smtp_server, smtp_port)
         try:
-            server.starttls()
+            if ctx.config.mail.smtp_starttls:
+                server.starttls()
             server.login(smtp_user, smtp_pass)
             logger.info(f"Connected with SMTP server: {smtp_server}")
             return server
@@ -46,6 +77,10 @@ class MailService:
             raise ServerErrors.smtp_server_login_fail from e
 
     def send(self, email: str, subject: str, html_body: str):
+        if not ctx.config.mail.smtp_enabled:
+            logger.debug(f"SMTP disabled, skipping email to {email!r}")
+            return
+
         # Minify HTML
         tree = lxml.html.fromstring(html_body)
         minified = lxml.etree.tostring(tree, encoding="unicode", pretty_print=False)
@@ -57,7 +92,7 @@ class MailService:
         msg["To"] = email
 
         try:
-            with self._lock:
+            with self._smtp_lock:
                 self.server.sendmail(msg["From"], [msg["To"]], msg.as_string())
         except ServerError:
             raise
@@ -140,3 +175,66 @@ class MailService:
             is_failed=job.status == JobStatus.FAILED,
         )
         self.send(user.email, subject, body)
+
+    # ------------------------------------------------------------------
+    # IMAP inbox listener
+    # ------------------------------------------------------------------
+
+    def _run_imap(self, signal: Event):
+        """Outer reconnect loop — exponential backoff, gives up after a few failures."""
+        imap_server = ctx.config.mail.imap_server
+        imap_port = ctx.config.mail.imap_port
+        imap_user = ctx.config.mail.imap_username
+        imap_pass = ctx.config.mail.imap_password
+        imap_folder = ctx.config.mail.imap_folder
+        if not all([imap_server, imap_port, imap_user, imap_pass]):
+            raise ServerErrors.imap_server_login_fail.with_extra("missing config")
+
+        delay, retries = _IMAP_BACKOFF_BASE, 0
+        max_retry, max_delay = _IMAP_MAX_RETRIES, _IMAP_BACKOFF_MAX
+        while not signal.is_set():
+            try:
+                server = MailBoxUnencrypted(imap_server, imap_port)
+                if ctx.config.mail.imap_starttls:
+                    server.client.starttls()
+                with server.login(imap_user, imap_pass, imap_folder) as mb:
+                    logger.info("Mailbox connected. Listenting for incoming emails...")
+                    delay, retries = _IMAP_BACKOFF_BASE, 0
+                    self._idle_loop(mb, signal)
+            except Exception:
+                retries += 1
+                if retries > max_retry:
+                    logger.critical(f"IMAP: {retries} consecutive failures, giving up")
+                    return
+                logger.exception(f"IMAP: attempt {retries}/{max_retry}, retrying in {delay}s")
+                signal.wait(delay)
+                delay = min(delay * 2, max_delay)
+
+    def _idle_loop(self, mb: MailBox | MailBoxUnencrypted, signal: Event):
+        """Inner per-connection loop — polls IDLE until signal or connection drops."""
+        while not signal.is_set():
+            responses = mb.idle.wait(timeout=3)
+            if not responses:
+                continue
+            for msg in mb.fetch(AND(seen=False), mark_seen=False):
+                self._handle_incoming(mb, msg)
+
+    def _handle_incoming(self, mb: MailBox | MailBoxUnencrypted, msg: MailMessage):
+        sender = msg.from_
+        if not sender or not msg.uid:
+            logger.warning(f"Something went wrong! Received null sender or uid ({msg!r})")
+            return
+        if ctx.users.get_user_exists(sender):
+            logger.debug(f"Email from known user {sender}, skipping invite")
+            return
+        try:
+            mb.flag([msg.uid], [MailMessageFlags.SEEN], True)
+            admin = ctx.users.get_admin()
+            ctx.users.send_invite_email(admin, sender)
+            mb.flag([msg.uid], [MailMessageFlags.ANSWERED], True)
+            logger.info(f"Sent invite to {sender}")
+        except Exception as e:
+            logger.error(
+                f"Failed to send invite to {sender}. {e!r}",
+                exc_info=ctx.logger.is_debug,
+            )

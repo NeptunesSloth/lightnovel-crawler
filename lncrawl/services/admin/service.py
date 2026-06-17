@@ -11,6 +11,7 @@ class AdminService:
         ctx.setup()
         ctx.sources.ensure_load()
         ctx.scheduler.start()
+        ctx.mail.start()
 
     def config_sections(self):
         return list_config_sections()

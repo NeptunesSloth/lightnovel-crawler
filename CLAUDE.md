@@ -98,6 +98,8 @@ Routers in [lncrawl/server/api/](lncrawl/server/api/), aggregated in `__init__.p
 ## Conventions
 
 - **`ruff`** ([pyproject.toml](pyproject.toml)): line-length 100, double quotes, target py39. Excludes `lncrawl/cloudscraper` (vendored fork), `lncrawl-web`, `res`, `logs`.
+- **f-strings**: always use f-strings for string interpolation — never `%`-formatting or `.format()`.
+- **Type annotations**: always add type annotations to function signatures and variable declarations.
 - **README.md** source list and CLI help blocks are auto-generated — don't hand-edit those regions.
 - **`lncrawl/cloudscraper/`** is a vendored fork — patch rather than refactor.
 

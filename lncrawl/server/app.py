@@ -21,6 +21,7 @@ web_dir = (Path(__file__).parent / "web").absolute()
 async def lifespan(_app: FastAPI):
     try:
         ctx.setup()
+        ctx.mail.start()
         ctx.scheduler.start()
         ctx.recommendations.warmup()
         yield

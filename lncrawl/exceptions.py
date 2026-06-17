@@ -180,6 +180,12 @@ class ServerErrors:
     smtp_server_login_fail = ServerError(
         status.HTTP_503_SERVICE_UNAVAILABLE, "Failed to login to SMTP server"
     )
+    imap_server_unavailable = ServerError(
+        status.HTTP_503_SERVICE_UNAVAILABLE, "IMAP server is not available"
+    )
+    imap_server_login_fail = ServerError(
+        status.HTTP_503_SERVICE_UNAVAILABLE, "Failed to login to IMAP server"
+    )
     email_send_failure = ServerError(status.HTTP_503_SERVICE_UNAVAILABLE, "Failed to send email")
     calibre_exe_not_found = ServerError(
         status.HTTP_503_SERVICE_UNAVAILABLE, "No calibre executables"

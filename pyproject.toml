@@ -36,6 +36,7 @@ dependencies = [
   "html5lib~=1.1",
   "httpx[brotli,http2]>=0.27.0",
   "humanize>=4.0.0",
+  "imap-tools>=1.10.0",
   "lncrawl-scraper[all]>=0.2.3",
   "lxml>=5.4.0,<7.0.0",
   "nodriver>=0.50",

@@ -735,6 +735,20 @@ class MailConfig(_Section):
     section = "mail"
 
     @property
+    def smtp_enabled(self) -> bool:
+        """Enable SMTP Sending.
+
+        Set to true to allow the server to send outbound emails (OTP, password reset,
+        invitations, job notifications). When false all outbound mail is silently skipped —
+        useful for local development or when only the IMAP inbox listener is needed.
+        """
+        return self._get("smtp_enabled", False)
+
+    @smtp_enabled.setter
+    def smtp_enabled(self, v: bool) -> None:
+        self._set("smtp_enabled", v)
+
+    @property
     def smtp_server(self) -> str:
         """SMTP Server.
 
@@ -798,6 +812,112 @@ class MailConfig(_Section):
     @smtp_sender.setter
     def smtp_sender(self, v: str) -> None:
         self._set("smtp_sender", v)
+
+    @property
+    def smtp_starttls(self) -> bool:
+        """SMTP Use TLS.
+
+        Set to true to upgrade a plain connection to TLS via the STARTTLS command after
+        the initial server greeting.
+        """
+        return self._get("smtp_starttls", True)
+
+    @smtp_starttls.setter
+    def smtp_starttls(self, v: bool) -> None:
+        self._set("smtp_starttls", v)
+
+    @property
+    def imap_enabled(self) -> bool:
+        """Enable IMAP Inbox Listener.
+
+        When true the server listens for incoming emails via IMAP IDLE and automatically
+        sends an invitation to any sender who is not yet a registered user. Requires
+        `imap_username` and `imap_password` to be set.
+
+        If both `smtp_enabled` and `imap_enabled` are true, SMTP handles outbound mail
+        and IMAP handles inbound mail — the recommended full-service setup.
+        """
+        return self._get("imap_enabled", False)
+
+    @imap_enabled.setter
+    def imap_enabled(self, v: bool) -> None:
+        self._set("imap_enabled", v)
+
+    @property
+    def imap_server(self) -> str:
+        """IMAP Server.
+
+        Host name or IP of the IMAP server. `localhost` is the default for a local
+        ProtonMail Bridge or similar proxy.
+        """
+        return self._get("imap_server", "localhost")
+
+    @imap_server.setter
+    def imap_server(self, v: str) -> None:
+        self._set("imap_server", v)
+
+    @property
+    def imap_port(self) -> int:
+        """IMAP Port.
+
+        Network port for the IMAP server. `1143` is the default port used by the local
+        ProtonMail Bridge.
+        """
+        return self._get("imap_port", 1143)
+
+    @imap_port.setter
+    def imap_port(self, v: int) -> None:
+        self._set("imap_port", v)
+
+    @property
+    def imap_username(self) -> str:
+        """IMAP Username.
+
+        Login name for the IMAP server. When using ProtonMail Bridge this is usually
+        the same credential used for SMTP.
+        """
+        return self._get("imap_username", "")
+
+    @imap_username.setter
+    def imap_username(self, v: str) -> None:
+        self._set("imap_username", v)
+
+    @property
+    def imap_password(self) -> Annotated[str, Sensitive]:
+        """IMAP Password.
+
+        Password for the IMAP login. Treated as sensitive and redacted in the admin API.
+        """
+        return self._get("imap_password", "")
+
+    @imap_password.setter
+    def imap_password(self, v: str) -> None:
+        self._set("imap_password", v)
+
+    @property
+    def imap_folder(self) -> str:
+        """IMAP Folder.
+
+        Mailbox folder to monitor for new messages.
+        """
+        return self._get("imap_folder", "INBOX")
+
+    @imap_folder.setter
+    def imap_folder(self, v: str) -> None:
+        self._set("imap_folder", v)
+
+    @property
+    def imap_starttls(self) -> bool:
+        """IMAP Use TLS.
+
+        Set to true to upgrade a plain connection to TLS via the STARTTLS command after
+        the initial server greeting.
+        """
+        return self._get("imap_starttls", True)
+
+    @imap_starttls.setter
+    def imap_starttls(self, v: bool) -> None:
+        self._set("imap_starttls", v)
 
 
 # ------------------------------------------------------------------ #
