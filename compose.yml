@@ -19,7 +19,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:alpine
     restart: unless-stopped
     platform: linux/amd64
     shm_size: 128mb

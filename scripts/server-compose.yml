@@ -76,7 +76,7 @@ services:
           sys.exit(0 if r.status==200 else 1)
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:alpine
     restart: unless-stopped
     shm_size: 128mb
     environment:
