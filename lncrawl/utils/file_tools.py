@@ -10,6 +10,7 @@ from typing import Iterator, Union
 from slugify import slugify
 
 from .platforms import Platform
+from .text_tools import normalize
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,9 @@ def safe_filename(name: str) -> str:
             # URL reserved/special: # % & ; = @ ^ ` { } !
             # Control chars: \x00-\x1F (C0) and \x7F (DEL)
             regex_pattern=r'[<>:"/\\|?*#%&+;=@^`{}!\x00-\x1F\x7F]',
-        ).strip(" .")
+        )
+        .strip(" .")
+        .strip("-")
         or "untitled"
     )
     if name.upper() in _WINDOWS_RESERVED:

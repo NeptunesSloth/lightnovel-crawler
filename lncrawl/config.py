@@ -158,6 +158,11 @@ class Config(object):
         """Translator Settings."""
         return TranslatorConfig(self)
 
+    @cached_property
+    def calibre(self):
+        """Calibre Conversion Settings."""
+        return CalibreConfig(self)
+
     # -------------------------------------------------------------- #
 
     def load(self, file: Path | None = None) -> None:
@@ -370,6 +375,87 @@ class TranslatorConfig(_Section):
     @baidu_secret_key.setter
     def baidu_secret_key(self, v: str) -> None:
         self._set("baidu_secret_key", v)
+
+
+# ------------------------------------------------------------------ #
+#                          Calibre Section                           #
+# ------------------------------------------------------------------ #
+class CalibreConfig(_Section):
+    section = "calibre"
+
+    @property
+    def command(self) -> str:
+        """Ebook Convert Command.
+
+        Name (or full path) of Calibre's `ebook-convert` executable used for local
+        conversion of EPUB into other formats. Default is `ebook-convert`.
+        """
+        return self._get("command", "ebook-convert")
+
+    @command.setter
+    def command(self, v: str) -> None:
+        self._set("command", v)
+
+    @property
+    def default_options(self) -> str:
+        """Default Conversion Options.
+
+        Generic `ebook-convert` flags applied to every conversion, both through the API
+        service and the local command. Space-separated, in command-line form (for example
+        `--unsmarten-punctuation --enable-heuristics`). Per-book metadata and format-specific
+        options are added automatically and should not be listed here.
+        """
+        return self._get(
+            "default_options",
+            "--unsmarten-punctuation --no-chapters-in-toc"
+            " --enable-heuristics --disable-renumber-headings",
+        )
+
+    @default_options.setter
+    def default_options(self, v: str) -> None:
+        self._set("default_options", v)
+
+    @property
+    def api_enabled(self) -> bool:
+        """Enable Calibre API Service.
+
+        When true, conversions are first attempted through a remote `ebook-convert-api`
+        service (see `api_url`) instead of requiring Calibre to be installed locally.
+        Off by default.
+        """
+        return self._get("api_enabled", False)
+
+    @api_enabled.setter
+    def api_enabled(self, v: bool) -> None:
+        self._set("api_enabled", v)
+
+    @property
+    def api_url(self) -> str:
+        """Calibre API URL.
+
+        Base URL of the `ebook-convert-api` service (no trailing slash). When running the
+        full docker compose stack use `http://calibre-api:8000`; for a host-mapped service
+        the default is `http://localhost:8182`.
+        """
+        return self._get("api_url", "http://localhost:8182").rstrip("/")
+
+    @api_url.setter
+    def api_url(self, v: str) -> None:
+        self._set("api_url", v)
+
+    @property
+    def api_fallback_to_local(self) -> bool:
+        """Fallback to Local on API Failure.
+
+        When the API service is enabled but a conversion through it fails, fall back to
+        running the local `ebook-convert` command. Disable to fail the conversion outright
+        instead of retrying locally. Enabled by default.
+        """
+        return self._get("api_fallback_to_local", True)
+
+    @api_fallback_to_local.setter
+    def api_fallback_to_local(self, v: bool) -> None:
+        self._set("api_fallback_to_local", v)
 
 
 # ------------------------------------------------------------------ #

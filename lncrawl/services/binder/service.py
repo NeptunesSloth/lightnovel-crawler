@@ -29,13 +29,19 @@ archive_maker: Dict[OutputFormat, Callable[..., None]] = {
     OutputFormat.mobi: convert_epub,
     OutputFormat.pdf: convert_epub,
     OutputFormat.rtf: convert_epub,
+    OutputFormat.azw: convert_epub,
     OutputFormat.azw3: convert_epub,
+    OutputFormat.azw4: convert_epub,
     OutputFormat.fb2: convert_epub,
     OutputFormat.lit: convert_epub,
     OutputFormat.lrf: convert_epub,
     OutputFormat.pdb: convert_epub,
     OutputFormat.rb: convert_epub,
     OutputFormat.tcr: convert_epub,
+    OutputFormat.html: convert_epub,
+    OutputFormat.kepub: convert_epub,
+    OutputFormat.pml: convert_epub,
+    OutputFormat.snb: convert_epub,
 }
 
 

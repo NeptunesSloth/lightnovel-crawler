@@ -1,59 +1,179 @@
+from functools import cache
 import logging
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 from threading import Event
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from ...context import ctx
-from ...dao import Artifact, LanguageCode, OutputFormat
+from ...dao import Artifact, LanguageCode, Novel, OutputFormat
 from ...exceptions import AbortedException, ServerErrors
-from ...utils.event_lock import EventLock
 
 logger = logging.getLogger(__name__)
 
-__lock = EventLock()
 __is_available = None
-__wait_timeout = 1
+__api_timeout = 600
+
+# Filesystem-path flags rejected by the ebook-convert-api service.
+_BLOCKED_FLAGS = {
+    "cover",
+    "debug-pipeline",
+    "extract-to",
+    "transform-css-rules",
+}
+
+# An ordered conversion option: (flag, value). A `None` value means a boolean flag.
+Option = Tuple[str, Optional[str]]
 
 
-def __ebook_convert(*args, signal=Event()) -> bool:
+def __ebook_convert(*args, signal: Event) -> None:
     """
     Calls `ebook-convert` with given args
     Visit https://manual.calibre-ebook.com/generated/en/ebook-convert.html for argument list.
     """
-    with (
-        __lock.using(signal),
-        subprocess.Popen(
-            args=["ebook-convert"] + [str(a) for a in args],
-            stderr=subprocess.STDOUT if ctx.logger.is_warn else subprocess.DEVNULL,
-            stdout=subprocess.STDOUT if ctx.logger.is_debug else subprocess.DEVNULL,
-        ) as p,
-    ):
-        logger.debug(shlex.join(p.args))  # type: ignore
+    exe_path = __calibre_exe_path()
+    if not exe_path:
+        raise ServerErrors.calibre_exe_not_found.with_extra(exe_path)
 
+    cmd = [exe_path.as_posix()]
+    cmd += list(map(str, args))
+    logger.info(shlex.join(cmd))  # type: ignore
+    with subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as p:
         while p.poll() is None:
             if signal.is_set():
                 p.terminate()
                 p.kill()
                 raise AbortedException()
-            signal.wait(__wait_timeout)
-
+            signal.wait(0.1)
         if p.poll() != 0:
-            raise ServerErrors.ebook_convert_error
+            stdout, stderr = p.communicate()
+            msg = stderr or stdout or f"exit code {p.poll()}"
+            raise ServerErrors.ebook_convert_error.with_extra(msg)
 
-        return True
+
+@cache
+def __calibre_exe_path() -> Optional[Path]:
+    command = ctx.config.calibre.command
+    exe_path = shutil.which(command)
+    if not exe_path:
+        return None
+    path = Path(exe_path)
+    if path.is_file():
+        return path
+    return path
 
 
 def is_calibre_available() -> bool:
-    global __is_available
-    if __is_available is None:
-        try:
-            __ebook_convert("--version")
-            __is_available = True
-        except Exception:
-            __is_available = False
-    return __is_available
+    """Whether any conversion backend (API service or local Calibre) is usable."""
+    if ctx.config.calibre.api_enabled:
+        return True
+    return __calibre_exe_path() is not None
+
+
+def __parse_option_string(value: str) -> List[Option]:
+    """Parse a command-line option string into ordered (flag, value) pairs."""
+    tokens = shlex.split(value)
+    options: List[Option] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
+        if not token.startswith("--"):
+            continue
+        flag = token[2:]
+        if index < len(tokens) and not tokens[index].startswith("-"):
+            options.append((flag, tokens[index]))
+            index += 1
+        else:
+            options.append((flag, None))
+    return options
+
+
+def __build_options(artifact: Artifact, novel: Novel) -> List[Option]:
+    """Build the ordered conversion options shared by both backends."""
+    options: List[Option] = __parse_option_string(ctx.config.calibre.default_options)
+    options += [
+        ("title", novel.title),
+        ("authors", novel.authors),
+        ("tags", ",".join(novel.tags)),
+        ("series", novel.title),
+        ("publisher", novel.url),
+        ("book-producer", "Lightnovel Crawler"),
+    ]
+    language = artifact.language or novel.language
+    if language:
+        options += [("language", language)]
+    if artifact.format == OutputFormat.pdf:
+        options += [
+            ("paper-size", "letter"),
+            ("pdf-page-numbers", None),
+            ("pdf-hyphenate", None),
+            (
+                "pdf-header-template",
+                '<p style="text-align:center; color:#555; font-size:0.9em">'
+                "⦗ _TITLE_ &mdash; _SECTION_ ⦘</p>",
+            ),
+        ]
+    return options
+
+
+def __to_cli_args(options: List[Option], novel: Novel) -> List[str]:
+    """Render options as `ebook-convert` command-line arguments."""
+    args: List[str] = []
+    for flag, value in options:
+        args.append(f"--{flag}")
+        if value is not None:
+            args.append(value)
+    if novel.cover_available:
+        cover_path = ctx.files.resolve(novel.cover_file)
+        args += ["--cover", cover_path.as_posix()]
+    return args
+
+
+def __to_form_fields(options: List[Option]) -> dict:
+    """Render options as ebook-convert-api form fields."""
+    data: dict = {}
+    for flag, value in options:
+        if flag in _BLOCKED_FLAGS:
+            continue
+        name = flag.replace("-", "_")
+        if value is None:
+            data[name] = "true"
+        else:
+            data[name] = value
+    return data
+
+
+def __convert_via_api(
+    epub_file: Path,
+    tmp_file: Path,
+    output_format: OutputFormat,
+    options: List[Option],
+    signal: Event,
+) -> None:
+    """Convert the EPUB using the remote ebook-convert-api service."""
+    url = f"{ctx.config.calibre.api_url}/convert"
+    data = __to_form_fields(options)
+    data["output_format"] = str(output_format)
+    with (
+        ctx.http.session(signal) as sess,
+        open(epub_file, "rb") as fp,
+    ):
+        resp = sess.post(
+            url,
+            data=data,
+            files={"file": (epub_file.name, fp)},
+            timeout=__api_timeout,
+        )
+        resp.raise_for_status()
+        tmp_file.write_bytes(resp.content)
 
 
 def convert_epub(
@@ -71,52 +191,32 @@ def convert_epub(
     novel = ctx.novels.get(artifact.novel_id, language)
     epub_file = ctx.files.resolve(epub.output_file)
 
+    cfg = ctx.config.calibre
     if not is_calibre_available():
         raise ServerErrors.calibre_exe_not_found
 
-    logger.info(
-        f'Converting "{epub_file.name}" to "{out_file.name}"',
-    )
-    args = [
-        epub_file,
-        tmp_file,
-        "--unsmarten-punctuation",
-        "--no-chapters-in-toc",
-        "--title",
-        novel.title,
-        "--authors",
-        novel.authors,
-        # "--comments",
-        # novel.synopsis,
-        "--language",
-        artifact.language or novel.language,
-        "--tags",
-        ",".join(novel.tags),
-        "--series",
-        novel.title,
-        "--publisher",
-        novel.url,
-        "--book-producer",
-        "Lightnovel Crawler",
-        "--enable-heuristics",
-        "--disable-renumber-headings",
-    ]
+    options = __build_options(artifact, novel)
+    tmp_file.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f'Converting "{epub_file.name}" to "{out_file.name}"')
 
-    if novel.cover_available:
-        args += ["--cover", ctx.files.resolve(novel.cover_file)]
-    if artifact.format == OutputFormat.pdf:
-        args += [
-            "--paper-size",
-            "letter",
-            "--pdf-page-numbers",
-            "--pdf-hyphenate",
-            "--pdf-header-template",
-            '<p style="text-align:center; color:#555; font-size:0.9em">⦗ _TITLE_ &mdash; _SECTION_ ⦘</p>',
-        ]
+    converted = False
+    if cfg.api_enabled:
+        try:
+            __convert_via_api(epub_file, tmp_file, artifact.format, options, signal)
+            converted = tmp_file.is_file()
+        except AbortedException:
+            raise
+        except Exception as e:
+            logger.warning(f"calibre-api conversion failed. {e!r}", exc_info=ctx.logger.is_debug)
+            if not cfg.api_fallback_to_local:
+                raise ServerErrors.ebook_convert_error
 
-    __ebook_convert(*args, signal=signal)
+    if not converted:
+        args = __to_cli_args(options, novel)
+        __ebook_convert(epub_file, tmp_file, *args, signal=signal)
+        converted = tmp_file.is_file()
 
-    if not tmp_file.exists():
+    if not converted:
         raise ServerErrors.failed_creating_artifact
 
     out_file.parent.mkdir(parents=True, exist_ok=True)

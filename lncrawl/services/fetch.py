@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class FetchService:
     def __init__(self) -> None:
-        self.lock = EventLock()
+        self.lock = EventLock(3)
         self.scraper = Scraper()
 
     def close(self):

@@ -35,7 +35,10 @@ services:
         - CMD
         - /app/.venv/bin/python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"
+        - |
+          import sys, urllib.request;
+          r = urllib.request.urlopen('http://localhost:8080/health', timeout=10);
+          sys.exit(0 if r.status==200 else 1)
       interval: 30s
       timeout: 10s
       retries: 3
@@ -48,21 +51,33 @@ services:
         reservations:
           memory: "512M"
 
-  autoheal:
-    image: willfarrell/autoheal:latest
+  calibre-api:
+    image: ghcr.io/lncrawl/ebook-convert-api:v0.1.1
     restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      AUTOHEAL_CONTAINER_LABEL: autoheal
-      AUTOHEAL_INTERVAL: 30
-      AUTOHEAL_START_PERIOD: 90
+      MAX_UPLOAD_MB: "100"
+      MAX_CONCURRENT_JOBS: "3"
+      CONVERSION_TIMEOUT_SECONDS: "600"
     deploy:
       resources:
         limits:
-          memory: "128M"
-        reservations:
-          memory: "16M"
+          cpus: "3"
+          memory: 2g
+    labels:
+      - autoheal=true
+    healthcheck:
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - |
+          import sys, urllib.request;
+          r = urllib.request.urlopen('http://localhost:8000/health', timeout=10);
+          sys.exit(0 if r.status==200 else 1)
 
   postgres:
     image: postgres:alpine
@@ -80,6 +95,22 @@ services:
           memory: "512M"
         reservations:
           memory: "128M"
+
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 30
+      AUTOHEAL_START_PERIOD: 90
+    deploy:
+      resources:
+        limits:
+          memory: "128M"
+        reservations:
+          memory: "16M"
 
   torproxy-1:
     <<: *torproxy

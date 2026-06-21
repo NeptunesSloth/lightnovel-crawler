@@ -14,6 +14,7 @@ services:
       - appdata:/data
     depends_on:
       - postgres
+      - calibre-api
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -28,6 +29,16 @@ services:
       POSTGRES_DB: lncrawl
     volumes:
       - pgdata:/var/lib/postgresql/data
+
+  calibre-api:
+    image: ghcr.io/lncrawl/ebook-convert-api:v0.1.1
+    restart: unless-stopped
+    ports:
+      - "8182:8000"
+    environment:
+      MAX_UPLOAD_MB: "1024"
+      MAX_CONCURRENT_JOBS: "4"
+      CONVERSION_TIMEOUT_SECONDS: "300"
 
   torproxy:
     image: sdipu/tor-proxy:latest
