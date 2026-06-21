@@ -33,7 +33,7 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   calibre-api:
-    image: ghcr.io/lncrawl/ebook-convert-api:v0.1.1
+    image: ghcr.io/lncrawl/ebook-convert-api:v0.2.0
     restart: unless-stopped
     ports:
       - "8182:8000"

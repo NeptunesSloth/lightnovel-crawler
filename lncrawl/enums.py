@@ -71,11 +71,9 @@ class OutputFormat(str, Enum):
     pdb = "pdb"
     rb = "rb"
     tcr = "tcr"
-    azw = "azw"
-    azw4 = "azw4"
-    html = "html"
+    htmlz = "htmlz"
     kepub = "kepub"
-    pml = "pml"
+    pmlz = "pmlz"
     snb = "snb"
 
     def __str__(self) -> str:

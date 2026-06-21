@@ -397,25 +397,6 @@ class CalibreConfig(_Section):
         self._set("command", v)
 
     @property
-    def default_options(self) -> str:
-        """Default Conversion Options.
-
-        Generic `ebook-convert` flags applied to every conversion, both through the API
-        service and the local command. Space-separated, in command-line form (for example
-        `--unsmarten-punctuation --enable-heuristics`). Per-book metadata and format-specific
-        options are added automatically and should not be listed here.
-        """
-        return self._get(
-            "default_options",
-            "--unsmarten-punctuation --no-chapters-in-toc"
-            " --enable-heuristics --disable-renumber-headings",
-        )
-
-    @default_options.setter
-    def default_options(self, v: str) -> None:
-        self._set("default_options", v)
-
-    @property
     def api_enabled(self) -> bool:
         """Enable Calibre API Service.
 

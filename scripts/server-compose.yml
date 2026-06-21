@@ -48,7 +48,7 @@ services:
           memory: "4G"
 
   calibre-api:
-    image: ghcr.io/lncrawl/ebook-convert-api:v0.1.1
+    image: ghcr.io/lncrawl/ebook-convert-api:v0.2.0
     restart: unless-stopped
     environment:
       MAX_UPLOAD_MB: "100"
