@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
   build:
@@ -50,7 +50,7 @@ jobs:
 
       - name: 🏗️ Build and push by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -86,9 +86,6 @@ jobs:
       packages: write
 
     steps:
-      - name: 🔧 Set image name
-        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
-
       - name: 📥 Checkout
         uses: actions/checkout@v7
 
