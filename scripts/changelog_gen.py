@@ -157,9 +157,7 @@ def build_changelog() -> str:
     )
 
     # Keep curated entries verbatim, but drop stale "no release notes" placeholders.
-    blocks: Dict[str, str] = {
-        v: b for v, b in existing.items() if "_No release notes" not in b
-    }
+    blocks: Dict[str, str] = {v: b for v, b in existing.items() if "_No release notes" not in b}
     for rel in releases:
         ver = rel["tag"].strip().lstrip("vV")
         if ver in blocks:

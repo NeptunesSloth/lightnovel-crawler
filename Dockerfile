@@ -15,7 +15,7 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --all-extras --all-groups
+    uv sync --frozen --no-dev --extra lsp
 
 #------------------------------------------------
 # Runtime

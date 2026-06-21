@@ -47,12 +47,12 @@ def create_one(
         "--features",
         help="Crawler features. e.g.: -f search -f mtl",
     ),
-    use_openai: Optional[bool] = typer.Option(
-        None,
-        "--openai",
-        is_flag=True,
-        help="Use OpenAI model for auto generation",
-    ),
+    # use_openai: Optional[bool] = typer.Option(
+    #     None,
+    #     "--openai",
+    #     is_flag=True,
+    #     help="Use OpenAI model for auto generation",
+    # ),
     overwrite: bool = typer.Option(
         False,
         "--overwrite",
@@ -103,17 +103,17 @@ def create_one(
         else:
             features = _prompt_features()
 
-    # ensure to use openai
-    if use_openai is None:
-        if non_interactive:
-            use_openai = bool(ctx.config.app.openai_key)
-        else:
-            use_openai = _prompt_use_openai()
-    if use_openai and not ctx.config.app.openai_key:
-        if non_interactive:
-            use_openai = False
-        else:
-            ctx.config.app.openai_key = _prompt_openai_key()
+    # # ensure to use openai
+    # if use_openai is None:
+    #     if non_interactive:
+    #         use_openai = bool(ctx.config.app.openai_key)
+    #     else:
+    #         use_openai = _prompt_use_openai()
+    # if use_openai and not ctx.config.app.openai_key:
+    #     if non_interactive:
+    #         use_openai = False
+    #     else:
+    #         ctx.config.app.openai_key = _prompt_openai_key()
 
     # generate content stub
     base_url = extract_base(url)
@@ -123,9 +123,9 @@ def create_one(
         features=features,
     )
 
-    # fill content stub with openai
-    if use_openai:
-        content = _fill_with_openai(base_url, content)
+    # # fill content stub with openai
+    # if use_openai:
+    #     content = _fill_with_openai(base_url, content)
 
     # save content
     file_path.parent.mkdir(parents=True, exist_ok=True)

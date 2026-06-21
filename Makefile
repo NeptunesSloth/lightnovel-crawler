@@ -97,7 +97,7 @@ sync:
 install: setup sync
 
 upgrade: setup
-	$(UV) sync --upgrade $(UV_SYNC_FLAGS)
+	$(UV) lock --upgrade
 
 # =============================================================================
 # Python — lint, server, scaffolding

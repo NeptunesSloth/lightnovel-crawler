@@ -81,7 +81,7 @@ jobs:
           PYTHONIOENCODING: utf-8
           UV_PROJECT_ENVIRONMENT: .venv
         run: |
-          uv sync --all-extras --all-groups
+          uv sync --no-dev --extra build --extra lsp
           uv run python -m build -w
           uv run python setup_pyi.py
 
@@ -133,7 +133,7 @@ jobs:
           PYTHONIOENCODING: utf-8
           UV_PROJECT_ENVIRONMENT: .venv
         run: |
-          uv sync --all-extras --all-groups
+          uv sync --no-dev --extra build --extra lsp
           uv run python -m build -w
           uv run python setup_pyi.py
           mv ./dist/lncrawl ./dist/lncrawl-mac
@@ -175,7 +175,7 @@ jobs:
           PYTHONIOENCODING: utf-8
           UV_PROJECT_ENVIRONMENT: .venv
         run: |
-          uv sync --all-extras --all-groups
+          uv sync --no-dev --extra build --extra lsp
           uv run python -m build -w
           uv run python setup_pyi.py
           mv ./dist/lncrawl ./dist/lncrawl-linux
@@ -220,7 +220,7 @@ jobs:
           PYTHONIOENCODING: utf-8
           UV_PROJECT_ENVIRONMENT: .venv
         run: |
-          uv sync --all-extras --all-groups
+          uv sync --no-dev --extra build
           uv run python -m build -w
 
       - name: 📤 PyPI Publish

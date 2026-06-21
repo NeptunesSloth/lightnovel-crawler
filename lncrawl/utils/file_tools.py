@@ -10,7 +10,6 @@ from typing import Iterator, Union
 from slugify import slugify
 
 from .platforms import Platform
-from .text_tools import normalize
 
 logger = logging.getLogger(__name__)
 
