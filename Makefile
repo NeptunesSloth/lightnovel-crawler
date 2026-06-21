@@ -8,7 +8,7 @@
 	lint lint-fix start dev watch \
 	index-gen check-sources \
 	build-wheel build-exe build-installer build \
-	docker-base docker-build docker-up docker-down docker-logs \
+    docker-build docker-up docker-down docker-logs \
 	remove-tag push-tag push-tag-force \
 	add-dep add-dev rm-dep rm-dev
 
@@ -150,11 +150,8 @@ build: version install build-wheel build-exe build-installer
 # Docker
 # =============================================================================
 
-docker-base:
-	docker build -t lncrawl-base -f Dockerfile.base .
-
-docker-build: docker-base
-	docker build -t lncrawl --build-arg BASE_IMAGE=lncrawl-base .
+docker-build:
+	docker build -t lncrawl .
 
 docker-up:
 	docker compose up -d
