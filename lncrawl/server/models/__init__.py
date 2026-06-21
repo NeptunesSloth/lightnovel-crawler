@@ -3,6 +3,7 @@ from .announcement import AnnouncementCreateRequest, AnnouncementUpdateRequest
 from .config import ConfigProperty, ConfigSection, ConfigUpdateRequest
 from .crawler import LoginData
 from .feedback import (
+    Feedback,
     FeedbackCreateRequest,
     FeedbackRespondRequest,
     FeedbackUpdateRequest,
@@ -101,6 +102,7 @@ __all__ = [
     "PutNotificationRequest",
     "SendInviteRequest",
     # feedback
+    "Feedback",
     "FeedbackCreateRequest",
     "FeedbackUpdateRequest",
     "FeedbackRespondRequest",

@@ -146,8 +146,82 @@ class GithubClient:
         resp.raise_for_status()
         return resp.json()
 
-    def add_labels(self, issue_number: str, labels: List[str]):
-        self._gh.post(
+    def add_labels(self, issue_number: str, labels: List[str]) -> list:
+        # This endpoint auto-creates labels that do not exist yet.
+        resp = self._gh.post(
             f"/repos/{_GITHUB_REPO}/issues/{issue_number}/labels",
             json={"labels": labels},
-        ).raise_for_status()
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def search_issues(
+        self,
+        query: str,
+        *,
+        page: int = 1,
+        per_page: int = 20,
+        sort: str = "created",
+        order: str = "desc",
+    ) -> dict:
+        full_query = f"repo:{_GITHUB_REPO} is:issue {query}".strip()
+        resp = self._gh.get(
+            "/search/issues",
+            params={
+                "q": full_query,
+                "page": page,
+                "per_page": per_page,
+                "sort": sort,
+                "order": order,
+                "advanced_search": "true",
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_issue(self, number: int) -> dict:
+        resp = self._gh.get(f"/repos/{_GITHUB_REPO}/issues/{number}")
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_issue(self, *, title: str, body: str, labels: List[str]) -> dict:
+        resp = self._gh.post(
+            f"/repos/{_GITHUB_REPO}/issues",
+            json={"title": title, "body": body, "labels": labels},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def update_issue(
+        self,
+        number: int,
+        *,
+        title: Optional[str] = None,
+        body: Optional[str] = None,
+        state: Optional[str] = None,
+        labels: Optional[List[str]] = None,
+    ) -> dict:
+        payload: dict = {}
+        if title is not None:
+            payload["title"] = title
+        if body is not None:
+            payload["body"] = body
+        if state is not None:
+            payload["state"] = state
+        if labels is not None:
+            payload["labels"] = labels
+        resp = self._gh.patch(f"/repos/{_GITHUB_REPO}/issues/{number}", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    def delete_issue(self, node_id: str) -> None:
+        # The REST API cannot delete issues; the GraphQL mutation is the only way.
+        mutation = "mutation($id: ID!) { deleteIssue(input: {issueId: $id}) { clientMutationId } }"
+        resp = self._gh.post(
+            "/graphql",
+            json={"query": mutation, "variables": {"id": node_id}},
+        )
+        resp.raise_for_status()
+        errors = resp.json().get("errors")
+        if errors:
+            raise ServerErrors.server_error.with_extra(str(errors))

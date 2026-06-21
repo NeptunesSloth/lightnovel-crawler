@@ -9,7 +9,6 @@ from .announcement import Announcement
 from .artifact import Artifact
 from .chapter import Chapter, ChapterTranslation
 from .chapter_image import ChapterImage
-from .feedback import Feedback
 from .job import Job
 from .library import Library, LibraryNovel
 from .novel import Novel, NovelTranslation
@@ -37,7 +36,6 @@ models: List[Type[SQLModel]] = [
     Artifact,
     Job,
     Secret,
-    Feedback,
     Announcement,
 ]
 

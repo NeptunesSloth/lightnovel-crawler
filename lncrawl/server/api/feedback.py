@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Body, Path, Query, Security
 
 from ...context import ctx
-from ...dao import Feedback, FeedbackStatus, FeedbackType, User
+from ...dao import FeedbackStatus, FeedbackType, User
 from ...server.models import (
+    Feedback,
     FeedbackCreateRequest,
     FeedbackRespondRequest,
     FeedbackUpdateRequest,
@@ -16,18 +17,22 @@ router = APIRouter()
 
 @router.get("s", summary="Get list of feedbacks")
 def list_feedback(
+    user: User = Security(ensure_user),
     search: str = Query(default=""),
     status: FeedbackStatus = Query(default=None),
     type: FeedbackType = Query(default=None),
+    mine: bool = Query(default=False, description="Only show feedback submitted by the user"),
     offset: int = Query(default=0),
     limit: int = Query(default=20, le=100),
 ) -> Paginated[Feedback]:
     return ctx.feedback.list(
+        user=user,
         offset=offset,
         limit=limit,
         search=search,
         status=status,
         type=type,
+        mine=mine,
     )
 
 
@@ -51,8 +56,9 @@ def create_feedback(
 @router.get("/{feedback_id}", summary="Get feedback by ID")
 def get_feedback(
     feedback_id: str = Path(),
+    user: User = Security(ensure_user),
 ) -> Feedback:
-    return ctx.feedback.get(feedback_id)
+    return ctx.feedback.get(user, feedback_id)
 
 
 @router.put("/{feedback_id}", summary="Update feedback")
@@ -86,7 +92,6 @@ def respond_to_feedback(
         user=user,
         feedback_id=feedback_id,
         status=body.status,
-        admin_notes=body.admin_notes or "",
     )
 
 
