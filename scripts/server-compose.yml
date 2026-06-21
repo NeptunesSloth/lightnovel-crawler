@@ -11,8 +11,6 @@ x-torproxy: &torproxy
       limits:
         cpus: "0.25"
         memory: "128M"
-      reservations:
-        memory: "32M"
 
 services:
   server:
@@ -48,8 +46,6 @@ services:
         limits:
           cpus: "3.50"
           memory: "4G"
-        reservations:
-          memory: "512M"
 
   calibre-api:
     image: ghcr.io/lncrawl/ebook-convert-api:v0.1.1
@@ -80,12 +76,13 @@ services:
           sys.exit(0 if r.status==200 else 1)
 
   postgres:
-    image: postgres:alpine
+    image: postgres:17-alpine
     restart: unless-stopped
+    shm_size: 128mb
     environment:
+      POSTGRES_DB: lncrawl
       POSTGRES_USER: pguser
       POSTGRES_PASSWORD: pgpass
-      POSTGRES_DB: lncrawl
     volumes:
       - ./pgdata:/var/lib/postgresql/data
     deploy:
@@ -93,8 +90,6 @@ services:
         limits:
           cpus: "2.00"
           memory: "512M"
-        reservations:
-          memory: "128M"
 
   autoheal:
     image: willfarrell/autoheal:latest
@@ -108,9 +103,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: "128M"
-        reservations:
-          memory: "16M"
+          memory: "64M"
 
   torproxy-1:
     <<: *torproxy

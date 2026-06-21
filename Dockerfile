@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 #------------------------------------------------
 # Runtime
 #------------------------------------------------
-FROM python:3.14-slim-trixie AS runtime
+FROM python:3.14-slim-trixie
 
 ENV LNCRAWL_DATA_PATH=/data \
     PYTHONDONTWRITEBYTECODE=1 \

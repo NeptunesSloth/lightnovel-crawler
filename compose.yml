@@ -19,14 +19,16 @@ services:
       - "host.docker.internal:host-gateway"
 
   postgres:
-    image: postgres:alpine
+    image: postgres:17-alpine
     restart: unless-stopped
+    platform: linux/amd64
+    shm_size: 128mb
     ports:
       - "5432:5432"
     environment:
+      POSTGRES_DB: lncrawl
       POSTGRES_USER: pguser
       POSTGRES_PASSWORD: pgpass
-      POSTGRES_DB: lncrawl
     volumes:
       - pgdata:/var/lib/postgresql/data
 
