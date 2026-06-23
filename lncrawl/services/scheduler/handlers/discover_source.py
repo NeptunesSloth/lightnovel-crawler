@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import List
 
 from ....context import ctx
 from ....enums import JobType
@@ -6,11 +6,6 @@ from ._base import AbortedException, BatchHandler, HandlerException
 
 
 class DiscoverSourceHandler(BatchHandler):
-    # The crawler base only exposes ``search(query)`` — there is no universal
-    # "list every novel" capability. To discover novels generically we run the
-    # source's own search across a set of seed queries and merge the results.
-    SEED_QUERIES: str = "abcdefghijklmnopqrstuvwxyz0123456789"
-
     @staticmethod
     def can_activate(job) -> bool:
         return job.type == JobType.DISCOVER_SOURCE
@@ -49,25 +44,11 @@ class DiscoverSourceHandler(BatchHandler):
         if existing:
             return list(existing)
 
-        found: Dict[str, None] = {}
-        for seed in self.SEED_QUERIES:
-            if self.signal.is_set():
-                raise AbortedException()
-            try:
-                results = ctx.crawler.search_novel(
-                    user_id=self.user.id,
-                    query=seed,
-                    domain=domain,
-                    signal=self.signal,
-                )
-            except AbortedException:
-                raise
-            except Exception as e:
-                ctx.logger.debug(f"Discover '{seed}' failed on {domain}: {e}")
-                continue
-            for item in results:
-                found[item.url] = None
+        if self.signal.is_set():
+            raise AbortedException()
+        urls = ctx.crawler.discover_novels(self.user.id, domain, self.signal)
+        if self.signal.is_set():
+            raise AbortedException()
 
-        urls = list(found)
         self._set_extra(discovered=urls)
         return urls

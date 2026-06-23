@@ -40,10 +40,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
   .card h2 { font-size: 16px; margin: 0 0 4px; }
   .card p.hint { color: #8b93a1; font-size: 13px; margin: 0 0 14px; }
   label { display: block; font-size: 13px; color: #aab2c0; margin: 10px 0 4px; }
-  input[type=text], input[type=email], input[type=password] {
+  input[type=text], input[type=email], input[type=password], select {
     width: 100%; padding: 9px 11px; border-radius: 8px;
     border: 1px solid #303644; background: #0f1115; color: #e6e6e6; font-size: 14px;
   }
+  code { background: #0b0d11; padding: 1px 5px; border-radius: 5px; font-size: 12px; }
   .row { display: flex; gap: 10px; align-items: center; }
   .row.checkbox { margin-top: 12px; font-size: 14px; color: #cbd2dd; }
   button {
@@ -103,6 +104,33 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <label for="src-full" style="margin:0">Fetch full contents of every novel found</label>
     </div>
     <button id="discover-btn">Discover &amp; queue</button>
+  </div>
+
+  <div class="card">
+    <h2>Download a whole source as a ZIP</h2>
+    <p class="hint">Paste a source URL and download <b>every</b> novel from it, bundled into a
+      single <code>.zip</code> you can save to a hard drive and read offline. Works for manga
+      too — EPUB embeds the page images. This runs in the background; when it's ready a
+      download starts automatically.</p>
+    <label for="exp-url">Source URL</label>
+    <input id="exp-url" type="text" placeholder="https://novelsource.example/" />
+    <div class="row">
+      <div style="flex:1">
+        <label for="exp-format">Format</label>
+        <select id="exp-format">
+          <option value="epub" selected>EPUB (best for manga &amp; most readers)</option>
+          <option value="pdf">PDF</option>
+          <option value="azw3">AZW3 (Kindle)</option>
+          <option value="mobi">MOBI (older Kindle)</option>
+          <option value="txt">TXT (text only)</option>
+        </select>
+      </div>
+      <div style="flex:1">
+        <label for="exp-limit">Limit (optional)</label>
+        <input id="exp-limit" type="text" inputmode="numeric" placeholder="e.g. 50 — blank = all" />
+      </div>
+    </div>
+    <button id="export-btn">Download all &rarr; ZIP</button>
   </div>
 
   <div class="card">
@@ -225,7 +253,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
   });
 
   function pollJob(id, label) {
-    api("/jobs/" + id, { method: "GET" })
+    api("/job/" + id, { method: "GET" })
       .then(function (job) {
         var status = job.status;
         var done = job.done, total = job.total;
@@ -245,12 +273,69 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (!url) { log("Enter a source URL.", "log-err"); return; }
     busy(btn, true);
     log("Queuing discovery for " + url + " …", "log-info");
-    api("/jobs/create/discover-source", { method: "POST", body: JSON.stringify({ url: url, full: full }) })
+    api("/job/create/discover-source", { method: "POST", body: JSON.stringify({ url: url, full: full }) })
       .then(function (job) {
         log("Discovery job created: " + job.id, "log-ok");
         pollJob(job.id, "Discover");
       })
       .catch(function (e) { log("Discovery failed: " + e.message, "log-err"); })
+      .finally(function () { busy(btn, false); });
+  });
+
+  function downloadBlob(jobId, name) {
+    log("Building download …", "log-info");
+    fetch("/api/job/" + jobId + "/export", { headers: { "Authorization": "Bearer " + token() } })
+      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.blob(); })
+      .then(function (blob) {
+        var a = document.createElement("a");
+        var objUrl = URL.createObjectURL(blob);
+        a.href = objUrl; a.download = name || "novels.zip";
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(objUrl); }, 10000);
+        log("Saved " + (name || "novels.zip") + " — check your downloads.", "log-ok");
+      })
+      .catch(function (e) { log("Download failed: " + e.message, "log-err"); });
+  }
+
+  function pollExport(id) {
+    api("/job/" + id, { method: "GET" })
+      .then(function (job) {
+        var status = job.status;
+        log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        if (status === "RUNNING" || status === "PENDING") {
+          setTimeout(function () { pollExport(id); }, 4000);
+        } else if (status === "SUCCESS") {
+          var extra = job.extra || {};
+          log("Exported " + (extra.exported || 0) + " novels" +
+            (extra.failed ? " (" + extra.failed + " failed)" : "") + ".", "log-ok");
+          downloadBlob(id, extra.export_name);
+        } else {
+          log("Export ended: " + status + (job.error ? " — " + job.error : ""), "log-err");
+        }
+      })
+      .catch(function (e) { log("Status check failed: " + e.message, "log-err"); });
+  }
+
+  document.getElementById("export-btn").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var btn = this;
+    var url = document.getElementById("exp-url").value.trim();
+    var format = document.getElementById("exp-format").value;
+    var limitRaw = document.getElementById("exp-limit").value.trim();
+    if (!url) { log("Enter a source URL.", "log-err"); return; }
+    var body = { url: url, format: format };
+    if (limitRaw) {
+      var limit = parseInt(limitRaw, 10);
+      if (!isNaN(limit) && limit > 0) body.limit = limit;
+    }
+    busy(btn, true);
+    log("Starting full export of " + url + " (this can take a while) …", "log-info");
+    api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })
+      .then(function (job) {
+        log("Export job created: " + job.id, "log-ok");
+        pollExport(job.id);
+      })
+      .catch(function (e) { log("Export failed: " + e.message, "log-err"); })
       .finally(function () { busy(btn, false); });
   });
 
@@ -261,7 +346,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (!novelId) { log("Enter a novel ID.", "log-err"); return; }
     busy(btn, true);
     log("Queuing missing-chapter retry for novel " + novelId + " …", "log-info");
-    api("/jobs/create/fetch-missing", { method: "POST", body: JSON.stringify({ novel_id: novelId }) })
+    api("/job/create/fetch-missing", { method: "POST", body: JSON.stringify({ novel_id: novelId }) })
       .then(function (job) {
         log("Retry job created: " + job.id, "log-ok");
         pollJob(job.id, "Retry missing");

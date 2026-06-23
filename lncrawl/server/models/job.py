@@ -60,3 +60,14 @@ class SearchSourceRequest(BaseModel):
 class DiscoverSourceRequest(BaseModel):
     url: HttpUrl = Field(description="The source website/base URL to discover novels from")
     full: bool = Field(default=False, description="To fetch all contents of every novel found")
+
+
+class ExportSourceRequest(BaseModel):
+    url: HttpUrl = Field(description="The source website/base URL to export every novel from")
+    format: OutputFormat = Field(
+        default=OutputFormat.epub,
+        description="Ebook format to generate for each novel (epub embeds manga images)",
+    )
+    limit: Optional[int] = Field(
+        default=None, ge=1, description="Only export the first N discovered novels"
+    )

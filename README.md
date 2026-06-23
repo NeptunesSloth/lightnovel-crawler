@@ -189,21 +189,43 @@ _Use a URL from any [supported source](#supported-sources)._
 ### Tools page
 
 A lightweight power-user page is served at **`/tools`** (e.g. **http://localhost:8181/tools**),
-separate from the main UI. It talks straight to the REST API and currently offers:
+separate from the main UI. When you open the app there's a floating **🛠 Tools** button in the
+bottom-right corner that takes you straight to it (already signed in). It offers:
 
-- **Discover all novels from a source** — paste a source website/base URL and every novel
-  the source exposes through its own search is discovered, de-duplicated, and queued for
-  download. (Also available directly via `POST /api/jobs/create/discover-source`.)
+- **Download a whole source as a ZIP** — paste a source URL and download **every** novel from
+  it, bundled into a single `.zip` you can save to a hard drive and read offline. Pick a format,
+  optionally cap how many novels, and the download starts automatically when it's ready.
+  (Also available via `POST /api/jobs/create/export-source`.)
+- **Discover all novels from a source** — discovers every novel the source exposes and queues
+  them into your **library** (so you can read them in the app, offline). With "full contents"
+  ticked it downloads all chapters too. (Also `POST /api/jobs/create/discover-source`.)
 - **Retry missing / failed chapters** — re-fetches only the chapters that aren't downloaded
   yet for a novel; chapters that already succeeded are skipped.
 
-Sign in with your account, or — when launched from the desktop app — open
-`/tools?authToken=<token>` to reuse the app's local session automatically.
+Sign in with your account, or — when launched from the desktop app — the 🛠 Tools button reuses
+the app's local session automatically.
+
+#### Manga
+
+Manga sources work the same way. **EPUB** embeds the page images, so an exported EPUB (or a novel
+in your library) shows the artwork in the app's reader and in most e-readers. EPUB is the
+recommended format for manga.
+
+#### How to read them offline
+
+You have two options, both **wifi-free** once the download is done:
+
+- **In the app (easiest):** the desktop app runs entirely on your machine, so anything in your
+  **Library** is readable in the built-in **Reader** with no internet — handy for long trips.
+  Want the library itself on an external drive? Point `LNCRAWL_DATA_PATH` at the drive and the
+  whole library lives there.
+- **As files on a hard drive:** use **Download a whole source as a ZIP**, unzip onto your drive,
+  and open the EPUBs in any reader (the app, Calibre, a Kindle/e-reader, your phone, …). AZW3/MOBI
+  are good if you read on a Kindle.
 
 > **Note:** This page is part of the app's own server. A **downloaded standalone/release
 > build only includes it from the release that shipped it** — if you grabbed an older binary,
-> rebuild from source (`make build-exe`) or run `lncrawl server` to get it. The main desktop
-> window opens the standard UI; browse to `/tools` to reach this page.
+> rebuild from source (`make build-exe`) or run `lncrawl server` to get it.
 
 ---
 
