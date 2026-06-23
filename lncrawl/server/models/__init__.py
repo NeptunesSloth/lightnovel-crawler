@@ -9,6 +9,7 @@ from .feedback import (
     FeedbackUpdateRequest,
 )
 from .job import (
+    DiscoverSourceRequest,
     FetchChaptersRequest,
     FetchImagesRequest,
     FetchLatestRequest,
@@ -80,6 +81,7 @@ __all__ = [
     "TranslateVolumesRequest",
     "TranslateChaptersRequest",
     "SearchSourceRequest",
+    "DiscoverSourceRequest",
     # library
     "LibraryCreateRequest",
     "LibraryUpdateRequest",

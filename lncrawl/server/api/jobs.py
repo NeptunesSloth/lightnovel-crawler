@@ -6,6 +6,7 @@ from ...context import ctx
 from ...dao import Job, JobPriority, JobStatus, JobType, User
 from ...exceptions import ServerErrors
 from ..models import (
+    DiscoverSourceRequest,
     FetchChaptersRequest,
     FetchImagesRequest,
     FetchLatestRequest,
@@ -91,6 +92,8 @@ def replay_job(
     data = dict(**job.extra)
     if job.type in (JobType.SEARCH_ALL_SOURCES, JobType.SEARCH_SOURCE):
         data["search_results"] = []
+    if job.type == JobType.DISCOVER_SOURCE:
+        data["discovered"] = []
     return ctx.jobs._create(
         user=user,
         data=data,
@@ -247,3 +250,14 @@ def search_sources(
         return ctx.jobs.search_single_source(user, body.query, body.domain)
     else:
         return ctx.jobs.search_all_sources(user, body.query)
+
+
+@router.post(
+    "/create/discover-source",
+    summary="Create a job to discover and queue every novel from a source",
+)
+def discover_source(
+    user: User = Security(ensure_user),
+    body: DiscoverSourceRequest = Body(),
+) -> Job:
+    return ctx.jobs.discover_source(user, str(body.url), full=body.full)

@@ -13,6 +13,7 @@ from ..context import ctx
 from ..exceptions import ServerErrors, get_exception_handlers
 from .api import router as api
 from .middleware.staticfiles import CustomStaticFiles, StaticFilesGuard
+from .tools import router as tools_router
 
 web_dir = (Path(__file__).parent / "web").absolute()
 
@@ -76,6 +77,10 @@ if ctx.config.server.enable_browse_route:
 
 # Add APIs
 app.include_router(api, prefix="/api")
+
+# Standalone power-user tools page (kept outside the web build dir so the
+# web-sync workflow never overwrites it). Registered before the SPA catch-all.
+app.include_router(tools_router)
 
 # Mount static files
 app.mount("/static", CustomStaticFiles(), name="static")
