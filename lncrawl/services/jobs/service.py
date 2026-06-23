@@ -687,6 +687,31 @@ class JobService:
             type=JobType.SEARCH_SOURCE,
         )
 
+    def discover_source(
+        self,
+        user: User,
+        url: str,
+        *,
+        full: bool = False,
+        parent_id: Optional[str] = None,
+        depends_on: Optional[str] = None,
+        **data: Any,
+    ) -> Job:
+        domain = ctx.sources.get_domain(url)
+        source = ctx.sources.get_source(domain)
+        if not source.can_search:
+            raise ServerErrors.search_not_supported.with_extra(domain)
+        data["domain"] = source.domain
+        data["url"] = source.url
+        data["full"] = bool(full)
+        return self._create(
+            user=user,
+            data=data,
+            parent_id=parent_id,
+            depends_on=depends_on,
+            type=JobType.DISCOVER_SOURCE,
+        )
+
     # -------------------------------------------------------------------------
     #                              DELETE Jobs
     # -------------------------------------------------------------------------

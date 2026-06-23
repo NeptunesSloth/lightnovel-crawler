@@ -149,6 +149,10 @@ class Job(BaseTable, table=True):
             domain = self.extra.get("domain")
             return f"Search '{query}' → {domain}"
 
+        if self.type == JobType.DISCOVER_SOURCE:
+            domain = self.extra.get("domain")
+            return f"Discover all novels → {domain}"
+
         # Require Language for translation
         language = self.extra.get("language") or ""
         if language in _LANGUAGE_CODES:

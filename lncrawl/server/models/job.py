@@ -55,3 +55,8 @@ class FetchLatestRequest(BaseModel):
 class SearchSourceRequest(BaseModel):
     query: str = Field(description="Search query", min_length=2, max_length=50)
     domain: Optional[str] = Field(default=None, description="Search in a specific source only")
+
+
+class DiscoverSourceRequest(BaseModel):
+    url: HttpUrl = Field(description="The source website/base URL to discover novels from")
+    full: bool = Field(default=False, description="To fetch all contents of every novel found")

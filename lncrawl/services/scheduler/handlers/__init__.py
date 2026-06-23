@@ -9,6 +9,7 @@ from .chapter import ChapterHandler
 from .chapter_batch import ChapterBatchHandler
 from .chapter_translation import ChapterTranslationHandler
 from .chapter_translation_batch import ChapterTranslationBatchHandler
+from .discover_source import DiscoverSourceHandler
 from .fetch_latest import FetchLatestHandler
 from .fetch_missing import FetchMissingHandler
 from .image import ImageHandler
@@ -46,6 +47,7 @@ _HANDLER_REGISTRY: List[Type[BaseHandler]] = [
     ArtifactBatchHandler,
     SearchAllSourcesHandler,
     SearchSourceHandler,
+    DiscoverSourceHandler,
     FallbackHandler,
 ]
 
