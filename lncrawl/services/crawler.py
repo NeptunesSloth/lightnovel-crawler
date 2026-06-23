@@ -257,3 +257,37 @@ class CrawlerService:
             results = list(crawler.search(query))
             results.sort(key=lambda x: -SequenceMatcher(a=x.title, b=query).ratio())
             return list(results)
+
+    # The default seed queries used to enumerate a source. The crawler base only
+    # exposes ``search(query)`` (no universal "list every novel"), so discovery
+    # runs the source's own search across these seeds and merges the results.
+    DISCOVER_SEEDS: str = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+    def discover_novels(
+        self,
+        user_id: str,
+        domain: str,
+        signal: Optional[Event] = None,
+        seeds: Optional[str] = None,
+        custom: Optional[Crawler] = None,
+    ) -> List[str]:
+        """Discover every novel URL a source exposes through its own search.
+
+        Runs one crawler session across the seed queries, de-duplicating the
+        results by URL. Stops early (returning what was found) if ``signal`` is
+        set so callers can abort cleanly.
+        """
+        source = ctx.sources.get_source(domain)
+        found: "dict[str, None]" = {}
+        with self.prepare_crawler(user_id, source.url, signal, custom) as crawler:
+            for seed in seeds or self.DISCOVER_SEEDS:
+                if signal is not None and signal.is_set():
+                    break
+                try:
+                    for item in crawler.search(seed):
+                        if item.url:
+                            found[item.url] = None
+                except Exception as e:
+                    logger.debug(f"Discover '{seed}' on {domain} failed: {e}")
+                    continue
+        return list(found)

@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from ..assets.version import get_version
 from ..context import ctx
@@ -16,6 +16,26 @@ from .middleware.staticfiles import CustomStaticFiles, StaticFilesGuard
 from .tools import router as tools_router
 
 web_dir = (Path(__file__).parent / "web").absolute()
+
+# Floating launcher injected into the SPA so the standalone /tools page is
+# reachable from the main app (the desktop window has no address bar). Injected
+# at serve-time, so the web-sync workflow that overwrites web/ never affects it.
+_TOOLS_LAUNCHER = """<script>(function(){
+  var t = new URLSearchParams(location.search).get('authToken') || '';
+  document.addEventListener('DOMContentLoaded', function(){
+    if (document.getElementById('lncrawl-tools-launcher')) return;
+    var a = document.createElement('a');
+    a.id = 'lncrawl-tools-launcher';
+    a.href = '/tools' + (t ? ('?authToken=' + encodeURIComponent(t)) : '');
+    a.textContent = '\\uD83D\\uDEE0 Tools';
+    a.title = 'Bulk download a whole source / power-user tools';
+    a.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:99999;'
+      + 'background:#3b82f6;color:#fff;padding:8px 14px;border-radius:999px;'
+      + 'font:600 13px system-ui,sans-serif;text-decoration:none;'
+      + 'box-shadow:0 2px 10px rgba(0,0,0,.4)';
+    document.body.appendChild(a);
+  });
+})();</script>"""
 
 
 @asynccontextmanager
@@ -114,9 +134,11 @@ async def serve_web(fallback: str):
     if mime_type == "text/javascript":
         mime_type = "application/javascript"
     if target_file.name in {"index.html", "sw.js", "registerSW.js"}:
-        return FileResponse(
-            target_file,
-            media_type=mime_type,
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-        )
+        no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+        if target_file.name == "index.html":
+            html = await loop.run_in_executor(None, lambda: target_file.read_text(encoding="utf-8"))
+            if "lncrawl-tools-launcher" not in html and "</body>" in html:
+                html = html.replace("</body>", _TOOLS_LAUNCHER + "</body>", 1)
+            return HTMLResponse(content=html, headers=no_cache)
+        return FileResponse(target_file, media_type=mime_type, headers=no_cache)
     return FileResponse(target_file, media_type=mime_type)

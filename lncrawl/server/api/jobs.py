@@ -1,12 +1,14 @@
 from typing import Optional
 
 from fastapi import APIRouter, Body, Path, Query, Security
+from fastapi.responses import FileResponse
 
 from ...context import ctx
 from ...dao import Job, JobPriority, JobStatus, JobType, User
 from ...exceptions import ServerErrors
 from ..models import (
     DiscoverSourceRequest,
+    ExportSourceRequest,
     FetchChaptersRequest,
     FetchImagesRequest,
     FetchLatestRequest,
@@ -261,3 +263,36 @@ def discover_source(
     body: DiscoverSourceRequest = Body(),
 ) -> Job:
     return ctx.jobs.discover_source(user, str(body.url), full=body.full)
+
+
+@router.post(
+    "/create/export-source",
+    summary="Create a job that downloads every novel from a source into a single zip",
+)
+def export_source(
+    user: User = Security(ensure_user),
+    body: ExportSourceRequest = Body(),
+) -> Job:
+    return ctx.jobs.export_source(
+        user,
+        str(body.url),
+        format=body.format,
+        limit=body.limit,
+    )
+
+
+@router.get("/{job_id}/export", summary="Download the zip produced by an export-source job")
+def download_export(
+    user: User = Security(ensure_user),
+    job_id: str = Path(),
+) -> FileResponse:
+    ctx.jobs.verify_access(user, job_id)
+    job = ctx.jobs.get(job_id)
+    export_file = job.extra.get("export_file")
+    if not export_file:
+        raise ServerErrors.no_such_file
+    path = ctx.files.resolve(export_file)
+    if not path.is_file():
+        raise ServerErrors.no_such_file
+    filename = job.extra.get("export_name") or "novels.zip"
+    return FileResponse(path, media_type="application/zip", filename=filename)
