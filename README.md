@@ -186,6 +186,25 @@ lncrawl search "The Beginning After The End"
 
 _Use a URL from any [supported source](#supported-sources)._
 
+### Tools page
+
+A lightweight power-user page is served at **`/tools`** (e.g. **http://localhost:8181/tools**),
+separate from the main UI. It talks straight to the REST API and currently offers:
+
+- **Discover all novels from a source** — paste a source website/base URL and every novel
+  the source exposes through its own search is discovered, de-duplicated, and queued for
+  download. (Also available directly via `POST /api/jobs/create/discover-source`.)
+- **Retry missing / failed chapters** — re-fetches only the chapters that aren't downloaded
+  yet for a novel; chapters that already succeeded are skipped.
+
+Sign in with your account, or — when launched from the desktop app — open
+`/tools?authToken=<token>` to reuse the app's local session automatically.
+
+> **Note:** This page is part of the app's own server. A **downloaded standalone/release
+> build only includes it from the release that shipped it** — if you grabbed an older binary,
+> rebuild from source (`make build-exe`) or run `lncrawl server` to get it. The main desktop
+> window opens the standard UI; browse to `/tools` to reach this page.
+
 ---
 
 ## Output Formats

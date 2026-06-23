@@ -123,6 +123,22 @@ _TOOLS_HTML = """<!DOCTYPE html>
 <script>
 (function () {
   var KEY = "lncrawl_token";
+
+  // Accept a token passed in the URL (?authToken=...) — the same mechanism the
+  // desktop app uses — then strip it from the address bar. This lets the page
+  // auto-sign-in when opened from the local/desktop app.
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    var t = params.get("authToken");
+    if (t) {
+      localStorage.setItem(KEY, t);
+      params.delete("authToken");
+      var qs = params.toString();
+      window.history.replaceState({}, document.title,
+        window.location.pathname + (qs ? "?" + qs : ""));
+    }
+  })();
+
   var logEl = document.getElementById("log");
   var firstLog = true;
 
