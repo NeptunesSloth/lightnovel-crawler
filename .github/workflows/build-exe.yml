@@ -1,0 +1,73 @@
+name: Build EXE
+
+# Manually build a Windows executable you can download — no version tag,
+# no release, no secrets required. Run it from the "Actions" tab:
+#   Actions → "Build EXE" → "Run workflow" → pick the branch → Run.
+# When it finishes, open the run and download the artifact at the bottom.
+
+on:
+  workflow_dispatch:
+    inputs:
+      installer:
+        description: "Also build the one-file Windows installer"
+        type: boolean
+        default: true
+
+concurrency:
+  group: build-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 🧰 Install OpenSSL
+        run: choco install -y --no-progress openssl
+
+      - name: 🐍 Install uv & Python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: 🏗️ Build Executable (onedir)
+        env:
+          PYTHONIOENCODING: utf-8
+          UV_PROJECT_ENVIRONMENT: .venv
+        run: |
+          uv sync --no-dev --extra build --extra lsp
+          uv run python -m build -w
+          uv run python setup_pyi.py
+
+      - name: 🧪 Test Executable
+        run: |
+          .\dist\lncrawl\lncrawl.exe -ll sources list
+
+      - name: 📦 Build Installer
+        if: ${{ inputs.installer }}
+        run: |
+          $version = (Get-Content "lncrawl/VERSION").Trim()
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            "installer\installer.iss" `
+            "/DMyAppVersion=$version"
+
+      - name: 📦 Upload installer (single file)
+        if: ${{ inputs.installer }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: lncrawl-windows-installer
+          path: dist/lncrawl.exe
+          retention-days: 14
+
+      - name: 📦 Upload portable build (no install)
+        uses: actions/upload-artifact@v7
+        with:
+          name: lncrawl-windows-portable
+          path: dist/lncrawl
+          retention-days: 14
