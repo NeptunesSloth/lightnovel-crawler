@@ -356,11 +356,14 @@ def _download_novel(
     c_total = len(chapter_futures)
     if on_novel:
         on_novel(novel.title, 0, c_total)
-    step = max(1, c_total // 10)
     c_done = 0
+    last_emit = monotonic()
     for _ in crawler.taskman.resolve(chapter_futures, desc="Chapters", unit=" c"):
         c_done += 1
-        if on_novel and (c_done % step == 0 or c_done == c_total):
+        # report at least every ~2s (and at the end) so the UI reflects real
+        # movement instead of looking frozen on a big, slow novel
+        if on_novel and (c_done == c_total or monotonic() - last_emit >= 2.0):
+            last_emit = monotonic()
             on_novel(novel.title, c_done, c_total)
 
     # download chapter images in one batch (covers manga pages and inline art);
