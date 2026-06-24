@@ -364,6 +364,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           (extra.fail_reasons || []).forEach(function (fr) {
             log("  " + fr.count + "× " + fr.reason, "log-err");
           });
+          if (extra.saved_to) log("Saved to Desktop: " + extra.saved_to, "log-ok");
           if (extra.export_file) downloadBlob(id, extra.export_name);
         } else {
           log("Export ended: " + status + (job.error ? " — " + job.error : ""), "log-err");

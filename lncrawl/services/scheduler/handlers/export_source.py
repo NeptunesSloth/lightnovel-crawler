@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import shutil
 from time import monotonic
 from typing import Dict, List, Optional, Set, TypedDict
 import zipfile
@@ -33,6 +34,28 @@ MAX_RETRY_BACKOFF = 300.0
 def _norm_title(title: str) -> str:
     """Normalize a title for cross-source de-duplication."""
     return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
+
+
+def _copy_to_desktop(src: Path, name: str) -> Optional[str]:
+    """Copy the finished export onto the user's Desktop (for the local app).
+
+    Returns the destination path, or None when there's no Desktop folder (e.g. a
+    headless server) or the copy fails.
+    """
+    desktop = Path.home() / "Desktop"
+    if not desktop.is_dir():
+        return None
+    dest = desktop / name
+    if dest.exists():
+        # don't clobber a previous export of the same source
+        dest = desktop / f"{dest.stem}-{src.stem[:8]}{dest.suffix}"
+    try:
+        shutil.copy2(src, dest)
+        ctx.logger.info(f"Export saved to Desktop: {dest}")
+        return str(dest)
+    except Exception as e:
+        ctx.logger.debug(f"Could not copy export to Desktop: {e}")
+        return None
 
 
 class ExportSourceHandler(BaseHandler):
@@ -220,10 +243,14 @@ class ExportSourceHandler(BaseHandler):
                     used.add(arcname)
                     zf.write(file, arcname=arcname)
 
+            export_name = f"{domain}-novels.zip"
+            saved_to = _copy_to_desktop(export_path, export_name)
+
             self._set_extra(
                 export_file=export_rel,
-                export_name=f"{domain}-novels.zip",
+                export_name=export_name,
                 export_size=export_path.stat().st_size,
+                saved_to=saved_to,
                 exported=len(files),
                 complete=len(complete),
                 incomplete=incomplete,
