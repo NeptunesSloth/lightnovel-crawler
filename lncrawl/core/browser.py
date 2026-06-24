@@ -380,6 +380,25 @@ class Browser:
                 elem.clear()
             elem.send_keys(text)
 
+    def get_cookies(self) -> List[dict]:
+        """All cookies for the current browser context as ``{name, value, domain}``."""
+        if not self._browser:
+            return []
+        try:
+            cookies = run_async(self._browser.cookies.get_all(), timeout=self.timeout)
+            return [
+                {"name": c.name, "value": c.value, "domain": getattr(c, "domain", "")}
+                for c in cookies
+            ]
+        except Exception as e:
+            ctx.logger.debug("get_cookies error | %s", e)
+            return []
+
+    @property
+    def user_agent(self) -> str:
+        """The browser's exact User-Agent string (needed to reuse a CF clearance)."""
+        return self.execute_js("navigator.userAgent") or ""
+
     def execute_js(self, script: str, is_async: bool = False) -> Any:
         """Execute JavaScript in the current page. Use await_promise for async scripts."""
         if not self._tab:

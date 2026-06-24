@@ -341,6 +341,10 @@ class ExportSourceHandler(BaseHandler):
             applied_rps = requests_per_sec
             success_streak = 0
 
+            # Cloudflare clearance is solved in a browser at most once per run, the
+            # first time a novel is blocked, then reused for every HTTP request.
+            warmed_up = False
+
             # initial pass + retry rounds over whatever still isn't complete
             for attempt in range(retries + 1):
                 if not pending:
@@ -429,11 +433,22 @@ class ExportSourceHandler(BaseHandler):
                             success_streak = 0
                             tuned_rps = 1.0 if tuned_rps <= 0 else max(RPS_MIN, tuned_rps / 2)
                         # surface the reason live so the UI shows *why*, not just "ch 0"
+                        reason = _classify_error(last_error[novel_url])
                         self._set_extra(
                             last_fail_title=cur_title[0] or novel_url,
-                            last_fail_reason=_classify_error(last_error[novel_url]),
+                            last_fail_reason=reason,
                             last_fail_detail=last_error[novel_url][:140],
                         )
+                        # First time we hit anti-bot blocking, solve the Cloudflare
+                        # challenge once in a browser and reuse the clearance for the
+                        # rest of the run (the remaining novels then ride the cleared
+                        # HTTP session). Best-effort; no-op without a browser.
+                        warm = getattr(crawler, "warm_up_clearance", None)
+                        if not warmed_up and reason in ("blocked", "anti-bot") and callable(warm):
+                            warmed_up = True
+                            self._set_extra(phase="solving-challenge")
+                            cleared = warm(source.url, self.signal)
+                            self._set_extra(phase="downloading", browser_cleared=bool(cleared))
                     self._set_progress(len(complete) + len(partial) + len(skipped), total)
 
                     # apply any auto-tuned rate change before the next novel (safe

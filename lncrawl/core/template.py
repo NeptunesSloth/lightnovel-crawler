@@ -2,6 +2,8 @@ from contextlib import contextmanager
 from io import BytesIO
 import json
 import logging
+from threading import Event
+from time import monotonic
 from typing import Iterable, MutableMapping, Optional
 
 from requests.utils import CaseInsensitiveDict
@@ -110,6 +112,60 @@ class BrowserTemplate(CrawlerTemplate):
                 return data
 
         setattr(self.scraper, "get_json", get_json)
+
+    # ------------------------------------------------------------------------- #
+    # Cloudflare clearance warm-up
+    # ------------------------------------------------------------------------- #
+
+    def warm_up_clearance(self, url: str, signal: Optional[Event] = None) -> bool:
+        """Solve a Cloudflare challenge once in a real browser and reuse it.
+
+        Drives the headless browser to ``url`` to pass the managed challenge /
+        Turnstile, then hands the resulting ``cf_clearance`` cookie and the
+        browser's exact User-Agent to the lightweight scraper so subsequent HTTP
+        requests ride the cleared session (far faster than browser-fetching every
+        page). Returns True if a ``cf_clearance`` cookie was obtained. Degrades
+        gracefully — returns False if browsing is disabled or no browser is
+        available, never raising into the caller.
+        """
+        if not ctx.config.crawler.can_use_browser:
+            return False
+        signal = signal or Event()
+        try:
+            from .browser import By
+
+            with self.create_browser() as browser:
+                browser.visit(url)
+                try:
+                    browser.wait("body", By.TAG_NAME, timeout=60)
+                except Exception:
+                    pass
+                # a managed challenge can take a few seconds to set the cookie
+                clearance: Optional[str] = None
+                cookies: dict = {}
+                deadline = monotonic() + 40
+                while monotonic() < deadline:
+                    cookies = {c["name"]: c["value"] for c in browser.get_cookies()}
+                    clearance = cookies.get("cf_clearance")
+                    if clearance or signal.is_set():
+                        break
+                    if signal.wait(2):
+                        break
+                user_agent = browser.user_agent
+                self.scraper.apply_browser_clearance(
+                    url,
+                    cf_clearance=clearance,
+                    user_agent=user_agent or None,
+                    cookies=cookies,
+                )
+                if clearance:
+                    logger.info("Obtained Cloudflare clearance via browser for %s", url)
+                else:
+                    logger.warning("Browser visit to %s did not yield a cf_clearance cookie", url)
+                return bool(clearance)
+        except Exception as e:
+            logger.warning("Cloudflare warm-up failed for %s | %s", url, e)
+            return False
 
     # ------------------------------------------------------------------------- #
     # Browser interface
