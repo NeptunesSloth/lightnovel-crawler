@@ -39,6 +39,16 @@ _TOOLS_HTML = """<!DOCTYPE html>
   }
   .card h2 { font-size: 16px; margin: 0 0 4px; }
   .card p.hint { color: #8b93a1; font-size: 13px; margin: 0 0 14px; }
+  details { margin-top: 12px; border-top: 1px solid #20242d; padding-top: 8px; }
+  details > summary {
+    cursor: pointer; color: #aab2c0; font-size: 13px; list-style: none;
+    user-select: none; padding: 4px 0;
+  }
+  details > summary::before { content: "▸ "; color: #6b7280; }
+  details[open] > summary::before { content: "▾ "; }
+  details > summary:hover { color: #e6e6e6; }
+  details.card-fold { margin: 0; border: 0; padding: 0; }
+  details.card-fold > summary { font-size: 16px; color: #e6e6e6; font-weight: 500; }
   label { display: block; font-size: 13px; color: #aab2c0; margin: 10px 0 4px; }
   input[type=text], input[type=email], input[type=password], select {
     width: 100%; padding: 9px 11px; border-radius: 8px;
@@ -123,7 +133,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <label for="exp-url">Source URL</label>
     <input id="exp-url" type="text" placeholder="https://novelsource.example/" />
     <div class="row">
-      <div style="flex:1">
+      <div style="flex:2">
         <label for="exp-format">Format</label>
         <select id="exp-format">
           <option value="epub" selected>EPUB (best for manga &amp; most readers)</option>
@@ -136,41 +146,59 @@ _TOOLS_HTML = """<!DOCTYPE html>
       </div>
       <div style="flex:1">
         <label for="exp-limit">Limit (optional)</label>
-        <input id="exp-limit" type="text" inputmode="numeric" placeholder="e.g. 50 — blank = all" />
-      </div>
-      <div style="flex:1">
-        <label for="exp-retries">Auto-retry rounds</label>
-        <input id="exp-retries" type="text" inputmode="numeric" value="3" placeholder="3" />
-      </div>
-      <div style="flex:1">
-        <label for="exp-discovery">Max discovery (min)</label>
-        <input id="exp-discovery" type="text" inputmode="numeric" value="10" placeholder="10" />
-      </div>
-      <div style="flex:1">
-        <label for="exp-maxch">Max chapters/novel</label>
-        <input id="exp-maxch" type="text" inputmode="numeric" placeholder="blank = all" />
+        <input id="exp-limit" type="text" inputmode="numeric" placeholder="blank = all" />
       </div>
     </div>
-    <div class="row checkbox">
-      <input id="exp-polite" type="checkbox" />
-      <label for="exp-polite" style="margin:0">Polite mode (slower; avoids rate-limit/anti-bot blocks)</label>
+    <details>
+      <summary>Advanced options — pacing, retries, limits</summary>
+      <div class="row">
+        <div style="flex:1">
+          <label for="exp-retries">Auto-retry rounds</label>
+          <input id="exp-retries" type="text" inputmode="numeric" value="3" placeholder="3" />
+        </div>
+        <div style="flex:1">
+          <label for="exp-discovery">Max discovery (min)</label>
+          <input id="exp-discovery" type="text" inputmode="numeric" value="10" placeholder="10" />
+        </div>
+        <div style="flex:1">
+          <label for="exp-maxch">Max chapters/novel</label>
+          <input id="exp-maxch" type="text" inputmode="numeric" placeholder="blank = all" />
+        </div>
+        <div style="flex:1">
+          <label for="exp-rps">Requests/sec</label>
+          <input id="exp-rps" type="text" inputmode="decimal" placeholder="polite = 1" />
+        </div>
+      </div>
+      <div class="row checkbox">
+        <input id="exp-polite" type="checkbox" />
+        <label for="exp-polite" style="margin:0">Polite mode — pace requests to ~1/sec (fixes "ch 0/N" on protected sites)</label>
+      </div>
+      <div class="row checkbox">
+        <input id="exp-dedupe" type="checkbox" checked />
+        <label for="exp-dedupe" style="margin:0">Skip novels I already have from another source</label>
+      </div>
+      <div class="row checkbox">
+        <input id="exp-resume" type="checkbox" checked />
+        <label for="exp-resume" style="margin:0">Resume — reuse novels already finished in a previous run</label>
+      </div>
+      <div class="row checkbox">
+        <input id="exp-autotune" type="checkbox" checked />
+        <label for="exp-autotune" style="margin:0">Auto-tune rate — slow down when blocked, speed up when clear</label>
+      </div>
+      <p class="hint" style="margin-top:10px">Defaults work for most sites. If a site blocks the run,
+        it auto-slows and (when a browser is available) solves the Cloudflare challenge by itself; turn
+        on Polite mode or lower Requests/sec to 0.5/0.25 for stubborn ones.</p>
+    </details>
+    <div class="row" style="margin-top:14px">
+      <button id="export-btn">Download all &rarr; ZIP</button>
+      <button id="export-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop</button>
+      <button id="export-resume" class="secondary hidden" style="margin-top:14px">&#9654; Resume last</button>
     </div>
-    <div class="row checkbox">
-      <input id="exp-dedupe" type="checkbox" checked />
-      <label for="exp-dedupe" style="margin:0">Skip novels I already have from another source</label>
-    </div>
-    <div class="row checkbox">
-      <input id="exp-resume" type="checkbox" checked />
-      <label for="exp-resume" style="margin:0">Resume — reuse novels already finished in a previous run (don't redo them)</label>
-    </div>
-    <p class="hint" style="margin-top:10px">Pacing is automatic: the run slows down on its own
-      when a site starts blocking it and speeds back up when it recovers. Polite mode just sets a
-      higher floor.</p>
-    <button id="export-btn">Download all &rarr; ZIP</button>
   </div>
 
   <div class="card">
-    <h2>Proxy / IP rotation</h2>
+    <details class="card-fold">
+    <summary>Proxy / IP rotation</summary>
     <p class="hint">Big overnight runs can get your IP rate-limited or flagged by a site's
       anti-bot, which makes discovery and downloads stall (0 found / 0 chapters). Route the
       crawler through one or more proxies here to rotate IPs and avoid getting blocked. Leave
@@ -187,10 +215,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <label for="proxy-fallback" style="margin:0">Fall back to a direct connection if no proxy is reachable</label>
     </div>
     <button id="proxy-save">Save proxy settings</button>
+    </details>
   </div>
 
   <div class="card">
-    <h2>Finish notifications</h2>
+    <details class="card-fold">
+    <summary>Finish notifications</summary>
     <p class="hint">Get pinged when a long overnight export finishes so you don't have to keep
       checking. A desktop notification pops on this machine; a webhook can reach your phone
       (Discord or Slack incoming webhook). Both are optional.</p>
@@ -201,15 +231,18 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <label for="notify-webhook">Webhook URL (optional)</label>
     <input id="notify-webhook" type="text" placeholder="https://discord.com/api/webhooks/..." />
     <button id="notify-save">Save notification settings</button>
+    </details>
   </div>
 
   <div class="card">
-    <h2>Retry missing / failed chapters</h2>
+    <details class="card-fold">
+    <summary>Retry missing / failed chapters</summary>
     <p class="hint">Re-fetches only the chapters that aren't downloaded yet for a novel —
       successfully downloaded chapters are skipped.</p>
     <label for="novel-id">Novel ID</label>
     <input id="novel-id" type="text" placeholder="e.g. 0c3b…" />
     <button id="retry-btn">Retry missing</button>
+    </details>
   </div>
 
   <div class="card">
@@ -390,16 +423,42 @@ _TOOLS_HTML = """<!DOCTYPE html>
       .catch(function (e) { log("Download failed: " + e.message, "log-err"); });
   }
 
+  var activeExportId = null;
+  var lastExportId = null;
+
+  function setExportControls(activeId, resumableId) {
+    activeExportId = activeId;
+    if (resumableId) lastExportId = resumableId;
+    var stop = document.getElementById("export-stop");
+    var res = document.getElementById("export-resume");
+    if (activeId) { stop.classList.remove("hidden"); } else { stop.classList.add("hidden"); }
+    if (!activeId && lastExportId) { res.classList.remove("hidden"); } else { res.classList.add("hidden"); }
+  }
+
+  function rateNote(ex) {
+    var bits = [];
+    if (ex.requests_per_sec) bits.push(ex.requests_per_sec + " req/s");
+    if (ex.adaptive_delay) bits.push("+" + ex.adaptive_delay + "s/novel");
+    return bits.length ? " [" + bits.join(", ") + "]" : "";
+  }
+
   function pollExport(id) {
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
         var status = statusName(job.status);
         var ex = job.extra || {};
+        if (isActive(status)) setExportControls(id, id);
         if (status === "RUNNING" && ex.phase === "discovering") {
           log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches)", "log-info");
+        } else if (status === "RUNNING" && ex.phase === "solving-challenge") {
+          log("Site is blocking requests — solving the Cloudflare challenge in a browser…", "log-info");
         } else if (status === "RUNNING" && ex.phase === "downloading" && ex.current_title) {
           var ch = ex.current_total_chapters ? " — ch " + (ex.current_chapters || 0) + "/" + ex.current_total_chapters : "";
-          log("Downloading " + job.done + "/" + job.total + ": " + ex.current_title + ch, "log-info");
+          log("Downloading " + job.done + "/" + job.total + ": " + ex.current_title + ch + rateNote(ex), "log-info");
+          if (ex.last_fail_title && ex.last_fail_reason) {
+            log("  ⚠ last issue: " + ex.last_fail_title + " — " + ex.last_fail_reason +
+              (ex.last_fail_detail ? " (" + ex.last_fail_detail + ")" : ""), "log-err");
+          }
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
           log("Retry " + (ex.retry || "") + " — waiting for the source to recover…", "log-info");
         } else {
@@ -408,6 +467,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
         if (isActive(status)) {
           setTimeout(function () { pollExport(id); }, 4000);
         } else if (status === "SUCCESS") {
+          setExportControls(null, id);
           var extra = job.extra || {};
           var parts = [(extra.complete != null ? extra.complete : extra.exported || 0) + " complete"];
           if (extra.incomplete) parts.push(extra.incomplete + " partial");
@@ -421,11 +481,34 @@ _TOOLS_HTML = """<!DOCTYPE html>
           if (extra.saved_to) log("Saved to Desktop: " + extra.saved_to, "log-ok");
           if (extra.export_file) downloadBlob(id, extra.export_name);
         } else {
-          log("Export ended: " + status + (job.error ? " — " + job.error : ""), "log-err");
+          setExportControls(null, id);
+          log("Export ended: " + status + (job.error ? " — " + job.error : "") +
+            ". Use the Resume last button to pick up where it left off.", "log-err");
         }
       })
       .catch(function (e) { log("Status check failed: " + e.message, "log-err"); });
   }
+
+  document.getElementById("export-stop").addEventListener("click", function () {
+    if (!activeExportId) return;
+    var id = activeExportId;
+    log("Stopping export… (finished novels are kept; use Resume to continue)", "log-info");
+    api("/job/" + id + "/cancel", { method: "POST" })
+      .then(function () { setExportControls(null, id); log("Export stopped.", "log-ok"); })
+      .catch(function (e) { log("Stop failed: " + e.message, "log-err"); });
+  });
+
+  document.getElementById("export-resume").addEventListener("click", function () {
+    if (!lastExportId) { log("No previous export to resume.", "log-err"); return; }
+    log("Resuming the last export (skips novels already finished)…", "log-info");
+    api("/job/" + lastExportId + "/replay", { method: "POST" })
+      .then(function (job) {
+        log("Resumed as job " + job.id, "log-ok");
+        setExportControls(job.id, job.id);
+        pollExport(job.id);
+      })
+      .catch(function (e) { log("Resume failed: " + e.message, "log-err"); });
+  });
 
   // Reattach to running exports on page load (type 53 = EXPORT_SOURCE) so closing
   // and reopening Tools still shows live progress.
@@ -472,9 +555,15 @@ _TOOLS_HTML = """<!DOCTYPE html>
       var maxch = parseInt(maxchRaw, 10);
       if (!isNaN(maxch) && maxch > 0) body.max_chapters = maxch;
     }
+    var rpsRaw = document.getElementById("exp-rps").value.trim();
+    if (rpsRaw) {
+      var rps = parseFloat(rpsRaw);
+      if (!isNaN(rps) && rps > 0) body.requests_per_sec = rps;
+    }
     body.polite = document.getElementById("exp-polite").checked;
     body.dedupe = document.getElementById("exp-dedupe").checked;
     body.resume = document.getElementById("exp-resume").checked;
+    body.auto_tune = document.getElementById("exp-autotune").checked;
     busy(btn, true);
     log("Starting full export of " + url + " (this can take a while) …", "log-info");
     api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })

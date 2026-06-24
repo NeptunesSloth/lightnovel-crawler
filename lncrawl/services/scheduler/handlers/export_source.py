@@ -1,10 +1,12 @@
+from html import escape
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 from time import monotonic
-from typing import Callable, Dict, List, Optional, Set, TypedDict
+from typing import Callable, Dict, List, Optional, Set, Tuple, TypedDict
+from urllib.parse import quote
 import zipfile
 
 from ....context import ctx
@@ -29,6 +31,14 @@ DEFAULT_RETRIES = 3
 # site's rate-limiting / anti-bot protection during a big bulk download.
 POLITE_DELAY = 3.0
 
+# Default request rate (per second) for chapter/image downloads when polite mode
+# is on. The crawler downloads sequentially but with no rate limit, so for a big
+# manga it fires requests back-to-back as fast as they complete (many per second),
+# which Cloudflare-protected sites flag (it shows up as "ch 0/N"). Capping to one
+# request/second keeps the run under the radar. Override per-export via
+# extra["requests_per_sec"].
+POLITE_REQUESTS_PER_SEC = 1.0
+
 # Wait before each retry round (seconds, grows per round, capped). Gives a
 # throttled/blocked source time to recover so the retry isn't all failures again.
 RETRY_BACKOFF = 30.0
@@ -41,6 +51,14 @@ MAX_RETRY_BACKOFF = 300.0
 ADAPTIVE_STEP = 8.0  # seconds added per failed novel (doubled when it looks throttled)
 ADAPTIVE_MAX = 60.0  # never wait more than this between novels
 ADAPTIVE_DECAY = 0.7  # multiply the delay by this after each success
+
+# Auto-tuning of the request rate (requests/second). When blocking is detected the
+# rate is halved; after a streak of clean novels it creeps back up. Bounds keep it
+# both effective and from thrashing.
+DEFAULT_EXPORT_WORKERS = 1  # crawler default — downloads run one at a time
+RPS_MIN = 0.2  # slowest auto-tuned rate (1 request / 5s)
+RPS_MAX = 5.0  # fastest auto-tuned rate
+RPS_RAISE_AFTER = 3  # consecutive clean novels before nudging the rate up
 
 # Substrings in a failure reason that suggest the source is rate-limiting/blocking
 # us (as opposed to a parse error), so we should back off harder.
@@ -69,6 +87,60 @@ def _looks_throttled(reason: str) -> bool:
     """Whether a failure reason looks like rate-limiting/blocking, not a parse bug."""
     low = (reason or "").lower()
     return any(hint in low for hint in _THROTTLE_HINTS)
+
+
+def _classify_error(reason: str) -> str:
+    """Map a raw failure reason to a short, human label for the live UI."""
+    low = (reason or "").lower()
+    if any(h in low for h in ("403", "429", "too many", "rate", "forbidden", "blocked")):
+        return "blocked"
+    if "cloudflare" in low or "captcha" in low or "challenge" in low:
+        return "anti-bot"
+    if "timeout" in low or "timed out" in low:
+        return "timeout"
+    if "connection" in low or "ssl" in low or "proxy" in low:
+        return "connection"
+    if "no chapters" in low or "could not be built" in low or "no content" in low:
+        return "no content"
+    return "error"
+
+
+def _apply_rate(crawler, rps: float) -> None:
+    """Reconfigure the crawler's downloader for a request rate (0 = unthrottled)."""
+    if rps and rps > 0:
+        crawler.taskman.init_executor(ratelimit=rps)
+    else:
+        crawler.taskman.init_executor(workers=DEFAULT_EXPORT_WORKERS)
+
+
+def _build_index_html(domain: str, entries: List[Tuple[str, str, str]]) -> str:
+    """A self-contained clickable index of the novels bundled in the export zip.
+
+    ``entries`` is a list of ``(arcname, display_name, status)``. Opening this file
+    from the unzipped folder lists every novel with a link to its ebook so the
+    archive can be browsed offline.
+    """
+    rows = []
+    for arcname, name, status in sorted(entries, key=lambda e: e[1].lower()):
+        badge = "" if status == "complete" else ' <span class="inc">(incomplete)</span>'
+        rows.append(f'<li><a href="{quote(arcname)}">{escape(name)}</a>{badge}</li>')
+    total = len(entries)
+    return (
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<title>{escape(domain)} — offline library</title><style>"
+        "body{margin:0;padding:32px;background:#0f1115;color:#e6e6e6;"
+        "font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;line-height:1.6}"
+        ".wrap{max-width:760px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}"
+        ".sub{color:#8b93a1;margin:0 0 20px;font-size:14px}"
+        "ul{list-style:none;padding:0;margin:0}"
+        "li{padding:8px 10px;border-bottom:1px solid #20242d}"
+        "a{color:#7aa2ff;text-decoration:none}a:hover{text-decoration:underline}"
+        ".inc{color:#d98b3a;font-size:12px}</style></head><body><div class='wrap'>"
+        f"<h1>{escape(domain)}</h1>"
+        f"<p class='sub'>{total} novel(s) in this archive. Click a title to open it.</p>"
+        f"<ul>{''.join(rows)}</ul></div></body></html>"
+    )
 
 
 def _manifest_path(domain: str) -> Path:
@@ -168,6 +240,12 @@ class ExportSourceHandler(BaseHandler):
         discovery_timeout = float(self.job.extra.get("discovery_minutes", 10)) * 60
         max_chapters = int(self.job.extra.get("max_chapters", 0))
         resume = bool(self.job.extra.get("resume", True))
+        # How fast to fire chapter/image requests. Polite mode defaults to a gentle
+        # rate; a value can be set explicitly to go slower (flagged IP) or faster.
+        requests_per_sec = float(self.job.extra.get("requests_per_sec", 0) or 0)
+        if polite and requests_per_sec <= 0:
+            requests_per_sec = POLITE_REQUESTS_PER_SEC
+        auto_tune = bool(self.job.extra.get("auto_tune", True))
 
         # Seed the de-dupe set with titles already in the library from *other*
         # sources, so a story grabbed from one site isn't redone from another.
@@ -179,6 +257,12 @@ class ExportSourceHandler(BaseHandler):
 
         # one crawler session reused for discovery and every download
         crawler = ctx.sources.init_crawler(source.url)
+        if requests_per_sec > 0:
+            # Rate-limit chapter/image downloads so they don't fire back-to-back and
+            # trip a site's anti-bot. This is the fix for "ch 0/N" on Cloudflare-
+            # protected sources where unthrottled request timing gets the IP blocked.
+            crawler.taskman.init_executor(ratelimit=requests_per_sec)
+            ctx.logger.info(f"Export throttled to {requests_per_sec} req/s on {domain}")
         try:
             selected = self.job.extra.get("urls")
             if selected:
@@ -250,6 +334,17 @@ class ExportSourceHandler(BaseHandler):
             floor_delay = POLITE_DELAY if polite else 0.0
             adaptive_delay = floor_delay
 
+            # Auto-tuned request rate (req/s). Starts at the configured rate (0 =
+            # unthrottled, multi-worker) and is adjusted between novels: halved when
+            # blocking is seen, nudged up after a clean streak.
+            tuned_rps = requests_per_sec
+            applied_rps = requests_per_sec
+            success_streak = 0
+
+            # Cloudflare clearance is solved in a browser at most once per run, the
+            # first time a novel is blocked, then reused for every HTTP request.
+            warmed_up = False
+
             # initial pass + retry rounds over whatever still isn't complete
             for attempt in range(retries + 1):
                 if not pending:
@@ -270,8 +365,12 @@ class ExportSourceHandler(BaseHandler):
                     if self.signal.is_set():
                         raise AbortedException()
 
+                    # remember the title for live failure reporting (set once known)
+                    cur_title: List[str] = [""]
+
                     # live status so a long run isn't a misleading 0%
                     def _on_novel(title: str, c_done: int, c_total: int) -> None:
+                        cur_title[0] = title
                         self._set_extra(
                             phase="downloading",
                             current_title=title,
@@ -313,16 +412,51 @@ class ExportSourceHandler(BaseHandler):
                         manifest[novel_url] = {"file": str(file), "missing": 0}
                         _save_manifest(domain, manifest)
                         adaptive_delay = max(floor_delay, adaptive_delay * ADAPTIVE_DECAY)
+                        # a clean novel: let auto-tune creep the rate back up
+                        if auto_tune and tuned_rps > 0:
+                            success_streak += 1
+                            if success_streak >= RPS_RAISE_AFTER:
+                                success_streak = 0
+                                tuned_rps = min(RPS_MAX, tuned_rps + 0.5)
                     else:
                         if file is not None:
                             partial[novel_url] = file  # keep the best version so far
                         elif novel_url not in last_error:
                             last_error[novel_url] = "No chapters found or ebook could not be built"
                         next_pending.append(novel_url)
+                        throttled = _looks_throttled(last_error[novel_url])
                         # a failure: slow down (harder if it looks like throttling)
-                        bump = ADAPTIVE_STEP * (2 if _looks_throttled(last_error[novel_url]) else 1)
+                        bump = ADAPTIVE_STEP * (2 if throttled else 1)
                         adaptive_delay = min(ADAPTIVE_MAX, max(adaptive_delay, floor_delay) + bump)
+                        # auto-tune the request rate down when blocking is detected
+                        if auto_tune and throttled:
+                            success_streak = 0
+                            tuned_rps = 1.0 if tuned_rps <= 0 else max(RPS_MIN, tuned_rps / 2)
+                        # surface the reason live so the UI shows *why*, not just "ch 0"
+                        reason = _classify_error(last_error[novel_url])
+                        self._set_extra(
+                            last_fail_title=cur_title[0] or novel_url,
+                            last_fail_reason=reason,
+                            last_fail_detail=last_error[novel_url][:140],
+                        )
+                        # First time we hit anti-bot blocking, solve the Cloudflare
+                        # challenge once in a browser and reuse the clearance for the
+                        # rest of the run (the remaining novels then ride the cleared
+                        # HTTP session). Best-effort; no-op without a browser.
+                        warm = getattr(crawler, "warm_up_clearance", None)
+                        if not warmed_up and reason in ("blocked", "anti-bot") and callable(warm):
+                            warmed_up = True
+                            self._set_extra(phase="solving-challenge")
+                            cleared = warm(source.url, self.signal)
+                            self._set_extra(phase="downloading", browser_cleared=bool(cleared))
                     self._set_progress(len(complete) + len(partial) + len(skipped), total)
+
+                    # apply any auto-tuned rate change before the next novel (safe
+                    # here — no download futures are in flight between novels)
+                    if auto_tune and tuned_rps != applied_rps:
+                        _apply_rate(crawler, tuned_rps)
+                        applied_rps = tuned_rps
+                        self._set_extra(requests_per_sec=round(tuned_rps, 2))
 
                     # pace the next novel: adaptive delay climbs on failures and
                     # decays on success, so a run auto-throttles when a site pushes
@@ -376,9 +510,11 @@ class ExportSourceHandler(BaseHandler):
                 )
                 raise HandlerException("Could not export any novel from the source")
 
+            partial_paths = set(partial.values())
             export_rel = f"exports/{self.job.id}.zip"
             export_path = ctx.files.resolve(export_rel)
             export_path.parent.mkdir(parents=True, exist_ok=True)
+            index_entries: List[Tuple[str, str, str]] = []
             with zipfile.ZipFile(export_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 used: set = set()
                 for file in files:
@@ -390,6 +526,10 @@ class ExportSourceHandler(BaseHandler):
                         counter += 1
                     used.add(arcname)
                     zf.write(file, arcname=arcname)
+                    status = "incomplete" if file in partial_paths else "complete"
+                    index_entries.append((arcname, file.stem, status))
+                # a clickable offline index of everything in the archive
+                zf.writestr("index.html", _build_index_html(domain, index_entries))
 
             export_name = f"{domain}-novels.zip"
             saved_to = _copy_to_desktop(export_path, export_name)
