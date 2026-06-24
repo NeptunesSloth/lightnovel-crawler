@@ -104,6 +104,13 @@ class ExportSourceRequest(BaseModel):
         default=True,
         description="Reuse novels already fully exported in a prior run instead of redoing them",
     )
+    requests_per_sec: float = Field(
+        default=0,
+        ge=0,
+        le=20,
+        description="Throttle chapter/image downloads to this rate (0 = polite default when "
+        "polite is on, else unlimited); lower it to get past Cloudflare-style anti-bot blocks",
+    )
 
 
 class ListSourceRequest(BaseModel):

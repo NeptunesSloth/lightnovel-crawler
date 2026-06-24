@@ -150,10 +150,14 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <label for="exp-maxch">Max chapters/novel</label>
         <input id="exp-maxch" type="text" inputmode="numeric" placeholder="blank = all" />
       </div>
+      <div style="flex:1">
+        <label for="exp-rps">Requests/sec</label>
+        <input id="exp-rps" type="text" inputmode="decimal" placeholder="polite = 1" />
+      </div>
     </div>
     <div class="row checkbox">
       <input id="exp-polite" type="checkbox" />
-      <label for="exp-polite" style="margin:0">Polite mode (slower; avoids rate-limit/anti-bot blocks)</label>
+      <label for="exp-polite" style="margin:0">Polite mode — download one-at-a-time at ~1 req/sec so bursts don't trip Cloudflare/anti-bot (fixes "ch 0/N")</label>
     </div>
     <div class="row checkbox">
       <input id="exp-dedupe" type="checkbox" checked />
@@ -163,9 +167,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <input id="exp-resume" type="checkbox" checked />
       <label for="exp-resume" style="margin:0">Resume — reuse novels already finished in a previous run (don't redo them)</label>
     </div>
-    <p class="hint" style="margin-top:10px">Pacing is automatic: the run slows down on its own
-      when a site starts blocking it and speeds back up when it recovers. Polite mode just sets a
-      higher floor.</p>
+    <p class="hint" style="margin-top:10px">Pacing is automatic between novels: the run slows down
+      on its own when a site starts blocking it. Polite mode also paces requests <i>within</i> each
+      novel (the real fix for "ch 0/N" on protected sites). If 1 req/sec still gets blocked, set
+      Requests/sec to 0.5 or 0.25; if a site is fast and friendly, raise it.</p>
     <button id="export-btn">Download all &rarr; ZIP</button>
   </div>
 
@@ -471,6 +476,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (maxchRaw) {
       var maxch = parseInt(maxchRaw, 10);
       if (!isNaN(maxch) && maxch > 0) body.max_chapters = maxch;
+    }
+    var rpsRaw = document.getElementById("exp-rps").value.trim();
+    if (rpsRaw) {
+      var rps = parseFloat(rpsRaw);
+      if (!isNaN(rps) && rps > 0) body.requests_per_sec = rps;
     }
     body.polite = document.getElementById("exp-polite").checked;
     body.dedupe = document.getElementById("exp-dedupe").checked;

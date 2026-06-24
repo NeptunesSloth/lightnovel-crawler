@@ -29,6 +29,13 @@ DEFAULT_RETRIES = 3
 # site's rate-limiting / anti-bot protection during a big bulk download.
 POLITE_DELAY = 3.0
 
+# Default request rate (per second) for chapter/image downloads when polite mode
+# is on. Without this, a novel's chapters/pages download 5-at-a-time in a burst,
+# which Cloudflare-protected sites block outright (it shows up as "ch 0/N"). One
+# request/second through a single worker keeps the run under the radar. Users can
+# override it per-export via extra["requests_per_sec"].
+POLITE_REQUESTS_PER_SEC = 1.0
+
 # Wait before each retry round (seconds, grows per round, capped). Gives a
 # throttled/blocked source time to recover so the retry isn't all failures again.
 RETRY_BACKOFF = 30.0
@@ -168,6 +175,11 @@ class ExportSourceHandler(BaseHandler):
         discovery_timeout = float(self.job.extra.get("discovery_minutes", 10)) * 60
         max_chapters = int(self.job.extra.get("max_chapters", 0))
         resume = bool(self.job.extra.get("resume", True))
+        # How fast to fire chapter/image requests. Polite mode defaults to a gentle
+        # rate; a value can be set explicitly to go slower (flagged IP) or faster.
+        requests_per_sec = float(self.job.extra.get("requests_per_sec", 0) or 0)
+        if polite and requests_per_sec <= 0:
+            requests_per_sec = POLITE_REQUESTS_PER_SEC
 
         # Seed the de-dupe set with titles already in the library from *other*
         # sources, so a story grabbed from one site isn't redone from another.
@@ -179,6 +191,12 @@ class ExportSourceHandler(BaseHandler):
 
         # one crawler session reused for discovery and every download
         crawler = ctx.sources.init_crawler(source.url)
+        if requests_per_sec > 0:
+            # Pace chapter/image downloads through a single worker so a novel's
+            # requests don't burst all at once and trip a site's anti-bot. This is
+            # the real fix for "ch 0/N" on Cloudflare-protected sources.
+            crawler.taskman.init_executor(ratelimit=requests_per_sec)
+            ctx.logger.info(f"Export throttled to {requests_per_sec} req/s on {domain}")
         try:
             selected = self.job.extra.get("urls")
             if selected:

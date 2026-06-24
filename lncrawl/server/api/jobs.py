@@ -358,6 +358,7 @@ def export_source(
         discovery_minutes=body.discovery_minutes,
         max_chapters=body.max_chapters,
         resume=body.resume,
+        requests_per_sec=body.requests_per_sec,
         urls=[str(u) for u in body.urls] if body.urls else None,
     )
 
