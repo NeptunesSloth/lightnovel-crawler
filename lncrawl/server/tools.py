@@ -70,10 +70,17 @@ _TOOLS_HTML = """<!DOCTYPE html>
   .pill.off { background: #3a1f23; color: #ff7b72; }
   .hidden { display: none !important; }
   a { color: #79c0ff; }
+  a.back {
+    display: inline-block; margin-bottom: 12px; text-decoration: none;
+    color: #cbd2dd; background: #2a2f3a; padding: 6px 12px; border-radius: 8px;
+    font-size: 13px; font-weight: 600;
+  }
+  a.back:hover { background: #343a47; }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <a id="back-link" href="/" class="back">&larr; Back to app</a>
   <h1>LNCrawl Tools</h1>
   <p class="sub">Lightweight power-user actions wired straight to the REST API.</p>
 
@@ -171,6 +178,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
   var firstLog = true;
 
   function token() { return localStorage.getItem(KEY) || ""; }
+
+  // Point "Back to app" at the SPA, carrying the session so it stays signed in.
+  (function () {
+    var back = document.getElementById("back-link");
+    if (back && token()) back.href = "/?authToken=" + encodeURIComponent(token());
+  })();
 
   function log(msg, cls) {
     if (firstLog) { logEl.innerHTML = ""; firstLog = false; }
