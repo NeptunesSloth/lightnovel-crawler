@@ -60,6 +60,7 @@ class ExportSourceHandler(BaseHandler):
 
             complete: Dict[str, Path] = {}  # fully downloaded (no missing chapters)
             partial: Dict[str, Path] = {}  # ebook built but some chapters missing
+            last_error: Dict[str, str] = {}  # most recent failure reason per novel
             pending = list(urls)
 
             # initial pass + retry rounds over whatever still isn't complete
@@ -80,6 +81,7 @@ class ExportSourceHandler(BaseHandler):
                     except AbortedException:
                         raise
                     except Exception as e:
+                        last_error[novel_url] = f"{type(e).__name__}: {e}"[:200]
                         ctx.logger.debug(f"Export attempt failed for {novel_url}: {e}")
                         result = {"file": None, "missing": 1}
 
@@ -87,9 +89,12 @@ class ExportSourceHandler(BaseHandler):
                     if file is not None and result["missing"] == 0:
                         complete[novel_url] = file
                         partial.pop(novel_url, None)
+                        last_error.pop(novel_url, None)
                     else:
                         if file is not None:
                             partial[novel_url] = file  # keep the best version so far
+                        elif novel_url not in last_error:
+                            last_error[novel_url] = "No chapters found or ebook could not be built"
                         next_pending.append(novel_url)
                     self._set_progress(len(complete), total)
                 pending = next_pending
@@ -102,8 +107,25 @@ class ExportSourceHandler(BaseHandler):
             incomplete = sum(1 for u in pending if u in partial)
             failed = sum(1 for u in pending if u not in partial)
 
+            # tally the failure reasons so the UI can show *why* novels failed
+            reason_tally: Dict[str, int] = {}
+            for u in pending:
+                if u not in partial:
+                    reason = last_error.get(u, "Unknown error")
+                    reason_tally[reason] = reason_tally.get(reason, 0) + 1
+            fail_reasons = [
+                {"reason": r, "count": c}
+                for r, c in sorted(reason_tally.items(), key=lambda x: -x[1])[:5]
+            ]
+
             if not files:
-                self._set_extra(exported=0, incomplete=0, failed=failed, total_novels=total)
+                self._set_extra(
+                    exported=0,
+                    incomplete=0,
+                    failed=failed,
+                    total_novels=total,
+                    fail_reasons=fail_reasons,
+                )
                 raise HandlerException("Could not export any novel from the source")
 
             export_rel = f"exports/{self.job.id}.zip"
@@ -130,6 +152,7 @@ class ExportSourceHandler(BaseHandler):
                 incomplete=incomplete,
                 failed=failed,
                 total_novels=total,
+                fail_reasons=fail_reasons,
             )
         finally:
             crawler.close()

@@ -210,7 +210,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
         var data = null;
         try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
         if (!res.ok) {
-          var detail = (data && (data.message || data.detail)) || text || res.statusText;
+          // ServerError responses look like { error: <reason>, detail: <extra> }
+          var msg = data && (data.error || data.message);
+          var extra = data && data.detail;
+          var detail = msg
+            ? (extra && extra !== msg ? msg + " (" + extra + ")" : msg)
+            : (extra || text || res.statusText);
           throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
         }
         return data;
@@ -338,7 +343,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
           if (extra.failed) parts.push(extra.failed + " failed");
           log("Export done: " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".",
             extra.failed ? "log-info" : "log-ok");
-          downloadBlob(id, extra.export_name);
+          (extra.fail_reasons || []).forEach(function (fr) {
+            log("  " + fr.count + "× " + fr.reason, "log-err");
+          });
+          if (extra.export_file) downloadBlob(id, extra.export_name);
         } else {
           log("Export ended: " + status + (job.error ? " — " + job.error : ""), "log-err");
         }
