@@ -24,10 +24,6 @@ DEFAULT_RETRIES = 3
 # site's rate-limiting / anti-bot protection during a big bulk download.
 POLITE_DELAY = 3.0
 
-# Cap on the discovery phase (seconds). A throttled source can make the catalogue
-# enumeration grind for hours; stop after this and use whatever was found.
-DISCOVERY_TIMEOUT = 600.0
-
 # Wait before each retry round (seconds, grows per round, capped). Gives a
 # throttled/blocked source time to recover so the retry isn't all failures again.
 RETRY_BACKOFF = 30.0
@@ -65,6 +61,7 @@ class ExportSourceHandler(BaseHandler):
         retries = int(self.job.extra.get("retries", DEFAULT_RETRIES))
         polite = bool(self.job.extra.get("polite"))
         dedupe = bool(self.job.extra.get("dedupe", True))
+        discovery_timeout = float(self.job.extra.get("discovery_minutes", 10)) * 60
 
         # Seed the de-dupe set with titles already in the library from *other*
         # sources, so a story grabbed from one site isn't redone from another.
@@ -95,14 +92,14 @@ class ExportSourceHandler(BaseHandler):
                     self.signal,
                     custom=crawler,
                     on_progress=_on_discover,
-                    time_budget=DISCOVERY_TIMEOUT,
+                    time_budget=discovery_timeout,
                     delay=POLITE_DELAY if polite else 0,
                 )
                 self._set_extra(phase="downloading")
                 # If discovery hit its time cap and turned up nothing, the source
                 # is almost certainly throttling/blocking — fail fast and clearly.
-                if not urls and monotonic() - discover_start >= DISCOVERY_TIMEOUT:
-                    minutes = round(DISCOVERY_TIMEOUT / 60)
+                if not urls and monotonic() - discover_start >= discovery_timeout:
+                    minutes = round(discovery_timeout / 60)
                     raise HandlerException(
                         f"Discovery found no novels on '{domain}' within {minutes} minutes — "
                         "the source is likely throttling or blocking automated requests. "

@@ -282,6 +282,7 @@ def export_source(
         retries=body.retries,
         polite=body.polite,
         dedupe=body.dedupe,
+        discovery_minutes=body.discovery_minutes,
         urls=[str(u) for u in body.urls] if body.urls else None,
     )
 
