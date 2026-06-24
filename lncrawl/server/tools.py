@@ -141,6 +141,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <label for="exp-retries">Auto-retry rounds</label>
         <input id="exp-retries" type="text" inputmode="numeric" value="3" placeholder="3" />
       </div>
+      <div style="flex:1">
+        <label for="exp-discovery">Max discovery (min)</label>
+        <input id="exp-discovery" type="text" inputmode="numeric" value="10" placeholder="10" />
+      </div>
     </div>
     <div class="row checkbox">
       <input id="exp-polite" type="checkbox" />
@@ -341,7 +345,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
         var status = statusName(job.status);
-        log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        var ex = job.extra || {};
+        if (status === "RUNNING" && ex.phase === "discovering") {
+          log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches)", "log-info");
+        } else {
+          log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        }
         if (isActive(status)) {
           setTimeout(function () { pollExport(id); }, 4000);
         } else if (status === "SUCCESS") {
@@ -379,6 +388,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (retriesRaw) {
       var retries = parseInt(retriesRaw, 10);
       if (!isNaN(retries) && retries >= 0) body.retries = retries;
+    }
+    var discRaw = document.getElementById("exp-discovery").value.trim();
+    if (discRaw) {
+      var disc = parseInt(discRaw, 10);
+      if (!isNaN(disc) && disc > 0) body.discovery_minutes = disc;
     }
     body.polite = document.getElementById("exp-polite").checked;
     body.dedupe = document.getElementById("exp-dedupe").checked;

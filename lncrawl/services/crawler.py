@@ -2,7 +2,8 @@ from contextlib import contextmanager
 from difflib import SequenceMatcher
 import logging
 from threading import Event
-from typing import List, Optional, Union
+from time import monotonic
+from typing import Callable, List, Optional, Union
 
 from pydantic import HttpUrl
 
@@ -270,18 +271,34 @@ class CrawlerService:
         signal: Optional[Event] = None,
         seeds: Optional[str] = None,
         custom: Optional[Crawler] = None,
+        on_progress: Optional[Callable[[int, int, int], None]] = None,
+        time_budget: Optional[float] = None,
+        delay: float = 0,
     ) -> List[SearchResult]:
         """Discover every novel a source exposes through its own search.
 
         Runs one crawler session across the seed queries, de-duplicating the
         results by URL. Stops early (returning what was found) if ``signal`` is
-        set so callers can abort cleanly.
+        set so callers can abort cleanly. ``on_progress(seeds_done, seeds_total,
+        found)`` is called after each seed so callers can show live progress.
+        ``time_budget`` (seconds) caps how long discovery runs — useful for a
+        throttled source that would otherwise grind for hours. ``delay`` (seconds)
+        paces the searches to avoid tripping a source's anti-bot protection.
         """
         source = ctx.sources.get_source(domain)
+        seeds = seeds or self.DISCOVER_SEEDS
+        total = len(seeds)
         found: "dict[str, SearchResult]" = {}
+        start = monotonic()
         with self.prepare_crawler(user_id, source.url, signal, custom) as crawler:
-            for seed in seeds or self.DISCOVER_SEEDS:
+            for index, seed in enumerate(seeds, start=1):
                 if signal is not None and signal.is_set():
+                    break
+                if time_budget is not None and monotonic() - start > time_budget:
+                    logger.info(
+                        f"Discovery time budget reached on {domain}; "
+                        f"stopping after {index - 1}/{total} searches, {len(found)} found"
+                    )
                     break
                 try:
                     for item in crawler.search(seed):
@@ -289,7 +306,11 @@ class CrawlerService:
                             found[item.url] = item
                 except Exception as e:
                     logger.debug(f"Discover '{seed}' on {domain} failed: {e}")
-                    continue
+                if on_progress is not None:
+                    on_progress(index, total, len(found))
+                # pace searches (polite mode) so the burst doesn't trip anti-bot
+                if delay and index < total and signal is not None and signal.wait(delay):
+                    break
         return list(found.values())
 
     def discover_novels(
@@ -299,7 +320,12 @@ class CrawlerService:
         signal: Optional[Event] = None,
         seeds: Optional[str] = None,
         custom: Optional[Crawler] = None,
+        on_progress: Optional[Callable[[int, int, int], None]] = None,
+        time_budget: Optional[float] = None,
+        delay: float = 0,
     ) -> List[str]:
         """Discover every novel URL a source exposes (see discover_search_results)."""
-        results = self.discover_search_results(user_id, domain, signal, seeds, custom)
+        results = self.discover_search_results(
+            user_id, domain, signal, seeds, custom, on_progress, time_budget, delay
+        )
         return [item.url for item in results]

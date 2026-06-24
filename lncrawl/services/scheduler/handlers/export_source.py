@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+from time import monotonic
 from typing import Dict, List, Optional, Set, TypedDict
 import zipfile
 
@@ -22,6 +23,11 @@ DEFAULT_RETRIES = 3
 # Seconds to pause between novels when "polite mode" is on, to avoid tripping a
 # site's rate-limiting / anti-bot protection during a big bulk download.
 POLITE_DELAY = 3.0
+
+# Wait before each retry round (seconds, grows per round, capped). Gives a
+# throttled/blocked source time to recover so the retry isn't all failures again.
+RETRY_BACKOFF = 30.0
+MAX_RETRY_BACKOFF = 300.0
 
 
 def _norm_title(title: str) -> str:
@@ -55,6 +61,7 @@ class ExportSourceHandler(BaseHandler):
         retries = int(self.job.extra.get("retries", DEFAULT_RETRIES))
         polite = bool(self.job.extra.get("polite"))
         dedupe = bool(self.job.extra.get("dedupe", True))
+        discovery_timeout = float(self.job.extra.get("discovery_minutes", 10)) * 60
 
         # Seed the de-dupe set with titles already in the library from *other*
         # sources, so a story grabbed from one site isn't redone from another.
@@ -72,9 +79,32 @@ class ExportSourceHandler(BaseHandler):
                 # specific novels were picked — export exactly those
                 urls = list(selected)
             else:
+                # Discovery runs before any download; drive the progress bar with
+                # seed progress so a slow/throttled source isn't a silent 0%.
+                def _on_discover(done: int, seeds: int, found: int) -> None:
+                    self._set_extra(phase="discovering", found=found)
+                    self._set_progress(done, seeds)
+
+                discover_start = monotonic()
                 urls = ctx.crawler.discover_novels(
-                    self.user.id, domain, self.signal, custom=crawler
+                    self.user.id,
+                    domain,
+                    self.signal,
+                    custom=crawler,
+                    on_progress=_on_discover,
+                    time_budget=discovery_timeout,
+                    delay=POLITE_DELAY if polite else 0,
                 )
+                self._set_extra(phase="downloading")
+                # If discovery hit its time cap and turned up nothing, the source
+                # is almost certainly throttling/blocking — fail fast and clearly.
+                if not urls and monotonic() - discover_start >= discovery_timeout:
+                    minutes = round(discovery_timeout / 60)
+                    raise HandlerException(
+                        f"Discovery found no novels on '{domain}' within {minutes} minutes — "
+                        "the source is likely throttling or blocking automated requests. "
+                        "Try a smaller limit, enable polite mode, or use a different source."
+                    )
                 if limit:
                     urls = urls[:limit]
             if not urls:
@@ -98,6 +128,13 @@ class ExportSourceHandler(BaseHandler):
                     ctx.logger.info(
                         f"Export retry {attempt}/{retries}: {len(pending)} novel(s) left on {domain}"
                     )
+                    # back off before each retry round so a throttled/blocked
+                    # source has time to recover instead of failing everything again
+                    backoff = min(RETRY_BACKOFF * attempt, MAX_RETRY_BACKOFF)
+                    self._set_extra(phase="retry-waiting", retry=attempt)
+                    if self.signal.wait(backoff):
+                        raise AbortedException()
+                    self._set_extra(phase="downloading")
                 next_pending: List[str] = []
                 for novel_url in pending:
                     if self.signal.is_set():

@@ -89,6 +89,12 @@ class ExportSourceRequest(BaseModel):
         default=True,
         description="Skip novels already in the library from another source (by title)",
     )
+    discovery_minutes: int = Field(
+        default=10,
+        ge=1,
+        le=120,
+        description="Stop discovering the catalogue after this many minutes",
+    )
 
 
 class ListSourceRequest(BaseModel):
