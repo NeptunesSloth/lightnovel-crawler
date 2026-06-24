@@ -719,6 +719,7 @@ class JobService:
         *,
         format: OutputFormat = OutputFormat.epub,
         limit: Optional[int] = None,
+        retries: int = 3,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
         **data: Any,
@@ -730,6 +731,7 @@ class JobService:
         data["domain"] = source.domain
         data["url"] = source.url
         data["format"] = OutputFormat(format).value
+        data["retries"] = max(0, int(retries))
         if limit:
             data["limit"] = int(limit)
         return self._create(
