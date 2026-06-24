@@ -11,6 +11,7 @@ class NovelResult(TypedDict):
     file: Optional[Path]  # the built ebook, or None if it couldn't be made
     missing: int  # chapters still not downloaded
 
+
 # How many extra passes to make over novels that failed or came out incomplete,
 # unless the job overrides it via extra["retries"]. Re-downloads are cheap since
 # already-fetched chapters are skipped, so this is safe to run overnight.
