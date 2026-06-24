@@ -95,6 +95,11 @@ class ExportSourceRequest(BaseModel):
         le=120,
         description="Stop discovering the catalogue after this many minutes",
     )
+    max_chapters: int = Field(
+        default=0,
+        ge=0,
+        description="Cap chapters downloaded per novel (0 = no cap); keeps huge series from stalling the run",
+    )
 
 
 class ListSourceRequest(BaseModel):

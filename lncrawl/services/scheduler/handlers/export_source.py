@@ -1,8 +1,9 @@
+import os
 from pathlib import Path
 import re
 import shutil
 from time import monotonic
-from typing import Dict, List, Optional, Set, TypedDict
+from typing import Callable, Dict, List, Optional, Set, TypedDict
 import zipfile
 
 from ....context import ctx
@@ -36,14 +37,30 @@ def _norm_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
 
 
+def _find_desktop() -> Optional[Path]:
+    """Locate the user's real Desktop, accounting for OneDrive redirection."""
+    home = Path.home()
+    candidates = [
+        home / "OneDrive" / "Desktop",  # common Windows OneDrive redirect
+        home / "Desktop",
+    ]
+    one_drive = os.environ.get("OneDrive") or os.environ.get("OneDriveConsumer")
+    if one_drive:
+        candidates.insert(0, Path(one_drive) / "Desktop")
+    for path in candidates:
+        if path.is_dir():
+            return path
+    return None
+
+
 def _copy_to_desktop(src: Path, name: str) -> Optional[str]:
     """Copy the finished export onto the user's Desktop (for the local app).
 
     Returns the destination path, or None when there's no Desktop folder (e.g. a
     headless server) or the copy fails.
     """
-    desktop = Path.home() / "Desktop"
-    if not desktop.is_dir():
+    desktop = _find_desktop()
+    if desktop is None:
         return None
     dest = desktop / name
     if dest.exists():
@@ -85,6 +102,7 @@ class ExportSourceHandler(BaseHandler):
         polite = bool(self.job.extra.get("polite"))
         dedupe = bool(self.job.extra.get("dedupe", True))
         discovery_timeout = float(self.job.extra.get("discovery_minutes", 10)) * 60
+        max_chapters = int(self.job.extra.get("max_chapters", 0))
 
         # Seed the de-dupe set with titles already in the library from *other*
         # sources, so a story grabbed from one site isn't redone from another.
@@ -162,10 +180,30 @@ class ExportSourceHandler(BaseHandler):
                 for novel_url in pending:
                     if self.signal.is_set():
                         raise AbortedException()
+
+                    # live status so a long run isn't a misleading 0%
+                    def _on_novel(title: str, c_done: int, c_total: int) -> None:
+                        self._set_extra(
+                            phase="downloading",
+                            current_title=title,
+                            current_chapters=c_done,
+                            current_total_chapters=c_total,
+                            done_novels=len(complete) + len(partial) + len(skipped),
+                            total_novels=total,
+                        )
+
                     result: NovelResult
                     try:
                         result = _download_novel(
-                            crawler, self.user.id, novel_url, fmt, self.signal, seen_titles, dedupe
+                            crawler,
+                            self.user.id,
+                            novel_url,
+                            fmt,
+                            self.signal,
+                            seen_titles,
+                            dedupe,
+                            max_chapters,
+                            _on_novel,
                         )
                     except AbortedException:
                         raise
@@ -188,7 +226,7 @@ class ExportSourceHandler(BaseHandler):
                         elif novel_url not in last_error:
                             last_error[novel_url] = "No chapters found or ebook could not be built"
                         next_pending.append(novel_url)
-                    self._set_progress(len(complete) + len(skipped), total)
+                    self._set_progress(len(complete) + len(partial) + len(skipped), total)
 
                     # be gentle on the source between novels when asked
                     if polite and next_pending and self.signal.wait(POLITE_DELAY):
@@ -279,6 +317,8 @@ def _download_novel(
     signal,
     seen_titles: Optional[Set[str]] = None,
     dedupe: bool = False,
+    max_chapters: int = 0,
+    on_novel: Optional[Callable[[str, int, int], None]] = None,
 ) -> NovelResult:
     """Download a novel and build its ebook.
 
@@ -287,6 +327,9 @@ def _download_novel(
     what's still missing — which is what makes the retry passes cheap. If
     ``dedupe`` is on and the (normalized) title is already in ``seen_titles``,
     the novel is reported as a duplicate without downloading anything.
+    ``max_chapters`` (>0) caps how many chapters are pulled per novel so one huge
+    series can't stall the whole run. ``on_novel(title, done, total)`` reports
+    live chapter progress.
     """
     # Reuse already-fetched metadata: on retry rounds (and re-runs) the novel and
     # its chapter list are already in the DB, so skip re-downloading the info page
@@ -299,16 +342,26 @@ def _download_novel(
     if dedupe and seen_titles is not None and norm in seen_titles:
         return {"file": None, "missing": 0, "duplicate": True}
 
-    chapter_ids = ctx.chapters.list_ids(novel_id=novel.id)
+    # first N chapters when capped, so a giant series doesn't eat the whole run
+    chapter_ids = ctx.chapters.list_ids(novel_id=novel.id, limit=max_chapters or None)
     if not chapter_ids:
         return {"file": None, "missing": 0, "duplicate": False}
 
-    # download all chapters (fetch_chapter skips ones already fetched)
+    # download the chapters (fetch_chapter skips ones already fetched), reporting
+    # progress as each one completes
     chapter_futures = [
         crawler.taskman.submit_task(ctx.crawler.fetch_chapter, user_id, cid, custom=crawler)
         for cid in sorted(set(chapter_ids))
     ]
-    crawler.taskman.resolve_futures(chapter_futures, desc="Chapters", unit=" c")
+    c_total = len(chapter_futures)
+    if on_novel:
+        on_novel(novel.title, 0, c_total)
+    step = max(1, c_total // 10)
+    c_done = 0
+    for _ in crawler.taskman.resolve(chapter_futures, desc="Chapters", unit=" c"):
+        c_done += 1
+        if on_novel and (c_done % step == 0 or c_done == c_total):
+            on_novel(novel.title, c_done, c_total)
 
     # download chapter images in one batch (covers manga pages and inline art);
     # one query for the whole novel instead of one per chapter
@@ -320,8 +373,9 @@ def _download_novel(
         ]
         crawler.taskman.resolve_futures(image_futures, desc="Images", unit=" img")
 
-    # how many chapters are still not downloaded (drives the retry decision)
-    missing = len(ctx.chapters.list_ids(novel_id=novel.id, is_crawled=False))
+    # how many of the targeted chapters are still not downloaded (drives retries)
+    done_ids = set(ctx.chapters.list_ids(novel_id=novel.id, is_crawled=True))
+    missing = len([c for c in chapter_ids if c not in done_ids])
 
     # build the ebook. Formats derived from epub need an epub built first.
     epub_artifact = None

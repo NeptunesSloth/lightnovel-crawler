@@ -723,6 +723,7 @@ class JobService:
         polite: bool = False,
         dedupe: bool = True,
         discovery_minutes: int = 10,
+        max_chapters: int = 0,
         urls: Optional[List[str]] = None,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
@@ -739,6 +740,7 @@ class JobService:
         data["polite"] = bool(polite)
         data["dedupe"] = bool(dedupe)
         data["discovery_minutes"] = max(1, int(discovery_minutes))
+        data["max_chapters"] = max(0, int(max_chapters))
         if limit:
             data["limit"] = int(limit)
         # When specific novels are picked, export exactly those (skip discovery)
