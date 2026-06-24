@@ -145,6 +145,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <label for="exp-discovery">Max discovery (min)</label>
         <input id="exp-discovery" type="text" inputmode="numeric" value="10" placeholder="10" />
       </div>
+      <div style="flex:1">
+        <label for="exp-maxch">Max chapters/novel</label>
+        <input id="exp-maxch" type="text" inputmode="numeric" placeholder="blank = all" />
+      </div>
     </div>
     <div class="row checkbox">
       <input id="exp-polite" type="checkbox" />
@@ -244,6 +248,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
       api("/auth/me", { method: "GET" })
         .then(function (u) {
           document.getElementById("who").textContent = (u && (u.email || u.name)) || "user";
+          loadActiveExports(u && u.id);
         })
         .catch(function () {
           // stale/invalid token
@@ -348,6 +353,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
         var ex = job.extra || {};
         if (status === "RUNNING" && ex.phase === "discovering") {
           log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches)", "log-info");
+        } else if (status === "RUNNING" && ex.phase === "downloading" && ex.current_title) {
+          var ch = ex.current_total_chapters ? " — ch " + (ex.current_chapters || 0) + "/" + ex.current_total_chapters : "";
+          log("Downloading " + job.done + "/" + job.total + ": " + ex.current_title + ch, "log-info");
+        } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
+          log("Retry " + (ex.retry || "") + " — waiting for the source to recover…", "log-info");
         } else {
           log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
         }
@@ -373,6 +383,24 @@ _TOOLS_HTML = """<!DOCTYPE html>
       .catch(function (e) { log("Status check failed: " + e.message, "log-err"); });
   }
 
+  // Reattach to running exports on page load (type 53 = EXPORT_SOURCE) so closing
+  // and reopening Tools still shows live progress.
+  function loadActiveExports(userId) {
+    var q = "/jobs?type=53&limit=10" + (userId ? "&user_id=" + encodeURIComponent(userId) : "");
+    api(q, { method: "GET" })
+      .then(function (res) {
+        var items = (res && res.items) || [];
+        items.forEach(function (j) {
+          var s = statusName(j.status);
+          if (s !== "RUNNING" && s !== "PENDING") return;
+          var dom = (j.extra && j.extra.domain) || "export";
+          log("Resuming " + dom + " (" + String(j.id).slice(0, 8) + ")…", "log-info");
+          pollExport(j.id);
+        });
+      })
+      .catch(function () {});
+  }
+
   document.getElementById("export-btn").addEventListener("click", function () {
     if (!requireAuth()) return;
     var btn = this;
@@ -394,6 +422,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (discRaw) {
       var disc = parseInt(discRaw, 10);
       if (!isNaN(disc) && disc > 0) body.discovery_minutes = disc;
+    }
+    var maxchRaw = document.getElementById("exp-maxch").value.trim();
+    if (maxchRaw) {
+      var maxch = parseInt(maxchRaw, 10);
+      if (!isNaN(maxch) && maxch > 0) body.max_chapters = maxch;
     }
     body.polite = document.getElementById("exp-polite").checked;
     body.dedupe = document.getElementById("exp-dedupe").checked;

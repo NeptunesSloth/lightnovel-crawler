@@ -283,6 +283,7 @@ def export_source(
         polite=body.polite,
         dedupe=body.dedupe,
         discovery_minutes=body.discovery_minutes,
+        max_chapters=body.max_chapters,
         urls=[str(u) for u in body.urls] if body.urls else None,
     )
 
