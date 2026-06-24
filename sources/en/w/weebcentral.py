@@ -100,7 +100,5 @@ class WeebCentralCrawler(LegacyCrawler):
             "?is_prev=False&current_page=1&reading_style=long_strip"
         )
         soup = self.get_soup(url)
-        urls = [
-            i["src"] for i in soup.select("img[src]") if i.get("src", "").startswith("http")
-        ]
+        urls = [i["src"] for i in soup.select("img[src]") if i.get("src", "").startswith("http")]
         return "<p>" + "</p><p>".join(f'<img src="{u}">' for u in urls) + "</p>"
