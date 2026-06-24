@@ -1,10 +1,20 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, TypedDict
 import zipfile
 
 from ....context import ctx
 from ....enums import JobType, OutputFormat
 from ._base import AbortedException, BaseHandler, HandlerException
+
+
+class NovelResult(TypedDict):
+    file: Optional[Path]  # the built ebook, or None if it couldn't be made
+    missing: int  # chapters still not downloaded
+
+# How many extra passes to make over novels that failed or came out incomplete,
+# unless the job overrides it via extra["retries"]. Re-downloads are cheap since
+# already-fetched chapters are skipped, so this is safe to run overnight.
+DEFAULT_RETRIES = 3
 
 
 class ExportSourceHandler(BaseHandler):
@@ -13,7 +23,9 @@ class ExportSourceHandler(BaseHandler):
     This is a long-running single job: it discovers the source's catalogue,
     fully downloads each novel (chapters + images, so manga pages are included),
     builds an ebook for each, and packages them all into a single downloadable
-    ``.zip``. The result path is stored in ``job.extra["export_file"]``.
+    ``.zip``. Novels that fail or come out missing chapters are retried over
+    several passes so an overnight run finishes as complete as possible. The
+    result path is stored in ``job.extra["export_file"]``.
     """
 
     @staticmethod
@@ -28,6 +40,7 @@ class ExportSourceHandler(BaseHandler):
         source = ctx.sources.get_source(domain)
         fmt = OutputFormat(self.job.extra.get("format") or OutputFormat.epub.value)
         limit = self.job.extra.get("limit")
+        retries = int(self.job.extra.get("retries", DEFAULT_RETRIES))
 
         self._set_running()
 
@@ -41,31 +54,57 @@ class ExportSourceHandler(BaseHandler):
                 self._set_extra(exported=0, failed=0, total_novels=0)
                 return
 
-            self._set_progress(0, len(urls))
+            total = len(urls)
+            self._set_progress(0, total)
 
-            files: List[Path] = []
-            failed = 0
-            for index, novel_url in enumerate(urls, start=1):
-                if self.signal.is_set():
-                    raise AbortedException()
-                try:
-                    file = _download_novel_file(crawler, self.user.id, novel_url, fmt, self.signal)
-                    if file:
-                        files.append(file)
+            complete: Dict[str, Path] = {}  # fully downloaded (no missing chapters)
+            partial: Dict[str, Path] = {}  # ebook built but some chapters missing
+            pending = list(urls)
+
+            # initial pass + retry rounds over whatever still isn't complete
+            for attempt in range(retries + 1):
+                if not pending:
+                    break
+                if attempt > 0:
+                    ctx.logger.info(
+                        f"Export retry {attempt}/{retries}: {len(pending)} novel(s) left on {domain}"
+                    )
+                next_pending: List[str] = []
+                for novel_url in pending:
+                    if self.signal.is_set():
+                        raise AbortedException()
+                    result: NovelResult
+                    try:
+                        result = _download_novel(crawler, self.user.id, novel_url, fmt, self.signal)
+                    except AbortedException:
+                        raise
+                    except Exception as e:
+                        ctx.logger.debug(f"Export attempt failed for {novel_url}: {e}")
+                        result = {"file": None, "missing": 1}
+
+                    file = result["file"]
+                    if file is not None and result["missing"] == 0:
+                        complete[novel_url] = file
+                        partial.pop(novel_url, None)
                     else:
-                        failed += 1
-                except AbortedException:
-                    raise
-                except Exception as e:
-                    ctx.logger.debug(f"Export failed for {novel_url}: {e}")
-                    failed += 1
-                self._set_progress(index, len(urls))
+                        if file is not None:
+                            partial[novel_url] = file  # keep the best version so far
+                        next_pending.append(novel_url)
+                    self._set_progress(len(complete), total)
+                pending = next_pending
+
+            # bundle the complete ones, plus the best partial we have for the rest
+            files: List[Path] = list(complete.values())
+            for novel_url in pending:
+                if novel_url in partial:
+                    files.append(partial[novel_url])
+            incomplete = sum(1 for u in pending if u in partial)
+            failed = sum(1 for u in pending if u not in partial)
 
             if not files:
-                self._set_extra(exported=0, failed=failed, total_novels=len(urls))
+                self._set_extra(exported=0, incomplete=0, failed=failed, total_novels=total)
                 raise HandlerException("Could not export any novel from the source")
 
-            # bundle everything into a single zip on disk
             export_rel = f"exports/{self.job.id}.zip"
             export_path = ctx.files.resolve(export_rel)
             export_path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,8 +125,10 @@ class ExportSourceHandler(BaseHandler):
                 export_name=f"{domain}-novels.zip",
                 export_size=export_path.stat().st_size,
                 exported=len(files),
+                complete=len(complete),
+                incomplete=incomplete,
                 failed=failed,
-                total_novels=len(urls),
+                total_novels=total,
             )
         finally:
             crawler.close()
@@ -101,20 +142,26 @@ class ExportSourceHandler(BaseHandler):
         ctx.job_notifier.notify(self.user, self.job)
 
 
-def _download_novel_file(
+def _download_novel(
     crawler,
     user_id: str,
     novel_url: str,
     fmt: OutputFormat,
     signal,
-) -> Optional[Path]:
+) -> NovelResult:
+    """Download a novel and build its ebook.
+
+    Returns the built file (or None) and how many chapters are still missing.
+    Already-downloaded chapters are skipped, so calling this again only fills in
+    what's still missing — which is what makes the retry passes cheap.
+    """
     # fetch metadata (syncs chapters/volumes into the DB)
     novel = ctx.crawler.fetch_novel(user_id, novel_url, signal=signal, custom=crawler)
     chapter_ids = ctx.chapters.list_ids(novel_id=novel.id)
     if not chapter_ids:
-        return None
+        return {"file": None, "missing": 0}
 
-    # download all chapters
+    # download all chapters (skips ones already fetched)
     chapter_futures = [
         crawler.taskman.submit_task(ctx.crawler.fetch_chapter, user_id, cid, custom=crawler)
         for cid in sorted(set(chapter_ids))
@@ -132,6 +179,9 @@ def _download_novel_file(
         ]
         crawler.taskman.resolve_futures(image_futures, desc="Images", unit=" img")
 
+    # how many chapters are still not downloaded (drives the retry decision)
+    missing = len(ctx.chapters.list_ids(novel_id=novel.id, is_crawled=False))
+
     # build the ebook. Formats derived from epub need an epub built first.
     epub_artifact = None
     if fmt == OutputFormat.epub or fmt in ctx.binder.depends_on_epub:
@@ -145,6 +195,7 @@ def _download_novel_file(
             novel.id, novel.title, format=fmt, user_id=user_id, epub=epub_artifact
         )
 
-    if not artifact or not artifact.is_available:
-        return None
-    return ctx.files.resolve(artifact.output_file)
+    file = None
+    if artifact and artifact.is_available:
+        file = ctx.files.resolve(artifact.output_file)
+    return {"file": file, "missing": missing}

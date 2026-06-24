@@ -71,3 +71,9 @@ class ExportSourceRequest(BaseModel):
     limit: Optional[int] = Field(
         default=None, ge=1, description="Only export the first N discovered novels"
     )
+    retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Extra passes to redo novels that failed or came out incomplete",
+    )

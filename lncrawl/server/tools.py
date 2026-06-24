@@ -117,8 +117,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <h2>Download a whole source as a ZIP</h2>
     <p class="hint">Paste a source URL and download <b>every</b> novel from it, bundled into a
       single <code>.zip</code> you can save to a hard drive and read offline. Works for manga
-      too — EPUB embeds the page images. This runs in the background; when it's ready a
-      download starts automatically.</p>
+      too — EPUB embeds the page images. Novels that fail or come out incomplete are
+      automatically retried, so you can leave it running overnight. This runs in the
+      background; when it's ready a download starts automatically.</p>
     <label for="exp-url">Source URL</label>
     <input id="exp-url" type="text" placeholder="https://novelsource.example/" />
     <div class="row">
@@ -135,6 +136,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <div style="flex:1">
         <label for="exp-limit">Limit (optional)</label>
         <input id="exp-limit" type="text" inputmode="numeric" placeholder="e.g. 50 — blank = all" />
+      </div>
+      <div style="flex:1">
+        <label for="exp-retries">Auto-retry rounds</label>
+        <input id="exp-retries" type="text" inputmode="numeric" value="3" placeholder="3" />
       </div>
     </div>
     <button id="export-btn">Download all &rarr; ZIP</button>
@@ -328,8 +333,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
           setTimeout(function () { pollExport(id); }, 4000);
         } else if (status === "SUCCESS") {
           var extra = job.extra || {};
-          log("Exported " + (extra.exported || 0) + " novels" +
-            (extra.failed ? " (" + extra.failed + " failed)" : "") + ".", "log-ok");
+          var parts = [(extra.complete != null ? extra.complete : extra.exported || 0) + " complete"];
+          if (extra.incomplete) parts.push(extra.incomplete + " partial");
+          if (extra.failed) parts.push(extra.failed + " failed");
+          log("Export done: " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".",
+            extra.failed ? "log-info" : "log-ok");
           downloadBlob(id, extra.export_name);
         } else {
           log("Export ended: " + status + (job.error ? " — " + job.error : ""), "log-err");
@@ -344,11 +352,16 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var url = document.getElementById("exp-url").value.trim();
     var format = document.getElementById("exp-format").value;
     var limitRaw = document.getElementById("exp-limit").value.trim();
+    var retriesRaw = document.getElementById("exp-retries").value.trim();
     if (!url) { log("Enter a source URL.", "log-err"); return; }
     var body = { url: url, format: format };
     if (limitRaw) {
       var limit = parseInt(limitRaw, 10);
       if (!isNaN(limit) && limit > 0) body.limit = limit;
+    }
+    if (retriesRaw) {
+      var retries = parseInt(retriesRaw, 10);
+      if (!isNaN(retries) && retries >= 0) body.retries = retries;
     }
     busy(btn, true);
     log("Starting full export of " + url + " (this can take a while) …", "log-info");

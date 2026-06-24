@@ -278,6 +278,7 @@ def export_source(
         str(body.url),
         format=body.format,
         limit=body.limit,
+        retries=body.retries,
     )
 
 
