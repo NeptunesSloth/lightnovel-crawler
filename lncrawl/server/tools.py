@@ -167,11 +167,19 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <input id="exp-resume" type="checkbox" checked />
       <label for="exp-resume" style="margin:0">Resume — reuse novels already finished in a previous run (don't redo them)</label>
     </div>
+    <div class="row checkbox">
+      <input id="exp-autotune" type="checkbox" checked />
+      <label for="exp-autotune" style="margin:0">Auto-tune rate — automatically slow down when blocked and speed up when clear</label>
+    </div>
     <p class="hint" style="margin-top:10px">Pacing is automatic between novels: the run slows down
       on its own when a site starts blocking it. Polite mode also paces requests <i>within</i> each
       novel (the real fix for "ch 0/N" on protected sites). If 1 req/sec still gets blocked, set
       Requests/sec to 0.5 or 0.25; if a site is fast and friendly, raise it.</p>
-    <button id="export-btn">Download all &rarr; ZIP</button>
+    <div class="row" style="margin-top:4px">
+      <button id="export-btn">Download all &rarr; ZIP</button>
+      <button id="export-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop</button>
+      <button id="export-resume" class="secondary hidden" style="margin-top:14px">&#9654; Resume last</button>
+    </div>
   </div>
 
   <div class="card">
@@ -395,16 +403,40 @@ _TOOLS_HTML = """<!DOCTYPE html>
       .catch(function (e) { log("Download failed: " + e.message, "log-err"); });
   }
 
+  var activeExportId = null;
+  var lastExportId = null;
+
+  function setExportControls(activeId, resumableId) {
+    activeExportId = activeId;
+    if (resumableId) lastExportId = resumableId;
+    var stop = document.getElementById("export-stop");
+    var res = document.getElementById("export-resume");
+    if (activeId) { stop.classList.remove("hidden"); } else { stop.classList.add("hidden"); }
+    if (!activeId && lastExportId) { res.classList.remove("hidden"); } else { res.classList.add("hidden"); }
+  }
+
+  function rateNote(ex) {
+    var bits = [];
+    if (ex.requests_per_sec) bits.push(ex.requests_per_sec + " req/s");
+    if (ex.adaptive_delay) bits.push("+" + ex.adaptive_delay + "s/novel");
+    return bits.length ? " [" + bits.join(", ") + "]" : "";
+  }
+
   function pollExport(id) {
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
         var status = statusName(job.status);
         var ex = job.extra || {};
+        if (isActive(status)) setExportControls(id, id);
         if (status === "RUNNING" && ex.phase === "discovering") {
           log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches)", "log-info");
         } else if (status === "RUNNING" && ex.phase === "downloading" && ex.current_title) {
           var ch = ex.current_total_chapters ? " — ch " + (ex.current_chapters || 0) + "/" + ex.current_total_chapters : "";
-          log("Downloading " + job.done + "/" + job.total + ": " + ex.current_title + ch, "log-info");
+          log("Downloading " + job.done + "/" + job.total + ": " + ex.current_title + ch + rateNote(ex), "log-info");
+          if (ex.last_fail_title && ex.last_fail_reason) {
+            log("  ⚠ last issue: " + ex.last_fail_title + " — " + ex.last_fail_reason +
+              (ex.last_fail_detail ? " (" + ex.last_fail_detail + ")" : ""), "log-err");
+          }
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
           log("Retry " + (ex.retry || "") + " — waiting for the source to recover…", "log-info");
         } else {
@@ -413,6 +445,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
         if (isActive(status)) {
           setTimeout(function () { pollExport(id); }, 4000);
         } else if (status === "SUCCESS") {
+          setExportControls(null, id);
           var extra = job.extra || {};
           var parts = [(extra.complete != null ? extra.complete : extra.exported || 0) + " complete"];
           if (extra.incomplete) parts.push(extra.incomplete + " partial");
@@ -426,11 +459,34 @@ _TOOLS_HTML = """<!DOCTYPE html>
           if (extra.saved_to) log("Saved to Desktop: " + extra.saved_to, "log-ok");
           if (extra.export_file) downloadBlob(id, extra.export_name);
         } else {
-          log("Export ended: " + status + (job.error ? " — " + job.error : ""), "log-err");
+          setExportControls(null, id);
+          log("Export ended: " + status + (job.error ? " — " + job.error : "") +
+            ". Use the Resume last button to pick up where it left off.", "log-err");
         }
       })
       .catch(function (e) { log("Status check failed: " + e.message, "log-err"); });
   }
+
+  document.getElementById("export-stop").addEventListener("click", function () {
+    if (!activeExportId) return;
+    var id = activeExportId;
+    log("Stopping export… (finished novels are kept; use Resume to continue)", "log-info");
+    api("/job/" + id + "/cancel", { method: "POST" })
+      .then(function () { setExportControls(null, id); log("Export stopped.", "log-ok"); })
+      .catch(function (e) { log("Stop failed: " + e.message, "log-err"); });
+  });
+
+  document.getElementById("export-resume").addEventListener("click", function () {
+    if (!lastExportId) { log("No previous export to resume.", "log-err"); return; }
+    log("Resuming the last export (skips novels already finished)…", "log-info");
+    api("/job/" + lastExportId + "/replay", { method: "POST" })
+      .then(function (job) {
+        log("Resumed as job " + job.id, "log-ok");
+        setExportControls(job.id, job.id);
+        pollExport(job.id);
+      })
+      .catch(function (e) { log("Resume failed: " + e.message, "log-err"); });
+  });
 
   // Reattach to running exports on page load (type 53 = EXPORT_SOURCE) so closing
   // and reopening Tools still shows live progress.
@@ -485,6 +541,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     body.polite = document.getElementById("exp-polite").checked;
     body.dedupe = document.getElementById("exp-dedupe").checked;
     body.resume = document.getElementById("exp-resume").checked;
+    body.auto_tune = document.getElementById("exp-autotune").checked;
     busy(btn, true);
     log("Starting full export of " + url + " (this can take a while) …", "log-info");
     api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })

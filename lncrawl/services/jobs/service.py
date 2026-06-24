@@ -726,6 +726,7 @@ class JobService:
         max_chapters: int = 0,
         resume: bool = True,
         requests_per_sec: float = 0,
+        auto_tune: bool = True,
         urls: Optional[List[str]] = None,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
@@ -745,6 +746,7 @@ class JobService:
         data["max_chapters"] = max(0, int(max_chapters))
         data["resume"] = bool(resume)
         data["requests_per_sec"] = max(0.0, float(requests_per_sec))
+        data["auto_tune"] = bool(auto_tune)
         if limit:
             data["limit"] = int(limit)
         # When specific novels are picked, export exactly those (skip discovery)

@@ -111,6 +111,11 @@ class ExportSourceRequest(BaseModel):
         description="Throttle chapter/image downloads to this rate (0 = polite default when "
         "polite is on, else unlimited); lower it to get past Cloudflare-style anti-bot blocks",
     )
+    auto_tune: bool = Field(
+        default=True,
+        description="Automatically lower the request rate when blocking is detected and raise it "
+        "back when clear, so the run finds the fastest rate that isn't blocked",
+    )
 
 
 class ListSourceRequest(BaseModel):
