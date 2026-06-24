@@ -265,14 +265,23 @@ _TOOLS_HTML = """<!DOCTYPE html>
     refreshAuthUI();
   });
 
+  // The API serializes JobStatus as an integer; map it to a name. Strings pass
+  // through in case that ever changes.
+  var STATUS = ["PENDING", "RUNNING", "SUCCESS", "FAILED", "CANCELED", "PAUSED"];
+  function statusName(s) {
+    return typeof s === "number" ? (STATUS[s] || String(s)) : s;
+  }
+  function isActive(s) { return s === "PENDING" || s === "RUNNING"; }
+
   function pollJob(id, label) {
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
-        var status = job.status;
-        var done = job.done, total = job.total;
-        log(label + " · " + status + " (" + done + "/" + total + ")", "log-info");
-        if (status === "RUNNING" || status === "PENDING") {
+        var status = statusName(job.status);
+        log(label + " · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        if (isActive(status)) {
           setTimeout(function () { pollJob(id, label); }, 3000);
+        } else if (status === "FAILED" && job.error) {
+          log(label + " failed: " + job.error, "log-err");
         }
       })
       .catch(function (e) { log("Status check failed: " + e.message, "log-err"); });
@@ -313,9 +322,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
   function pollExport(id) {
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
-        var status = job.status;
+        var status = statusName(job.status);
         log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
-        if (status === "RUNNING" || status === "PENDING") {
+        if (isActive(status)) {
           setTimeout(function () { pollExport(id); }, 4000);
         } else if (status === "SUCCESS") {
           var extra = job.extra || {};
