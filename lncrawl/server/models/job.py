@@ -100,6 +100,10 @@ class ExportSourceRequest(BaseModel):
         ge=0,
         description="Cap chapters downloaded per novel (0 = no cap); keeps huge series from stalling the run",
     )
+    resume: bool = Field(
+        default=True,
+        description="Reuse novels already fully exported in a prior run instead of redoing them",
+    )
 
 
 class ListSourceRequest(BaseModel):
@@ -130,3 +134,19 @@ class ProxyConfig(BaseModel):
     allow_fallback_on_proxy_miss: bool = Field(
         description="Whether direct fallback is allowed when no proxy is reachable"
     )
+
+
+class NotifyConfigRequest(BaseModel):
+    desktop_toast: bool = Field(
+        default=True,
+        description="Show a native desktop notification when an export finishes",
+    )
+    webhook_url: str = Field(
+        default="",
+        description="Discord/Slack-style webhook to POST a summary to when an export finishes",
+    )
+
+
+class NotifyConfig(BaseModel):
+    desktop_toast: bool = Field(description="Whether the desktop finish-notification is on")
+    webhook_url: str = Field(description="Current finish-notification webhook URL")

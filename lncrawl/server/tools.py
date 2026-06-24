@@ -127,6 +127,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <label for="exp-format">Format</label>
         <select id="exp-format">
           <option value="epub" selected>EPUB (best for manga &amp; most readers)</option>
+          <option value="cbz">CBZ (manga only — comic reader archive)</option>
           <option value="pdf">PDF</option>
           <option value="azw3">AZW3 (Kindle)</option>
           <option value="mobi">MOBI (older Kindle)</option>
@@ -158,6 +159,13 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <input id="exp-dedupe" type="checkbox" checked />
       <label for="exp-dedupe" style="margin:0">Skip novels I already have from another source</label>
     </div>
+    <div class="row checkbox">
+      <input id="exp-resume" type="checkbox" checked />
+      <label for="exp-resume" style="margin:0">Resume — reuse novels already finished in a previous run (don't redo them)</label>
+    </div>
+    <p class="hint" style="margin-top:10px">Pacing is automatic: the run slows down on its own
+      when a site starts blocking it and speeds back up when it recovers. Polite mode just sets a
+      higher floor.</p>
     <button id="export-btn">Download all &rarr; ZIP</button>
   </div>
 
@@ -179,6 +187,20 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <label for="proxy-fallback" style="margin:0">Fall back to a direct connection if no proxy is reachable</label>
     </div>
     <button id="proxy-save">Save proxy settings</button>
+  </div>
+
+  <div class="card">
+    <h2>Finish notifications</h2>
+    <p class="hint">Get pinged when a long overnight export finishes so you don't have to keep
+      checking. A desktop notification pops on this machine; a webhook can reach your phone
+      (Discord or Slack incoming webhook). Both are optional.</p>
+    <div class="row checkbox">
+      <input id="notify-desktop" type="checkbox" checked />
+      <label for="notify-desktop" style="margin:0">Show a desktop notification when an export finishes</label>
+    </div>
+    <label for="notify-webhook">Webhook URL (optional)</label>
+    <input id="notify-webhook" type="text" placeholder="https://discord.com/api/webhooks/..." />
+    <button id="notify-save">Save notification settings</button>
   </div>
 
   <div class="card">
@@ -270,6 +292,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           document.getElementById("who").textContent = (u && (u.email || u.name)) || "user";
           loadActiveExports(u && u.id);
           loadProxyConfig();
+          loadNotifyConfig();
         })
         .catch(function () {
           // stale/invalid token
@@ -451,6 +474,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     }
     body.polite = document.getElementById("exp-polite").checked;
     body.dedupe = document.getElementById("exp-dedupe").checked;
+    body.resume = document.getElementById("exp-resume").checked;
     busy(btn, true);
     log("Starting full export of " + url + " (this can take a while) …", "log-info");
     api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })
@@ -466,7 +490,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     api("/job/proxy-config", { method: "GET" })
       .then(function (cfg) {
         document.getElementById("proxy-urls").value =
-          (cfg.proxy_urls || "").split(",").filter(Boolean).join("\n");
+          (cfg.proxy_urls || "").split(",").filter(Boolean).join("\\n");
         document.getElementById("proxy-enable").checked = !!cfg.enable_proxy;
         document.getElementById("proxy-fallback").checked = !!cfg.allow_fallback_on_proxy_miss;
       })
@@ -496,6 +520,35 @@ _TOOLS_HTML = """<!DOCTYPE html>
         loadProxyConfig();
       })
       .catch(function (e) { log("Save proxy settings failed: " + e.message, "log-err"); })
+      .finally(function () { busy(btn, false); });
+  });
+
+  function loadNotifyConfig() {
+    api("/job/notify-config", { method: "GET" })
+      .then(function (cfg) {
+        document.getElementById("notify-desktop").checked = !!cfg.desktop_toast;
+        document.getElementById("notify-webhook").value = cfg.webhook_url || "";
+      })
+      .catch(function () {});
+  }
+
+  document.getElementById("notify-save").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var btn = this;
+    var body = {
+      desktop_toast: document.getElementById("notify-desktop").checked,
+      webhook_url: document.getElementById("notify-webhook").value.trim()
+    };
+    busy(btn, true);
+    api("/job/notify-config", { method: "POST", body: JSON.stringify(body) })
+      .then(function (cfg) {
+        var bits = [];
+        if (cfg.desktop_toast) bits.push("desktop");
+        if (cfg.webhook_url) bits.push("webhook");
+        log("Notification settings saved" +
+          (bits.length ? " — " + bits.join(" + ") + " active." : " — none active."), "log-ok");
+      })
+      .catch(function (e) { log("Save notification settings failed: " + e.message, "log-err"); })
       .finally(function () { busy(btn, false); });
   });
 

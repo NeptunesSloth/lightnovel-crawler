@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import re
@@ -8,6 +9,8 @@ import zipfile
 
 from ....context import ctx
 from ....enums import JobType, OutputFormat
+from ....utils.file_tools import safe_filename
+from ....utils.notify import notify_finished
 from ._base import AbortedException, BaseHandler, HandlerException
 
 
@@ -31,10 +34,71 @@ POLITE_DELAY = 3.0
 RETRY_BACKOFF = 30.0
 MAX_RETRY_BACKOFF = 300.0
 
+# Adaptive per-novel pacing. The delay between novels climbs when downloads start
+# failing (so an overnight run automatically slows down when a site begins
+# throttling it) and decays back toward the floor as they succeed again. This is
+# active even with polite mode off — the floor is just 0 in that case.
+ADAPTIVE_STEP = 8.0  # seconds added per failed novel (doubled when it looks throttled)
+ADAPTIVE_MAX = 60.0  # never wait more than this between novels
+ADAPTIVE_DECAY = 0.7  # multiply the delay by this after each success
+
+# Substrings in a failure reason that suggest the source is rate-limiting/blocking
+# us (as opposed to a parse error), so we should back off harder.
+_THROTTLE_HINTS = (
+    "429",
+    "403",
+    "too many",
+    "rate limit",
+    "ratelimit",
+    "timeout",
+    "timed out",
+    "connection",
+    "blocked",
+    "captcha",
+    "cloudflare",
+    "forbidden",
+)
+
 
 def _norm_title(title: str) -> str:
     """Normalize a title for cross-source de-duplication."""
     return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
+
+
+def _looks_throttled(reason: str) -> bool:
+    """Whether a failure reason looks like rate-limiting/blocking, not a parse bug."""
+    low = (reason or "").lower()
+    return any(hint in low for hint in _THROTTLE_HINTS)
+
+
+def _manifest_path(domain: str) -> Path:
+    """Where the per-source resume manifest of completed novels is stored."""
+    return ctx.files.resolve(f"exports/manifest/{safe_filename(domain)}.json")
+
+
+def _load_manifest(domain: str) -> Dict[str, dict]:
+    """Load the resume manifest: ``{novel_url: {"file": str, "missing": int}}``."""
+    path = _manifest_path(domain)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        novels = data.get("novels")
+        return novels if isinstance(novels, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_manifest(domain: str, novels: Dict[str, dict]) -> None:
+    """Persist the resume manifest (best-effort; never raises into the caller)."""
+    path = _manifest_path(domain)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"novels": novels}, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception as e:
+        ctx.logger.debug(f"Could not save export manifest for {domain}: {e}")
 
 
 def _find_desktop() -> Optional[Path]:
@@ -103,6 +167,7 @@ class ExportSourceHandler(BaseHandler):
         dedupe = bool(self.job.extra.get("dedupe", True))
         discovery_timeout = float(self.job.extra.get("discovery_minutes", 10)) * 60
         max_chapters = int(self.job.extra.get("max_chapters", 0))
+        resume = bool(self.job.extra.get("resume", True))
 
         # Seed the de-dupe set with titles already in the library from *other*
         # sources, so a story grabbed from one site isn't redone from another.
@@ -159,7 +224,31 @@ class ExportSourceHandler(BaseHandler):
             partial: Dict[str, Path] = {}  # ebook built but some chapters missing
             last_error: Dict[str, str] = {}  # most recent failure reason per novel
             skipped: Set[str] = set()  # duplicates already had from another source
-            pending = list(urls)
+
+            # Auto-resume across runs: a per-source manifest remembers which novels
+            # were fully exported (and the ebook still on disk), so re-running after
+            # a crash/stop or just to grab the rest reuses them instead of starting
+            # over. Only complete novels are recorded; partial/failed ones are always
+            # re-attempted (cheap, since downloaded chapters are skipped).
+            manifest = _load_manifest(domain) if resume else {}
+            pending = []
+            for novel_url in urls:
+                rec = manifest.get(novel_url) if resume else None
+                done_file = rec.get("file") if isinstance(rec, dict) else None
+                if done_file and not (rec or {}).get("missing") and Path(done_file).is_file():
+                    complete[novel_url] = Path(done_file)
+                else:
+                    pending.append(novel_url)
+            if complete:
+                ctx.logger.info(
+                    f"Resuming {domain}: {len(complete)} novel(s) already done, "
+                    f"{len(pending)} to go"
+                )
+                self._set_progress(len(complete), total)
+
+            # Adaptive pacing between novels (see ADAPTIVE_* constants).
+            floor_delay = POLITE_DELAY if polite else 0.0
+            adaptive_delay = floor_delay
 
             # initial pass + retry rounds over whatever still isn't complete
             for attempt in range(retries + 1):
@@ -220,17 +309,30 @@ class ExportSourceHandler(BaseHandler):
                         complete[novel_url] = file
                         partial.pop(novel_url, None)
                         last_error.pop(novel_url, None)
+                        # record in the resume manifest so a re-run skips it
+                        manifest[novel_url] = {"file": str(file), "missing": 0}
+                        _save_manifest(domain, manifest)
+                        adaptive_delay = max(floor_delay, adaptive_delay * ADAPTIVE_DECAY)
                     else:
                         if file is not None:
                             partial[novel_url] = file  # keep the best version so far
                         elif novel_url not in last_error:
                             last_error[novel_url] = "No chapters found or ebook could not be built"
                         next_pending.append(novel_url)
+                        # a failure: slow down (harder if it looks like throttling)
+                        bump = ADAPTIVE_STEP * (2 if _looks_throttled(last_error[novel_url]) else 1)
+                        adaptive_delay = min(ADAPTIVE_MAX, max(adaptive_delay, floor_delay) + bump)
                     self._set_progress(len(complete) + len(partial) + len(skipped), total)
 
-                    # be gentle on the source between novels when asked
-                    if polite and next_pending and self.signal.wait(POLITE_DELAY):
-                        raise AbortedException()
+                    # pace the next novel: adaptive delay climbs on failures and
+                    # decays on success, so a run auto-throttles when a site pushes
+                    # back. With polite mode off and no failures this is 0 (no wait).
+                    if next_pending and adaptive_delay > 0:
+                        self._set_extra(
+                            phase="downloading", adaptive_delay=round(adaptive_delay, 1)
+                        )
+                        if self.signal.wait(adaptive_delay):
+                            raise AbortedException()
                 pending = next_pending
 
             # bundle the complete ones, plus the best partial we have for the rest
@@ -263,7 +365,15 @@ class ExportSourceHandler(BaseHandler):
                 )
                 # if everything was a known duplicate, that's a success, not an error
                 if skipped and not failed:
+                    self._notify_finish(
+                        f"{domain}: nothing new to export — all {len(skipped)} already in "
+                        "your library."
+                    )
                     return
+                self._notify_finish(
+                    f"{domain}: export failed — could not build any of {total} novel(s). "
+                    "The source is likely throttling or blocking requests."
+                )
                 raise HandlerException("Could not export any novel from the source")
 
             export_rel = f"exports/{self.job.id}.zip"
@@ -297,6 +407,16 @@ class ExportSourceHandler(BaseHandler):
                 total_novels=total,
                 fail_reasons=fail_reasons,
             )
+
+            size_mb = export_path.stat().st_size / (1024 * 1024)
+            summary = (
+                f"{domain}: {len(files)} of {total} novel(s) exported "
+                f"({len(complete)} complete, {incomplete} partial, {failed} failed, "
+                f"{len(skipped)} skipped) — {size_mb:.1f} MB."
+            )
+            if saved_to:
+                summary += " Saved to your Desktop."
+            self._notify_finish(summary)
         finally:
             crawler.close()
 
@@ -307,6 +427,21 @@ class ExportSourceHandler(BaseHandler):
         self.job.done = done
         self.job.total = max(total, 1)
         ctx.job_notifier.notify(self.user, self.job)
+
+    def _notify_finish(self, summary: str) -> None:
+        """Fire the configured desktop/webhook finish notifications (best-effort)."""
+        cfg = ctx.config.notify
+        if not cfg.desktop_toast and not cfg.webhook_url:
+            return
+        try:
+            notify_finished(
+                title="Lightnovel Crawler — export finished",
+                message=summary,
+                webhook_url=cfg.webhook_url,
+                desktop=cfg.desktop_toast,
+            )
+        except Exception as e:
+            ctx.logger.debug(f"Finish notification failed: {e}")
 
 
 def _download_novel(

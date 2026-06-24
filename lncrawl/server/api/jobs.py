@@ -18,6 +18,8 @@ from ..models import (
     FetchVolumesRequest,
     ListSourceRequest,
     MakeArtifactsRequest,
+    NotifyConfig,
+    NotifyConfigRequest,
     Paginated,
     ProxyConfig,
     ProxyConfigRequest,
@@ -94,6 +96,37 @@ def set_proxy_config(
     crawler.enable_proxy = body.enable_proxy
     crawler.allow_fallback_on_proxy_miss = body.allow_fallback_on_proxy_miss
     return _current_proxy_config()
+
+
+def _current_notify_config() -> NotifyConfig:
+    notify = ctx.config.notify
+    return NotifyConfig(
+        desktop_toast=notify.desktop_toast,
+        webhook_url=notify.webhook_url,
+    )
+
+
+@router.get(
+    "/notify-config",
+    summary="Get the export finish-notification settings",
+    dependencies=[Security(ensure_user)],
+)
+def get_notify_config() -> NotifyConfig:
+    return _current_notify_config()
+
+
+@router.post(
+    "/notify-config",
+    summary="Update the export finish-notification settings",
+    dependencies=[Security(ensure_user)],
+)
+def set_notify_config(
+    body: NotifyConfigRequest = Body(),
+) -> NotifyConfig:
+    notify = ctx.config.notify
+    notify.desktop_toast = body.desktop_toast
+    notify.webhook_url = body.webhook_url.strip()
+    return _current_notify_config()
 
 
 @router.delete("/{job_id}", summary="Deletes a job")
@@ -324,6 +357,7 @@ def export_source(
         dedupe=body.dedupe,
         discovery_minutes=body.discovery_minutes,
         max_chapters=body.max_chapters,
+        resume=body.resume,
         urls=[str(u) for u in body.urls] if body.urls else None,
     )
 

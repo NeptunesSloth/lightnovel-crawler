@@ -19,6 +19,8 @@ from .job import (
     FetchVolumesRequest,
     ListSourceRequest,
     MakeArtifactsRequest,
+    NotifyConfig,
+    NotifyConfigRequest,
     ProxyConfig,
     ProxyConfigRequest,
     SearchSourceRequest,
@@ -90,6 +92,8 @@ __all__ = [
     "ListSourceRequest",
     "ProxyConfigRequest",
     "ProxyConfig",
+    "NotifyConfigRequest",
+    "NotifyConfig",
     # library
     "LibraryCreateRequest",
     "LibraryUpdateRequest",
