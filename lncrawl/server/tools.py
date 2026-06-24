@@ -142,6 +142,14 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <input id="exp-retries" type="text" inputmode="numeric" value="3" placeholder="3" />
       </div>
     </div>
+    <div class="row checkbox">
+      <input id="exp-polite" type="checkbox" />
+      <label for="exp-polite" style="margin:0">Polite mode (slower; avoids rate-limit/anti-bot blocks)</label>
+    </div>
+    <div class="row checkbox">
+      <input id="exp-dedupe" type="checkbox" checked />
+      <label for="exp-dedupe" style="margin:0">Skip novels I already have from another source</label>
+    </div>
     <button id="export-btn">Download all &rarr; ZIP</button>
   </div>
 
@@ -210,7 +218,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
         var data = null;
         try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
         if (!res.ok) {
-          var detail = (data && (data.message || data.detail)) || text || res.statusText;
+          // ServerError responses look like { error: <reason>, detail: <extra> }
+          var msg = data && (data.error || data.message);
+          var extra = data && data.detail;
+          var detail = msg
+            ? (extra && extra !== msg ? msg + " (" + extra + ")" : msg)
+            : (extra || text || res.statusText);
           throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
         }
         return data;
@@ -335,10 +348,14 @@ _TOOLS_HTML = """<!DOCTYPE html>
           var extra = job.extra || {};
           var parts = [(extra.complete != null ? extra.complete : extra.exported || 0) + " complete"];
           if (extra.incomplete) parts.push(extra.incomplete + " partial");
+          if (extra.skipped) parts.push(extra.skipped + " skipped (already had)");
           if (extra.failed) parts.push(extra.failed + " failed");
           log("Export done: " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".",
             extra.failed ? "log-info" : "log-ok");
-          downloadBlob(id, extra.export_name);
+          (extra.fail_reasons || []).forEach(function (fr) {
+            log("  " + fr.count + "× " + fr.reason, "log-err");
+          });
+          if (extra.export_file) downloadBlob(id, extra.export_name);
         } else {
           log("Export ended: " + status + (job.error ? " — " + job.error : ""), "log-err");
         }
@@ -363,6 +380,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
       var retries = parseInt(retriesRaw, 10);
       if (!isNaN(retries) && retries >= 0) body.retries = retries;
     }
+    body.polite = document.getElementById("exp-polite").checked;
+    body.dedupe = document.getElementById("exp-dedupe").checked;
     busy(btn, true);
     log("Starting full export of " + url + " (this can take a while) …", "log-info");
     api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })

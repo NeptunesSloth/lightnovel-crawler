@@ -1,5 +1,6 @@
 from pathlib import Path
-from typing import Dict, List, Optional, TypedDict
+import re
+from typing import Dict, List, Optional, Set, TypedDict
 import zipfile
 
 from ....context import ctx
@@ -10,12 +11,22 @@ from ._base import AbortedException, BaseHandler, HandlerException
 class NovelResult(TypedDict):
     file: Optional[Path]  # the built ebook, or None if it couldn't be made
     missing: int  # chapters still not downloaded
+    duplicate: bool  # already present (same title) from another source
 
 
 # How many extra passes to make over novels that failed or came out incomplete,
 # unless the job overrides it via extra["retries"]. Re-downloads are cheap since
 # already-fetched chapters are skipped, so this is safe to run overnight.
 DEFAULT_RETRIES = 3
+
+# Seconds to pause between novels when "polite mode" is on, to avoid tripping a
+# site's rate-limiting / anti-bot protection during a big bulk download.
+POLITE_DELAY = 3.0
+
+
+def _norm_title(title: str) -> str:
+    """Normalize a title for cross-source de-duplication."""
+    return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
 
 
 class ExportSourceHandler(BaseHandler):
@@ -42,15 +53,30 @@ class ExportSourceHandler(BaseHandler):
         fmt = OutputFormat(self.job.extra.get("format") or OutputFormat.epub.value)
         limit = self.job.extra.get("limit")
         retries = int(self.job.extra.get("retries", DEFAULT_RETRIES))
+        polite = bool(self.job.extra.get("polite"))
+        dedupe = bool(self.job.extra.get("dedupe", True))
+
+        # Seed the de-dupe set with titles already in the library from *other*
+        # sources, so a story grabbed from one site isn't redone from another.
+        seen_titles: Set[str] = set()
+        if dedupe:
+            seen_titles = {_norm_title(t) for t in ctx.novels.list_titles(exclude_domain=domain)}
 
         self._set_running()
 
         # one crawler session reused for discovery and every download
         crawler = ctx.sources.init_crawler(source.url)
         try:
-            urls = ctx.crawler.discover_novels(self.user.id, domain, self.signal, custom=crawler)
-            if limit:
-                urls = urls[:limit]
+            selected = self.job.extra.get("urls")
+            if selected:
+                # specific novels were picked — export exactly those
+                urls = list(selected)
+            else:
+                urls = ctx.crawler.discover_novels(
+                    self.user.id, domain, self.signal, custom=crawler
+                )
+                if limit:
+                    urls = urls[:limit]
             if not urls:
                 self._set_extra(exported=0, failed=0, total_novels=0)
                 return
@@ -60,6 +86,8 @@ class ExportSourceHandler(BaseHandler):
 
             complete: Dict[str, Path] = {}  # fully downloaded (no missing chapters)
             partial: Dict[str, Path] = {}  # ebook built but some chapters missing
+            last_error: Dict[str, str] = {}  # most recent failure reason per novel
+            skipped: Set[str] = set()  # duplicates already had from another source
             pending = list(urls)
 
             # initial pass + retry rounds over whatever still isn't complete
@@ -76,22 +104,35 @@ class ExportSourceHandler(BaseHandler):
                         raise AbortedException()
                     result: NovelResult
                     try:
-                        result = _download_novel(crawler, self.user.id, novel_url, fmt, self.signal)
+                        result = _download_novel(
+                            crawler, self.user.id, novel_url, fmt, self.signal, seen_titles, dedupe
+                        )
                     except AbortedException:
                         raise
                     except Exception as e:
+                        last_error[novel_url] = f"{type(e).__name__}: {e}"[:200]
                         ctx.logger.debug(f"Export attempt failed for {novel_url}: {e}")
-                        result = {"file": None, "missing": 1}
+                        result = {"file": None, "missing": 1, "duplicate": False}
 
                     file = result["file"]
-                    if file is not None and result["missing"] == 0:
+                    if result["duplicate"]:
+                        skipped.add(novel_url)  # already have it — don't retry
+                        last_error.pop(novel_url, None)
+                    elif file is not None and result["missing"] == 0:
                         complete[novel_url] = file
                         partial.pop(novel_url, None)
+                        last_error.pop(novel_url, None)
                     else:
                         if file is not None:
                             partial[novel_url] = file  # keep the best version so far
+                        elif novel_url not in last_error:
+                            last_error[novel_url] = "No chapters found or ebook could not be built"
                         next_pending.append(novel_url)
-                    self._set_progress(len(complete), total)
+                    self._set_progress(len(complete) + len(skipped), total)
+
+                    # be gentle on the source between novels when asked
+                    if polite and next_pending and self.signal.wait(POLITE_DELAY):
+                        raise AbortedException()
                 pending = next_pending
 
             # bundle the complete ones, plus the best partial we have for the rest
@@ -102,8 +143,29 @@ class ExportSourceHandler(BaseHandler):
             incomplete = sum(1 for u in pending if u in partial)
             failed = sum(1 for u in pending if u not in partial)
 
+            # tally the failure reasons so the UI can show *why* novels failed
+            reason_tally: Dict[str, int] = {}
+            for u in pending:
+                if u not in partial:
+                    reason = last_error.get(u, "Unknown error")
+                    reason_tally[reason] = reason_tally.get(reason, 0) + 1
+            fail_reasons = [
+                {"reason": r, "count": c}
+                for r, c in sorted(reason_tally.items(), key=lambda x: -x[1])[:5]
+            ]
+
             if not files:
-                self._set_extra(exported=0, incomplete=0, failed=failed, total_novels=total)
+                self._set_extra(
+                    exported=0,
+                    incomplete=0,
+                    failed=failed,
+                    skipped=len(skipped),
+                    total_novels=total,
+                    fail_reasons=fail_reasons,
+                )
+                # if everything was a known duplicate, that's a success, not an error
+                if skipped and not failed:
+                    return
                 raise HandlerException("Could not export any novel from the source")
 
             export_rel = f"exports/{self.job.id}.zip"
@@ -129,7 +191,9 @@ class ExportSourceHandler(BaseHandler):
                 complete=len(complete),
                 incomplete=incomplete,
                 failed=failed,
+                skipped=len(skipped),
                 total_novels=total,
+                fail_reasons=fail_reasons,
             )
         finally:
             crawler.close()
@@ -149,30 +213,42 @@ def _download_novel(
     novel_url: str,
     fmt: OutputFormat,
     signal,
+    seen_titles: Optional[Set[str]] = None,
+    dedupe: bool = False,
 ) -> NovelResult:
     """Download a novel and build its ebook.
 
     Returns the built file (or None) and how many chapters are still missing.
     Already-downloaded chapters are skipped, so calling this again only fills in
-    what's still missing — which is what makes the retry passes cheap.
+    what's still missing — which is what makes the retry passes cheap. If
+    ``dedupe`` is on and the (normalized) title is already in ``seen_titles``,
+    the novel is reported as a duplicate without downloading anything.
     """
-    # fetch metadata (syncs chapters/volumes into the DB)
-    novel = ctx.crawler.fetch_novel(user_id, novel_url, signal=signal, custom=crawler)
+    # Reuse already-fetched metadata: on retry rounds (and re-runs) the novel and
+    # its chapter list are already in the DB, so skip re-downloading the info page
+    # — a wasted network round-trip per novel per round. Only fetch when new.
+    novel = ctx.novels.find_by_url(novel_url)
+    if novel is None or not ctx.chapters.list_ids(novel_id=novel.id):
+        novel = ctx.crawler.fetch_novel(user_id, novel_url, signal=signal, custom=crawler)
+
+    norm = _norm_title(novel.title)
+    if dedupe and seen_titles is not None and norm in seen_titles:
+        return {"file": None, "missing": 0, "duplicate": True}
+
     chapter_ids = ctx.chapters.list_ids(novel_id=novel.id)
     if not chapter_ids:
-        return {"file": None, "missing": 0}
+        return {"file": None, "missing": 0, "duplicate": False}
 
-    # download all chapters (skips ones already fetched)
+    # download all chapters (fetch_chapter skips ones already fetched)
     chapter_futures = [
         crawler.taskman.submit_task(ctx.crawler.fetch_chapter, user_id, cid, custom=crawler)
         for cid in sorted(set(chapter_ids))
     ]
-    image_ids: List[str] = []
-    for chapter in crawler.taskman.resolve(chapter_futures, desc="Chapters", unit=" c"):
-        if chapter:
-            image_ids += ctx.images.list_ids(chapter_id=chapter.id)
+    crawler.taskman.resolve_futures(chapter_futures, desc="Chapters", unit=" c")
 
-    # download chapter images (covers manga pages and inline novel art)
+    # download chapter images in one batch (covers manga pages and inline art);
+    # one query for the whole novel instead of one per chapter
+    image_ids = ctx.images.list_ids(novel_id=novel.id)
     if image_ids:
         image_futures = [
             crawler.taskman.submit_task(ctx.crawler.fetch_image, user_id, iid, custom=crawler)
@@ -199,4 +275,6 @@ def _download_novel(
     file = None
     if artifact and artifact.is_available:
         file = ctx.files.resolve(artifact.output_file)
-    return {"file": file, "missing": missing}
+        if seen_titles is not None:
+            seen_titles.add(norm)  # remember it so other sources skip this story
+    return {"file": file, "missing": missing, "duplicate": False}

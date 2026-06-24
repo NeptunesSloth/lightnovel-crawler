@@ -15,6 +15,7 @@ from ..models import (
     FetchMissingChaptersRequest,
     FetchNovelsRequest,
     FetchVolumesRequest,
+    ListSourceRequest,
     MakeArtifactsRequest,
     Paginated,
     SearchSourceRequest,
@@ -279,7 +280,21 @@ def export_source(
         format=body.format,
         limit=body.limit,
         retries=body.retries,
+        polite=body.polite,
+        dedupe=body.dedupe,
+        urls=[str(u) for u in body.urls] if body.urls else None,
     )
+
+
+@router.post(
+    "/create/list-source",
+    summary="Create a job that lists and ranks the novels a source exposes (no download)",
+)
+def list_source(
+    user: User = Security(ensure_user),
+    body: ListSourceRequest = Body(),
+) -> Job:
+    return ctx.jobs.list_source(user, str(body.url))
 
 
 @router.get("/{job_id}/export", summary="Download the zip produced by an export-source job")

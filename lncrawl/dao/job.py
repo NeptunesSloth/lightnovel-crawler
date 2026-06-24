@@ -157,6 +157,10 @@ class Job(BaseTable, table=True):
             domain = self.extra.get("domain")
             return f"Export all novels → {domain}"
 
+        if self.type == JobType.LIST_SOURCE:
+            domain = self.extra.get("domain")
+            return f"Browse novels → {domain}"
+
         # Require Language for translation
         language = self.extra.get("language") or ""
         if language in _LANGUAGE_CODES:
