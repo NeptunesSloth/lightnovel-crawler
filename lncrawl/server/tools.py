@@ -466,7 +466,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     api("/job/proxy-config", { method: "GET" })
       .then(function (cfg) {
         document.getElementById("proxy-urls").value =
-          (cfg.proxy_urls || "").split(",").filter(Boolean).join("\n");
+          (cfg.proxy_urls || "").split(",").filter(Boolean).join("\\n");
         document.getElementById("proxy-enable").checked = !!cfg.enable_proxy;
         document.getElementById("proxy-fallback").checked = !!cfg.allow_fallback_on_proxy_miss;
       })
