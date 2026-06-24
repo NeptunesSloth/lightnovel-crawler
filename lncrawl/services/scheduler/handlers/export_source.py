@@ -224,8 +224,12 @@ def _download_novel(
     ``dedupe`` is on and the (normalized) title is already in ``seen_titles``,
     the novel is reported as a duplicate without downloading anything.
     """
-    # fetch metadata (syncs chapters/volumes into the DB) — cheap, no chapters yet
-    novel = ctx.crawler.fetch_novel(user_id, novel_url, signal=signal, custom=crawler)
+    # Reuse already-fetched metadata: on retry rounds (and re-runs) the novel and
+    # its chapter list are already in the DB, so skip re-downloading the info page
+    # — a wasted network round-trip per novel per round. Only fetch when new.
+    novel = ctx.novels.find_by_url(novel_url)
+    if novel is None or not ctx.chapters.list_ids(novel_id=novel.id):
+        novel = ctx.crawler.fetch_novel(user_id, novel_url, signal=signal, custom=crawler)
 
     norm = _norm_title(novel.title)
     if dedupe and seen_titles is not None and norm in seen_titles:
@@ -235,17 +239,16 @@ def _download_novel(
     if not chapter_ids:
         return {"file": None, "missing": 0, "duplicate": False}
 
-    # download all chapters (skips ones already fetched)
+    # download all chapters (fetch_chapter skips ones already fetched)
     chapter_futures = [
         crawler.taskman.submit_task(ctx.crawler.fetch_chapter, user_id, cid, custom=crawler)
         for cid in sorted(set(chapter_ids))
     ]
-    image_ids: List[str] = []
-    for chapter in crawler.taskman.resolve(chapter_futures, desc="Chapters", unit=" c"):
-        if chapter:
-            image_ids += ctx.images.list_ids(chapter_id=chapter.id)
+    crawler.taskman.resolve_futures(chapter_futures, desc="Chapters", unit=" c")
 
-    # download chapter images (covers manga pages and inline novel art)
+    # download chapter images in one batch (covers manga pages and inline art);
+    # one query for the whole novel instead of one per chapter
+    image_ids = ctx.images.list_ids(novel_id=novel.id)
     if image_ids:
         image_futures = [
             crawler.taskman.submit_task(ctx.crawler.fetch_image, user_id, iid, custom=crawler)
