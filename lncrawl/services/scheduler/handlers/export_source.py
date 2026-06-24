@@ -72,9 +72,16 @@ class ExportSourceHandler(BaseHandler):
                 # specific novels were picked — export exactly those
                 urls = list(selected)
             else:
+                # Discovery runs before any download; drive the progress bar with
+                # seed progress so a slow/throttled source isn't a silent 0%.
+                def _on_discover(done: int, seeds: int, found: int) -> None:
+                    self._set_extra(phase="discovering", found=found)
+                    self._set_progress(done, seeds)
+
                 urls = ctx.crawler.discover_novels(
-                    self.user.id, domain, self.signal, custom=crawler
+                    self.user.id, domain, self.signal, custom=crawler, on_progress=_on_discover
                 )
+                self._set_extra(phase="downloading")
                 if limit:
                     urls = urls[:limit]
             if not urls:

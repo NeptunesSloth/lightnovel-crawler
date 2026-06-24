@@ -341,7 +341,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
         var status = statusName(job.status);
-        log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        var ex = job.extra || {};
+        if (status === "RUNNING" && ex.phase === "discovering") {
+          log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches)", "log-info");
+        } else {
+          log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        }
         if (isActive(status)) {
           setTimeout(function () { pollExport(id); }, 4000);
         } else if (status === "SUCCESS") {
