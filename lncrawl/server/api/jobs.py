@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Body, Path, Query, Security
@@ -18,6 +19,8 @@ from ..models import (
     ListSourceRequest,
     MakeArtifactsRequest,
     Paginated,
+    ProxyConfig,
+    ProxyConfigRequest,
     SearchSourceRequest,
     TranslateChaptersRequest,
     TranslateNovelsRequest,
@@ -54,6 +57,43 @@ def list_jobs(
         priority=priority,
         parent_job_id=parent_job_id,
     )
+
+
+def _current_proxy_config() -> ProxyConfig:
+    crawler = ctx.config.crawler
+    return ProxyConfig(
+        proxy_urls=crawler.proxy_urls,
+        enable_proxy=crawler.enable_proxy,
+        allow_fallback_on_proxy_miss=crawler.allow_fallback_on_proxy_miss,
+    )
+
+
+@router.get(
+    "/proxy-config",
+    summary="Get the crawler proxy / IP-rotation settings",
+    dependencies=[Security(ensure_user)],
+)
+def get_proxy_config() -> ProxyConfig:
+    return _current_proxy_config()
+
+
+@router.post(
+    "/proxy-config",
+    summary="Update the crawler proxy / IP-rotation settings",
+    dependencies=[Security(ensure_user)],
+)
+def set_proxy_config(
+    body: ProxyConfigRequest = Body(),
+) -> ProxyConfig:
+    # Accept comma- or newline-separated input from the UI and normalize to the
+    # comma-separated form the crawler expects. New exports pick this up at
+    # init_crawler time, so the change applies without a restart.
+    parts = [p.strip() for p in re.split(r"[\n,]+", body.proxy_urls or "") if p.strip()]
+    crawler = ctx.config.crawler
+    crawler.proxy_urls = ",".join(parts)
+    crawler.enable_proxy = body.enable_proxy
+    crawler.allow_fallback_on_proxy_miss = body.allow_fallback_on_proxy_miss
+    return _current_proxy_config()
 
 
 @router.delete("/{job_id}", summary="Deletes a job")
