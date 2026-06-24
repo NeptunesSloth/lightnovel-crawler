@@ -720,6 +720,9 @@ class JobService:
         format: OutputFormat = OutputFormat.epub,
         limit: Optional[int] = None,
         retries: int = 3,
+        polite: bool = False,
+        dedupe: bool = True,
+        urls: Optional[List[str]] = None,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
         **data: Any,
@@ -732,14 +735,42 @@ class JobService:
         data["url"] = source.url
         data["format"] = OutputFormat(format).value
         data["retries"] = max(0, int(retries))
+        data["polite"] = bool(polite)
+        data["dedupe"] = bool(dedupe)
         if limit:
             data["limit"] = int(limit)
+        # When specific novels are picked, export exactly those (skip discovery)
+        if urls:
+            data["urls"] = [str(u) for u in urls]
         return self._create(
             user=user,
             data=data,
             parent_id=parent_id,
             depends_on=depends_on,
             type=JobType.EXPORT_SOURCE,
+        )
+
+    def list_source(
+        self,
+        user: User,
+        url: str,
+        *,
+        parent_id: Optional[str] = None,
+        depends_on: Optional[str] = None,
+        **data: Any,
+    ) -> Job:
+        domain = ctx.sources.get_domain(url)
+        source = ctx.sources.get_source(domain)
+        if not source.can_search:
+            raise ServerErrors.search_not_supported.with_extra(domain)
+        data["domain"] = source.domain
+        data["url"] = source.url
+        return self._create(
+            user=user,
+            data=data,
+            parent_id=parent_id,
+            depends_on=depends_on,
+            type=JobType.LIST_SOURCE,
         )
 
     # -------------------------------------------------------------------------

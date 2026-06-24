@@ -17,6 +17,7 @@ from .job import (
     FetchMissingChaptersRequest,
     FetchNovelsRequest,
     FetchVolumesRequest,
+    ListSourceRequest,
     MakeArtifactsRequest,
     SearchSourceRequest,
     TranslateChaptersRequest,
@@ -84,6 +85,7 @@ __all__ = [
     "SearchSourceRequest",
     "DiscoverSourceRequest",
     "ExportSourceRequest",
+    "ListSourceRequest",
     # library
     "LibraryCreateRequest",
     "LibraryUpdateRequest",

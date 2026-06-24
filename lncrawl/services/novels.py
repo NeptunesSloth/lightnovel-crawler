@@ -54,6 +54,18 @@ class NovelService:
                 items=list(items),
             )
 
+    def list_titles(self, exclude_domain: Optional[str] = None) -> List[str]:
+        """All novel titles in the library, optionally excluding one domain.
+
+        Used for cross-source de-duplication so the same story isn't downloaded
+        again from a different site.
+        """
+        with ctx.db.session() as sess:
+            stmt = sq.select(Novel.title)
+            if exclude_domain:
+                stmt = stmt.where(Novel.domain != exclude_domain)
+            return [t for t in sess.exec(stmt).all() if t]
+
     def list_domains(self) -> Dict[str, int]:
         with ctx.db.session() as sess:
             domains = sess.exec(

@@ -142,6 +142,14 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <input id="exp-retries" type="text" inputmode="numeric" value="3" placeholder="3" />
       </div>
     </div>
+    <div class="row checkbox">
+      <input id="exp-polite" type="checkbox" />
+      <label for="exp-polite" style="margin:0">Polite mode (slower; avoids rate-limit/anti-bot blocks)</label>
+    </div>
+    <div class="row checkbox">
+      <input id="exp-dedupe" type="checkbox" checked />
+      <label for="exp-dedupe" style="margin:0">Skip novels I already have from another source</label>
+    </div>
     <button id="export-btn">Download all &rarr; ZIP</button>
   </div>
 
@@ -340,6 +348,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           var extra = job.extra || {};
           var parts = [(extra.complete != null ? extra.complete : extra.exported || 0) + " complete"];
           if (extra.incomplete) parts.push(extra.incomplete + " partial");
+          if (extra.skipped) parts.push(extra.skipped + " skipped (already had)");
           if (extra.failed) parts.push(extra.failed + " failed");
           log("Export done: " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".",
             extra.failed ? "log-info" : "log-ok");
@@ -371,6 +380,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
       var retries = parseInt(retriesRaw, 10);
       if (!isNaN(retries) && retries >= 0) body.retries = retries;
     }
+    body.polite = document.getElementById("exp-polite").checked;
+    body.dedupe = document.getElementById("exp-dedupe").checked;
     busy(btn, true);
     log("Starting full export of " + url + " (this can take a while) …", "log-info");
     api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })

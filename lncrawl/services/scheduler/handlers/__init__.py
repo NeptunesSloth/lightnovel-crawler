@@ -15,6 +15,7 @@ from .fetch_latest import FetchLatestHandler
 from .fetch_missing import FetchMissingHandler
 from .image import ImageHandler
 from .image_batch import ImageBatchHandler
+from .list_source import ListSourceHandler
 from .novel import NovelHandler
 from .novel_batch import NovelBatchHandler
 from .novel_translation import NovelTranslationHandler
@@ -50,6 +51,7 @@ _HANDLER_REGISTRY: List[Type[BaseHandler]] = [
     SearchSourceHandler,
     DiscoverSourceHandler,
     ExportSourceHandler,
+    ListSourceHandler,
     FallbackHandler,
 ]
 

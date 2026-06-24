@@ -77,3 +77,19 @@ class ExportSourceRequest(BaseModel):
         le=10,
         description="Extra passes to redo novels that failed or came out incomplete",
     )
+    urls: Optional[List[HttpUrl]] = Field(
+        default=None,
+        description="Export only these specific novels (from a browse pick-list) instead of all",
+    )
+    polite: bool = Field(
+        default=False,
+        description="Pace requests to avoid a site's rate-limiting / anti-bot blocks",
+    )
+    dedupe: bool = Field(
+        default=True,
+        description="Skip novels already in the library from another source (by title)",
+    )
+
+
+class ListSourceRequest(BaseModel):
+    url: HttpUrl = Field(description="The source website/base URL to browse novels from")
