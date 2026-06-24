@@ -163,6 +163,11 @@ class Config(object):
         """Calibre Conversion Settings."""
         return CalibreConfig(self)
 
+    @cached_property
+    def notify(self):
+        """Notification Settings."""
+        return NotificationConfig(self)
+
     # -------------------------------------------------------------- #
 
     def load(self, file: Path | None = None) -> None:
@@ -1063,3 +1068,38 @@ class PythonLanguageServerConfig(_Section):
     @idle_timeout.setter
     def idle_timeout(self, v: int) -> None:
         self._set("idle_timeout", v)
+
+
+# ------------------------------------------------------------------ #
+#                        Notification Section                        #
+# ------------------------------------------------------------------ #
+class NotificationConfig(_Section):
+    section = "notify"
+
+    @property
+    def desktop_toast(self) -> bool:
+        """Desktop Notification on Finish.
+
+        Show a native desktop notification when a long-running source export
+        finishes (the local/desktop app). Best-effort and only fires on the
+        machine running the app. Enabled by default.
+        """
+        return self._get("desktop_toast", True)
+
+    @desktop_toast.setter
+    def desktop_toast(self, v: bool) -> None:
+        self._set("desktop_toast", v)
+
+    @property
+    def webhook_url(self) -> Annotated[str, Sensitive]:
+        """Finish Notification Webhook URL.
+
+        When set, a summary is POSTed here when a source export finishes, so
+        you can get a ping on your phone while a big run completes unattended.
+        Works with Discord and Slack incoming webhooks. Leave blank to disable.
+        """
+        return self._get("webhook_url", "")
+
+    @webhook_url.setter
+    def webhook_url(self, v: str) -> None:
+        self._set("webhook_url", v)

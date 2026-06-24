@@ -9,6 +9,7 @@ from ...dao import Artifact, LanguageCode, OutputFormat
 from ...exceptions import ServerErrors
 from ...utils.file_tools import safe_filename
 from .calibre import convert_epub, is_calibre_available
+from .cbz import make_cbz
 from .epub import make_epub
 from .json import make_json
 from .text import make_text
@@ -25,6 +26,7 @@ archive_maker: Dict[OutputFormat, Callable[..., None]] = {
     OutputFormat.json: make_json,
     OutputFormat.text: make_text,
     OutputFormat.epub: make_epub,
+    OutputFormat.cbz: make_cbz,
     OutputFormat.docx: convert_epub,
     OutputFormat.mobi: convert_epub,
     OutputFormat.pdf: convert_epub,

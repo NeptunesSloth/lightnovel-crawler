@@ -78,6 +78,7 @@ class OutputFormat(str, Enum):
     kepub = "kepub"
     pmlz = "pmlz"
     snb = "snb"
+    cbz = "cbz"
 
     def __str__(self) -> str:
         return self.value
