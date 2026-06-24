@@ -942,6 +942,18 @@ class JobService:
                 else:
                     stmt = stmt.where(Job.type != JobType.ARTIFACT)
 
+            # Run at most one source export at a time: a single export already
+            # saturates the download engine, so several at once just starve each
+            # other. Queued exports wait until the running one finishes.
+            running_export = aliased(Job)
+            running_export_exists = (
+                sq.exists(1)
+                .where(sq.col(running_export.type) == JobType.EXPORT_SOURCE)
+                .where(sq.col(running_export.status) == JobStatus.RUNNING)
+                .where(sq.col(running_export.id) != Job.id)
+            )
+            stmt = stmt.where(sq.or_(Job.type != JobType.EXPORT_SOURCE, ~running_export_exists))
+
             stmt = stmt.order_by(
                 sq.desc(Job.priority),
                 sq.asc(Job.updated_at),

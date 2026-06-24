@@ -104,3 +104,29 @@ class ExportSourceRequest(BaseModel):
 
 class ListSourceRequest(BaseModel):
     url: HttpUrl = Field(description="The source website/base URL to browse novels from")
+
+
+class ProxyConfigRequest(BaseModel):
+    proxy_urls: str = Field(
+        default="",
+        description=(
+            "Proxy URLs to route crawler traffic through, separated by commas or newlines "
+            "(e.g. http://user:pass@host:port or socks5://host:port). Blank = direct connection."
+        ),
+    )
+    enable_proxy: bool = Field(
+        default=True,
+        description="Route crawler requests through the configured proxies when set",
+    )
+    allow_fallback_on_proxy_miss: bool = Field(
+        default=True,
+        description="Fall back to a direct connection if no configured proxy is reachable",
+    )
+
+
+class ProxyConfig(BaseModel):
+    proxy_urls: str = Field(description="Current proxy URLs (comma-separated)")
+    enable_proxy: bool = Field(description="Whether proxy routing is enabled")
+    allow_fallback_on_proxy_miss: bool = Field(
+        description="Whether direct fallback is allowed when no proxy is reachable"
+    )

@@ -162,6 +162,26 @@ _TOOLS_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card">
+    <h2>Proxy / IP rotation</h2>
+    <p class="hint">Big overnight runs can get your IP rate-limited or flagged by a site's
+      anti-bot, which makes discovery and downloads stall (0 found / 0 chapters). Route the
+      crawler through one or more proxies here to rotate IPs and avoid getting blocked. Leave
+      blank for a direct connection. Changes apply to the next export — no restart needed.</p>
+    <label for="proxy-urls">Proxy URLs (one per line, or comma-separated)</label>
+    <textarea id="proxy-urls" rows="3" placeholder="http://user:pass@host:port&#10;socks5://host:1080"
+      style="width:100%;padding:9px 11px;border-radius:8px;border:1px solid #303644;background:#0f1115;color:#e6e6e6;font-size:14px;font-family:inherit;resize:vertical;"></textarea>
+    <div class="row checkbox">
+      <input id="proxy-enable" type="checkbox" checked />
+      <label for="proxy-enable" style="margin:0">Route crawler traffic through these proxies</label>
+    </div>
+    <div class="row checkbox">
+      <input id="proxy-fallback" type="checkbox" checked />
+      <label for="proxy-fallback" style="margin:0">Fall back to a direct connection if no proxy is reachable</label>
+    </div>
+    <button id="proxy-save">Save proxy settings</button>
+  </div>
+
+  <div class="card">
     <h2>Retry missing / failed chapters</h2>
     <p class="hint">Re-fetches only the chapters that aren't downloaded yet for a novel —
       successfully downloaded chapters are skipped.</p>
@@ -249,6 +269,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
         .then(function (u) {
           document.getElementById("who").textContent = (u && (u.email || u.name)) || "user";
           loadActiveExports(u && u.id);
+          loadProxyConfig();
         })
         .catch(function () {
           // stale/invalid token
@@ -438,6 +459,43 @@ _TOOLS_HTML = """<!DOCTYPE html>
         pollExport(job.id);
       })
       .catch(function (e) { log("Export failed: " + e.message, "log-err"); })
+      .finally(function () { busy(btn, false); });
+  });
+
+  function loadProxyConfig() {
+    api("/job/proxy-config", { method: "GET" })
+      .then(function (cfg) {
+        document.getElementById("proxy-urls").value =
+          (cfg.proxy_urls || "").split(",").filter(Boolean).join("\n");
+        document.getElementById("proxy-enable").checked = !!cfg.enable_proxy;
+        document.getElementById("proxy-fallback").checked = !!cfg.allow_fallback_on_proxy_miss;
+      })
+      .catch(function () {});
+  }
+
+  document.getElementById("proxy-save").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var btn = this;
+    var body = {
+      proxy_urls: document.getElementById("proxy-urls").value.trim(),
+      enable_proxy: document.getElementById("proxy-enable").checked,
+      allow_fallback_on_proxy_miss: document.getElementById("proxy-fallback").checked
+    };
+    busy(btn, true);
+    api("/job/proxy-config", { method: "POST", body: JSON.stringify(body) })
+      .then(function (cfg) {
+        var n = (cfg.proxy_urls || "").split(",").filter(Boolean).length;
+        if (!cfg.enable_proxy) {
+          log("Proxy settings saved — routing is OFF (direct connection).", "log-ok");
+        } else if (n === 0) {
+          log("Proxy settings saved — no proxies set, using a direct connection.", "log-ok");
+        } else {
+          log("Proxy settings saved — " + n + " prox" + (n === 1 ? "y" : "ies") +
+            " active for the next export.", "log-ok");
+        }
+        loadProxyConfig();
+      })
+      .catch(function (e) { log("Save proxy settings failed: " + e.message, "log-err"); })
       .finally(function () { busy(btn, false); });
   });
 
