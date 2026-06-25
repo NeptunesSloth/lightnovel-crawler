@@ -488,9 +488,13 @@ class ExportSourceHandler(BaseHandler):
                         warm = getattr(crawler, "warm_up_clearance", None)
                         if not warmed_up and reason in ("blocked", "anti-bot") and callable(warm):
                             warmed_up = True
-                            self._set_extra(phase="solving-challenge")
-                            cleared = warm(source.url, self.signal)
-                            self._set_extra(phase="downloading", browser_cleared=bool(cleared))
+                            # browser warm-up is best-effort; never let it abort the run
+                            try:
+                                self._set_extra(phase="solving-challenge")
+                                cleared = warm(source.url, self.signal)
+                                self._set_extra(phase="downloading", browser_cleared=bool(cleared))
+                            except Exception as e:
+                                ctx.logger.warn(f"Cloudflare warm-up errored: {e}")
                     self._set_progress(len(complete) + len(partial) + len(skipped), total)
 
                     # apply any auto-tuned rate change before the next novel (safe
@@ -557,6 +561,7 @@ class ExportSourceHandler(BaseHandler):
             export_path = ctx.files.resolve(export_rel)
             export_path.parent.mkdir(parents=True, exist_ok=True)
             index_entries: List[Tuple[str, str, str]] = []
+            zipped = 0
             with zipfile.ZipFile(export_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 used: set = set()
                 for file in files:
@@ -567,11 +572,20 @@ class ExportSourceHandler(BaseHandler):
                         arcname = f"{file.stem} ({counter}){file.suffix}"
                         counter += 1
                     used.add(arcname)
-                    zf.write(file, arcname=arcname)
+                    # never let one unreadable/vanished file abort the whole zip —
+                    # that would throw away the entire run at the very last step
+                    try:
+                        zf.write(file, arcname=arcname)
+                    except Exception as e:
+                        ctx.logger.warn(f"Skipping {file} in export zip: {e}")
+                        continue
+                    zipped += 1
                     status = "incomplete" if file in partial_paths else "complete"
                     index_entries.append((arcname, file.stem, status))
                 # a clickable offline index of everything in the archive
                 zf.writestr("index.html", _build_index_html(domain, index_entries))
+            if not zipped:
+                raise HandlerException("Could not add any novel to the export zip")
 
             export_name = f"{domain}-novels.zip"
             saved_to = _copy_to_desktop(export_path, export_name)
@@ -581,7 +595,7 @@ class ExportSourceHandler(BaseHandler):
                 export_name=export_name,
                 export_size=export_path.stat().st_size,
                 saved_to=saved_to,
-                exported=len(files),
+                exported=zipped,
                 complete=len(complete),
                 incomplete=incomplete,
                 failed=failed,
@@ -592,7 +606,7 @@ class ExportSourceHandler(BaseHandler):
 
             size_mb = export_path.stat().st_size / (1024 * 1024)
             summary = (
-                f"{domain}: {len(files)} of {total} novel(s) exported "
+                f"{domain}: {zipped} of {total} novel(s) exported "
                 f"({len(complete)} complete, {incomplete} partial, {failed} failed, "
                 f"{len(skipped)} skipped) — {size_mb:.1f} MB."
             )
