@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import shutil
 from time import monotonic
+import traceback
 from typing import Callable, Dict, List, Optional, Set, Tuple, TypedDict
 from urllib.parse import quote
 import zipfile
@@ -76,6 +77,29 @@ _THROTTLE_HINTS = (
     "cloudflare",
     "forbidden",
 )
+
+
+_crash_logged = False
+
+
+def _log_crash(novel_url: str, error: BaseException) -> None:
+    """Write the first download crash's full traceback to a file for diagnosis.
+
+    At the GUI log level nothing is written to a console or log file, so a crash
+    like the WinError 6 handle bug leaves no stack trace to work from. Persist the
+    first one to ``<data dir>/export-crash.log`` so its exact origin is knowable.
+    """
+    global _crash_logged
+    if _crash_logged:
+        return
+    _crash_logged = True
+    try:
+        path = ctx.config.app.app_dir / "export-crash.log"
+        text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        path.write_text(f"Export crash for {novel_url}\n\n{text}\n", encoding="utf-8")
+        ctx.logger.warn(f"Export crash traceback written to {path}")
+    except Exception:
+        pass
 
 
 def _norm_title(title: str) -> str:
@@ -396,7 +420,18 @@ class ExportSourceHandler(BaseHandler):
                     except AbortedException:
                         raise
                     except Exception as e:
-                        last_error[novel_url] = f"{type(e).__name__}: {e}"[:200]
+                        # Append where it was raised (file:line) so the live UI
+                        # pinpoints the source instead of just the message — and
+                        # stash the full traceback for the crash log below.
+                        tb = e.__traceback__
+                        frames = traceback.extract_tb(tb)
+                        where = ""
+                        if frames:
+                            last = frames[-1]
+                            fname = os.path.basename(last.filename)
+                            where = f" @ {fname}:{last.lineno}"
+                        last_error[novel_url] = f"{type(e).__name__}: {e}{where}"[:200]
+                        _log_crash(novel_url, e)
                         ctx.logger.debug(f"Export attempt failed for {novel_url}: {e}")
                         result = {"file": None, "missing": 1, "duplicate": False}
 
