@@ -456,10 +456,17 @@ class ExportSourceHandler(BaseHandler):
                     else:
                         if file is not None:
                             partial[novel_url] = file  # keep the best version so far
-                        elif novel_url not in last_error:
-                            last_error[novel_url] = "No chapters found or ebook could not be built"
+                        # always record a reason (a partial novel has no error set
+                        # yet) so the lookups below can't raise KeyError
+                        if novel_url not in last_error:
+                            last_error[novel_url] = (
+                                "Some chapters are still missing"
+                                if file is not None
+                                else "No chapters found or ebook could not be built"
+                            )
                         next_pending.append(novel_url)
-                        throttled = _looks_throttled(last_error[novel_url])
+                        reason_text = last_error[novel_url]
+                        throttled = _looks_throttled(reason_text)
                         # a failure: slow down (harder if it looks like throttling)
                         bump = ADAPTIVE_STEP * (2 if throttled else 1)
                         adaptive_delay = min(ADAPTIVE_MAX, max(adaptive_delay, floor_delay) + bump)
@@ -468,11 +475,11 @@ class ExportSourceHandler(BaseHandler):
                             success_streak = 0
                             tuned_rps = 1.0 if tuned_rps <= 0 else max(RPS_MIN, tuned_rps / 2)
                         # surface the reason live so the UI shows *why*, not just "ch 0"
-                        reason = _classify_error(last_error[novel_url])
+                        reason = _classify_error(reason_text)
                         self._set_extra(
                             last_fail_title=cur_title[0] or novel_url,
                             last_fail_reason=reason,
-                            last_fail_detail=last_error[novel_url][:140],
+                            last_fail_detail=reason_text[:140],
                         )
                         # First time we hit anti-bot blocking, solve the Cloudflare
                         # challenge once in a browser and reuse the clearance for the
