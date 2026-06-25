@@ -20,6 +20,32 @@ def _stderr_is_interactive() -> bool:
         return False
 
 
+def repair_std_streams() -> None:
+    """Replace missing/broken std streams so writes can't raise WinError 6.
+
+    A windowed/frozen build (the desktop ``.exe``) has no console, so
+    ``sys.stdout``/``sys.stderr`` are ``None`` or backed by an invalid OS handle.
+    Anything that writes to them — ``tqdm.write`` (which ignores the bar's
+    ``disable`` flag), the logging fallback handler, stray ``print`` — then
+    raises ``OSError: [WinError 6] The handle is invalid`` and crashes downloads.
+    Point any unusable stream at the null device so those writes are harmless.
+    """
+    devnull = None
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        usable = False
+        if stream is not None:
+            try:
+                stream.flush()
+                usable = True
+            except Exception:
+                usable = False
+        if not usable:
+            if devnull is None:
+                devnull = open(os.devnull, "w")
+            setattr(sys, name, devnull)
+
+
 class Logger:
     def __init__(self) -> None:
         self._level = logging.NOTSET
@@ -49,6 +75,7 @@ class Logger:
             return False
 
     def setup(self, level: Union[int, str, None] = None) -> None:
+        repair_std_streams()
         if level is None:
             level = int(os.getenv("LNCRAWL_LOG_LEVEL", "0"))
         if isinstance(level, int):

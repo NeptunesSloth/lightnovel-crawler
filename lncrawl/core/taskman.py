@@ -220,7 +220,13 @@ class TaskManager:
                     signal.set()
                     raise
                 except Exception as e:
-                    bar.write(repr(e))
+                    # tqdm.write ignores the bar's disable flag and writes to the
+                    # console directly; guard it so a missing/invalid handle in a
+                    # windowed build can't turn a task error into a crash.
+                    try:
+                        bar.write(repr(e))
+                    except Exception:
+                        pass
                     yield None
                 finally:
                     bar.update()
