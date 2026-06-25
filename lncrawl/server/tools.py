@@ -442,7 +442,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
     return bits.length ? " [" + bits.join(", ") + "]" : "";
   }
 
-  function pollExport(id) {
+  function pollExport(id, fails) {
+    fails = fails || 0;
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
         var status = statusName(job.status);
@@ -465,7 +466,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
         }
         if (isActive(status)) {
-          setTimeout(function () { pollExport(id); }, 4000);
+          setTimeout(function () { pollExport(id, 0); }, 4000);
         } else if (status === "SUCCESS") {
           setExportControls(null, id);
           var extra = job.extra || {};
@@ -486,7 +487,18 @@ _TOOLS_HTML = """<!DOCTYPE html>
             ". Use the Resume last button to pick up where it left off.", "log-err");
         }
       })
-      .catch(function (e) { log("Status check failed: " + e.message, "log-err"); });
+      .catch(function (e) {
+        // a transient blip (busy server / connection hiccup) shouldn't freeze the
+        // progress view — the export keeps running server-side, so keep retrying
+        var n = fails + 1;
+        if (n <= 15) {
+          if (n === 1) log("Status check hiccup — still retrying… (" + e.message + ")", "log-err");
+          setTimeout(function () { pollExport(id, n); }, 8000);
+        } else {
+          log("Stopped checking status after repeated failures. The export may still be running — reopen Tools to reattach.", "log-err");
+          setExportControls(null, id);
+        }
+      });
   }
 
   document.getElementById("export-stop").addEventListener("click", function () {
