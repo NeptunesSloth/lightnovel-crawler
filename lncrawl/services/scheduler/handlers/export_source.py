@@ -124,6 +124,8 @@ def _classify_error(reason: str) -> str:
         return "timeout"
     if "connection" in low or "ssl" in low or "proxy" in low:
         return "connection"
+    if "missing" in low:
+        return "incomplete"
     if "no chapters" in low or "could not be built" in low or "no content" in low:
         return "no content"
     return "error"
@@ -456,14 +458,12 @@ class ExportSourceHandler(BaseHandler):
                     else:
                         if file is not None:
                             partial[novel_url] = file  # keep the best version so far
-                        # always record a reason (a partial novel has no error set
-                        # yet) so the lookups below can't raise KeyError
-                        if novel_url not in last_error:
-                            last_error[novel_url] = (
-                                "Some chapters are still missing"
-                                if file is not None
-                                else "No chapters found or ebook could not be built"
-                            )
+                            # a partial novel has no exception reason; always refresh
+                            # it with the latest missing count so retries that fill in
+                            # chapters report the current number, not a stale one
+                            last_error[novel_url] = f"{result['missing']} chapter(s) still missing"
+                        elif novel_url not in last_error:
+                            last_error[novel_url] = "No chapters found or ebook could not be built"
                         next_pending.append(novel_url)
                         reason_text = last_error[novel_url]
                         throttled = _looks_throttled(reason_text)
@@ -520,7 +520,6 @@ class ExportSourceHandler(BaseHandler):
             for novel_url in pending:
                 if novel_url in partial:
                     files.append(partial[novel_url])
-            incomplete = sum(1 for u in pending if u in partial)
             failed = sum(1 for u in pending if u not in partial)
 
             # tally the failure reasons so the UI can show *why* novels failed
@@ -587,6 +586,12 @@ class ExportSourceHandler(BaseHandler):
             if not zipped:
                 raise HandlerException("Could not add any novel to the export zip")
 
+            # report counts from what actually made it into the zip, so a file
+            # that couldn't be written isn't silently counted as complete
+            zipped_complete = sum(1 for _, _, s in index_entries if s == "complete")
+            zipped_incomplete = len(index_entries) - zipped_complete
+            zip_skipped = len(files) - zipped
+
             export_name = f"{domain}-novels.zip"
             saved_to = _copy_to_desktop(export_path, export_name)
 
@@ -596,10 +601,11 @@ class ExportSourceHandler(BaseHandler):
                 export_size=export_path.stat().st_size,
                 saved_to=saved_to,
                 exported=zipped,
-                complete=len(complete),
-                incomplete=incomplete,
+                complete=zipped_complete,
+                incomplete=zipped_incomplete,
                 failed=failed,
                 skipped=len(skipped),
+                zip_skipped=zip_skipped,
                 total_novels=total,
                 fail_reasons=fail_reasons,
             )
@@ -607,9 +613,11 @@ class ExportSourceHandler(BaseHandler):
             size_mb = export_path.stat().st_size / (1024 * 1024)
             summary = (
                 f"{domain}: {zipped} of {total} novel(s) exported "
-                f"({len(complete)} complete, {incomplete} partial, {failed} failed, "
+                f"({zipped_complete} complete, {zipped_incomplete} partial, {failed} failed, "
                 f"{len(skipped)} skipped) — {size_mb:.1f} MB."
             )
+            if zip_skipped:
+                summary += f" {zip_skipped} could not be added to the zip."
             if saved_to:
                 summary += " Saved to your Desktop."
             self._notify_finish(summary)
