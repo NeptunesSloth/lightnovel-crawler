@@ -42,6 +42,11 @@ _TOOLS_LAUNCHER = """<script>(function(){
 async def lifespan(_app: FastAPI):
     try:
         ctx.setup()
+        # The server reports progress through the web UI, never a console bar.
+        # Drawing a tqdm bar here is pointless and, in the windowed desktop build
+        # whose console handle goes invalid after launch, raises
+        # "OSError: [WinError 6] The handle is invalid" mid-download. Force it off.
+        ctx.logger.progress_bar = False
         ctx.mail.start()
         ctx.scheduler.start()
         ctx.recommendations.warmup()
