@@ -5,6 +5,21 @@ import sys
 from typing import Union
 
 
+def _stderr_is_interactive() -> bool:
+    """Whether stderr is a real terminal we can safely draw a progress bar on.
+
+    In a windowed/frozen build (no console) stderr is missing or backed by an
+    invalid handle. Drawing a tqdm progress bar there raises
+    ``OSError: [WinError 6] The handle is invalid`` on Windows, which would crash
+    every chapter/image download. Only show bars on an actual TTY.
+    """
+    try:
+        stream = getattr(sys, "stderr", None)
+        return bool(stream) and stream.isatty()
+    except Exception:
+        return False
+
+
 class Logger:
     def __init__(self) -> None:
         self._level = logging.NOTSET
@@ -58,7 +73,7 @@ class Logger:
                 datefmt="[%X]",
                 force=True,
             )
-        self.progress_bar = not self.is_info
+        self.progress_bar = (not self.is_info) and _stderr_is_interactive()
 
     def log(self, level: int, *args, **kwargs) -> None:
         stacklevel = kwargs.pop("stacklevel", 0) + 2
