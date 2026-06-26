@@ -30,6 +30,7 @@ job_failed_literal = sq.cast(sq.literal(JobStatus.FAILED.name), job_status_type)
 job_success_literal = sq.cast(sq.literal(JobStatus.SUCCESS.name), job_status_type)
 job_running_literal = sq.cast(sq.literal(JobStatus.RUNNING.name), job_status_type)
 job_canceled_literal = sq.cast(sq.literal(JobStatus.CANCELED.name), job_status_type)
+job_pending_literal = sq.cast(sq.literal(JobStatus.PENDING.name), job_status_type)
 
 
 class JobService:
@@ -811,6 +812,28 @@ class JobService:
     # -------------------------------------------------------------------------
     #                              CANCEL Jobs
     # -------------------------------------------------------------------------
+
+    def requeue_stale_running(self) -> int:
+        """Requeue jobs left RUNNING by a previous process (the app closed mid-run).
+
+        Called once at scheduler startup, before any worker is launched, so every
+        RUNNING job is necessarily stale — nothing is executing it. Resetting them
+        to PENDING lets the runner re-claim and resume them (a source export skips
+        already-finished novels via its manifest). Without this, an export orphaned
+        by closing the app stays RUNNING forever, displaying its last frozen state.
+        Returns the number requeued.
+        """
+        with ctx.db.session() as sess:
+            result = sess.exec(
+                sq.update(Job)
+                .where(sq.col(Job.status) == JobStatus.RUNNING)
+                .values(status=job_pending_literal)
+            )
+            sess.commit()
+            count = getattr(result, "rowcount", 0) or 0
+        if count:
+            ctx.logger.info(f"Requeued {count} stale running job(s) on startup")
+        return count
 
     def cancel(self, job_id: str, who: str = "admin") -> None:
         with ctx.db.session() as sess:
