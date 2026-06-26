@@ -47,6 +47,13 @@ class JobScheduler:
         if self.running:
             return
         self._signal = Event()
+        # Recover jobs left RUNNING by a previous process (app closed mid-run) so
+        # they resume instead of sitting orphaned. Safe here: no worker is running
+        # yet, so every RUNNING job is stale.
+        try:
+            ctx.jobs.requeue_stale_running()
+        except Exception:
+            logger.error("Failed to requeue stale running jobs", exc_info=True)
         for _ in range(ctx.config.crawler.runner_concurrency):
             self._thread(run_jobs, ctx.config.crawler.runner_cooldown)
         self._thread(run_scrubber, ctx.config.crawler.scrubber_cooldown)
