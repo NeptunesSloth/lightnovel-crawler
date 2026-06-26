@@ -101,7 +101,25 @@ def gather_excluded_modules():
     return [flag for mod in exclude for flag in ["--exclude-module", mod]]
 
 
+def write_build_stamp():
+    """Stamp the current commit + time into lncrawl/BUILD so the running app can
+    show exactly which build it is (the whole lncrawl/ dir is bundled as data)."""
+    from datetime import datetime, timezone
+    import subprocess
+
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+    except Exception:
+        sha = "unknown"
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    (ROOT / "lncrawl" / "BUILD").write_text(f"{sha} ({stamp})", encoding="utf-8")
+    print(f"🔖 Build stamp: {sha} ({stamp})")
+
+
 def package():
+    write_build_stamp()
     command = build_command()
 
     print("🔧 Running PyInstaller:")

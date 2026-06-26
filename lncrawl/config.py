@@ -269,6 +269,14 @@ class AppConfig(_Section):
         return (ROOT_DIR / "VERSION").read_text(encoding="utf8").strip()
 
     @cached_property
+    def build(self) -> str:
+        """Build identifier (commit + time) stamped at package time, else 'dev'."""
+        build_file = ROOT_DIR / "BUILD"
+        if build_file.is_file():
+            return build_file.read_text(encoding="utf8").strip()
+        return "dev"
+
+    @cached_property
     def app_dir(self) -> Path:
         return APP_DIR
 
