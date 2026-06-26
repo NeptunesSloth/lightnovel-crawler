@@ -1,3 +1,4 @@
+from concurrent.futures import FIRST_COMPLETED, wait as _wait_futures
 from html import escape
 import json
 import os
@@ -60,6 +61,14 @@ DEFAULT_EXPORT_WORKERS = 1  # crawler default — downloads run one at a time
 RPS_MIN = 0.2  # slowest auto-tuned rate (1 request / 5s)
 RPS_MAX = 5.0  # fastest auto-tuned rate
 RPS_RAISE_AFTER = 3  # consecutive clean novels before nudging the rate up
+
+# Per-novel download watchdog. A single hung request through the single worker can
+# otherwise stall a novel — and the whole run — indefinitely. If nothing completes
+# within STALL_TIMEOUT, the worker is assumed stuck (the pool is refreshed); if too
+# many chapter requests fail back-to-back, the source is blocking and the novel is
+# abandoned (it stays partial and is retried/resumed later).
+STALL_TIMEOUT = 120.0  # seconds with no completion before giving up on a novel
+MAX_CONSECUTIVE_FAILS = 10  # back-to-back request failures before abandoning a novel
 
 # Substrings in a failure reason that suggest the source is rate-limiting/blocking
 # us (as opposed to a parse error), so we should back off harder.
@@ -137,6 +146,59 @@ def _apply_rate(crawler, rps: float) -> None:
         crawler.taskman.init_executor(ratelimit=rps)
     else:
         crawler.taskman.init_executor(workers=DEFAULT_EXPORT_WORKERS)
+
+
+def _refresh_executor(crawler) -> None:
+    """Recreate the download worker pool, preserving the current rate, so a worker
+    stuck on a hung request is abandoned instead of blocking every later novel."""
+    limiter = getattr(crawler.taskman, "_limiter", None)
+    period = getattr(limiter, "period", 0) if limiter is not None else 0
+    if period and period > 0:
+        crawler.taskman.init_executor(ratelimit=1.0 / period)
+    else:
+        crawler.taskman.init_executor(workers=DEFAULT_EXPORT_WORKERS)
+
+
+def _drain(crawler, futures, on_tick, signal) -> int:
+    """Resolve download futures with a stall watchdog.
+
+    Returns how many futures were processed. Guards against the two ways a bulk
+    run gets stuck on one novel: a hung request (nothing completes within
+    ``STALL_TIMEOUT`` → the pool is refreshed and the rest abandoned) and a source
+    refusing request after request (``MAX_CONSECUTIVE_FAILS`` back-to-back
+    failures → the rest is abandoned). Remaining work is cancelled; the chapters
+    that did download are kept (the novel becomes partial and is retried/resumed).
+    """
+    pending = set(futures)
+    done_count = 0
+    consecutive_fails = 0
+    while pending:
+        if signal.is_set():
+            for f in pending:
+                f.cancel()
+            raise AbortedException()
+        done, pending = _wait_futures(pending, timeout=STALL_TIMEOUT, return_when=FIRST_COMPLETED)
+        if not done:
+            # nothing finished in STALL_TIMEOUT — the single worker is stuck on a
+            # hung request; drop the rest and refresh the pool for the next novel
+            for f in pending:
+                f.cancel()
+            _refresh_executor(crawler)
+            break
+        for f in done:
+            done_count += 1
+            try:
+                f.result()
+                consecutive_fails = 0
+            except Exception:
+                consecutive_fails += 1
+        if on_tick:
+            on_tick(done_count)
+        if consecutive_fails >= MAX_CONSECUTIVE_FAILS:
+            for f in pending:
+                f.cancel()
+            break
+    return done_count
 
 
 def _build_index_html(domain: str, entries: List[Tuple[str, str, str]]) -> str:
@@ -695,15 +757,17 @@ def _download_novel(
     c_total = len(chapter_futures)
     if on_novel:
         on_novel(novel.title, 0, c_total)
-    c_done = 0
-    last_emit = monotonic()
-    for _ in crawler.taskman.resolve(chapter_futures, desc="Chapters", unit=" c"):
-        c_done += 1
+    last_emit = [monotonic()]
+
+    def _tick(done: int) -> None:
         # report at least every ~2s (and at the end) so the UI reflects real
         # movement instead of looking frozen on a big, slow novel
-        if on_novel and (c_done == c_total or monotonic() - last_emit >= 2.0):
-            last_emit = monotonic()
-            on_novel(novel.title, c_done, c_total)
+        if on_novel and (done == c_total or monotonic() - last_emit[0] >= 2.0):
+            last_emit[0] = monotonic()
+            on_novel(novel.title, done, c_total)
+
+    # drain with the stall watchdog so one hung request can't freeze the run
+    _drain(crawler, chapter_futures, _tick, signal)
 
     # download chapter images in one batch (covers manga pages and inline art);
     # one query for the whole novel instead of one per chapter
@@ -713,7 +777,7 @@ def _download_novel(
             crawler.taskman.submit_task(ctx.crawler.fetch_image, user_id, iid, custom=crawler)
             for iid in sorted(set(image_ids))
         ]
-        crawler.taskman.resolve_futures(image_futures, desc="Images", unit=" img")
+        _drain(crawler, image_futures, None, signal)
 
     # how many of the targeted chapters are still not downloaded (drives retries)
     done_ids = set(ctx.chapters.list_ids(novel_id=novel.id, is_crawled=True))
