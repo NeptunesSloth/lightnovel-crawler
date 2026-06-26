@@ -15,6 +15,7 @@ from .backend_baidu import BaiduTranslate
 from .backend_bing import BingTranslate
 from .backend_google import GoogleClient5Translate, GoogleGtxTranslate, GoogleMobileTranslate
 from .backend_lingva import LingvaTranslate
+from .backend_openai import OpenAILLMTranslate
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,9 @@ class TranslationService:
     def __init__(self) -> None:
         self._failing: Dict[BackendBase, float] = {}
         self._backends: List[BackendBase] = [
+            # preferred when an OpenAI key is set; otherwise it reports disabled
+            # and the classic engines below are used
+            OpenAILLMTranslate(),
             BingTranslate(),
             GoogleMobileTranslate(),
             LingvaTranslate(),

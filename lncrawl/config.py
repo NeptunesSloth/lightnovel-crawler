@@ -389,6 +389,35 @@ class TranslatorConfig(_Section):
     def baidu_secret_key(self, v: str) -> None:
         self._set("baidu_secret_key", v)
 
+    @property
+    def llm_model(self) -> str:
+        """AI Translation Model.
+
+        Chat model used for high-quality LLM translation (far better than the
+        Google/Bing engines). Requires an OpenAI API key (App Settings → OpenAI
+        Key). Used only when a key is set; otherwise the classic engines are used.
+        Default is `gpt-4o-mini`. Set blank to disable LLM translation.
+        """
+        return self._get("llm_model", "gpt-4o-mini")
+
+    @llm_model.setter
+    def llm_model(self, v: str) -> None:
+        self._set("llm_model", v)
+
+    @property
+    def llm_base_url(self) -> str:
+        """AI Translation API Base URL.
+
+        Base URL for an OpenAI-compatible endpoint (leave blank for OpenAI). Set
+        this to use a local or alternative provider (e.g. an Ollama/LM Studio
+        server) with the same OpenAI key field.
+        """
+        return self._get("llm_base_url", "")
+
+    @llm_base_url.setter
+    def llm_base_url(self, v: str) -> None:
+        self._set("llm_base_url", v)
+
 
 # ------------------------------------------------------------------ #
 #                          Calibre Section                           #
