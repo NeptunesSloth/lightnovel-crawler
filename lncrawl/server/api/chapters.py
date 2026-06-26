@@ -1,14 +1,27 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, Path, Query, Security
+from fastapi.responses import FileResponse
 
 from ...context import ctx
 from ...dao import ActivityType, Chapter, ChapterImage, Job, LanguageCode, User
+from ...exceptions import ServerErrors
 from ..models import ReadChapterResponse
 from ..security import ensure_user
 
 # The root router
 router = APIRouter()
+
+
+@router.get("/image/{image_id}", summary="Serve a chapter image file (for the reader)")
+def serve_chapter_image(
+    image_id: str = Path(),
+) -> FileResponse:
+    image = ctx.images.get(image_id)
+    path = ctx.files.resolve(image.image_file)
+    if not path.is_file():
+        raise ServerErrors.no_such_file
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @router.get("/{chapter_id}", summary="Returns a chapter details")

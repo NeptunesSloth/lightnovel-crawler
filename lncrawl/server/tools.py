@@ -100,6 +100,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
 <body>
 <div class="wrap">
   <a id="back-link" href="/" class="back">&larr; Back to app</a>
+  <a id="reader-link" href="/reader" class="back" style="margin-left:14px">📖 Open Reader</a>
   <h1>LNCrawl Tools</h1>
   <p class="sub">Lightweight power-user actions wired straight to the REST API.</p>
 
@@ -281,10 +282,13 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
   function token() { return localStorage.getItem(KEY) || ""; }
 
-  // Point "Back to app" at the SPA, carrying the session so it stays signed in.
+  // Point "Back to app" / "Open Reader" at their pages, carrying the session.
   (function () {
+    var tok = token();
     var back = document.getElementById("back-link");
-    if (back && token()) back.href = "/?authToken=" + encodeURIComponent(token());
+    if (back && tok) back.href = "/?authToken=" + encodeURIComponent(tok);
+    var reader = document.getElementById("reader-link");
+    if (reader && tok) reader.href = "/reader?authToken=" + encodeURIComponent(tok);
   })();
 
   function log(msg, cls) {
