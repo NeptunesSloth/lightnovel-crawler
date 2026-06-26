@@ -65,6 +65,15 @@ _TOOLS_HTML = """<!DOCTYPE html>
   button.secondary { background: #2a2f3a; color: #cbd2dd; }
   button.secondary:hover { background: #343a47; }
   button:disabled { opacity: .55; cursor: not-allowed; }
+  button.preset { margin-top: 0; padding: 7px 12px; font-size: 13px; }
+  button.preset.active { background: #3b82f6; color: #fff; }
+  #library-list { font-size: 13px; }
+  .libitem {
+    display: flex; justify-content: space-between; gap: 10px; align-items: center;
+    padding: 8px 2px; border-bottom: 1px solid #20242d;
+  }
+  .libitem a { color: #7aa2ff; text-decoration: none; cursor: pointer; }
+  .libitem a:hover { text-decoration: underline; }
   .muted { color: #8b93a1; font-size: 13px; }
   #log {
     background: #0b0d11; border: 1px solid #262b36; border-radius: 10px;
@@ -149,6 +158,13 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <input id="exp-limit" type="text" inputmode="numeric" placeholder="blank = all" />
       </div>
     </div>
+    <label style="margin-top:12px">Speed</label>
+    <div class="row" id="exp-presets">
+      <button type="button" class="preset secondary" data-preset="fast">⚡ Fast</button>
+      <button type="button" class="preset secondary" data-preset="balanced">⚖️ Balanced</button>
+      <button type="button" class="preset secondary" data-preset="gentle">🐢 Gentle</button>
+      <span class="muted" id="preset-note" style="align-self:center">Balanced — good default</span>
+    </div>
     <details>
       <summary>Advanced options — pacing, retries, limits</summary>
       <div class="row">
@@ -191,9 +207,19 @@ _TOOLS_HTML = """<!DOCTYPE html>
     </details>
     <div class="row" style="margin-top:14px">
       <button id="export-btn">Download all &rarr; ZIP</button>
+      <button id="export-test" class="secondary" style="margin-top:14px">🩺 Test source</button>
       <button id="export-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop</button>
       <button id="export-resume" class="secondary hidden" style="margin-top:14px">&#9654; Resume last</button>
     </div>
+  </div>
+
+  <div class="card">
+    <details class="card-fold" id="library-card">
+    <summary>My exports (library)</summary>
+    <p class="hint">Past source exports on this machine. Click to re-download the ZIP.</p>
+    <div id="library-list"><span class="muted">Sign in to see your exports.</span></div>
+    <button id="library-refresh" class="secondary">Refresh</button>
+    </details>
   </div>
 
   <div class="card">
@@ -303,7 +329,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
       api("/auth/me", { method: "GET" })
         .then(function (u) {
           document.getElementById("who").textContent = (u && (u.email || u.name)) || "user";
+          window._lncrawlUserId = u && u.id;
           loadActiveExports(u && u.id);
+          loadLibrary(u && u.id);
           loadNotifyConfig();
         })
         .catch(function () {
@@ -434,7 +462,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
           log("Site is blocking requests — solving the Cloudflare challenge in a browser…", "log-info");
         } else if (status === "RUNNING" && ex.phase === "downloading" && ex.current_title) {
           var ch = ex.current_total_chapters ? " — ch " + (ex.current_chapters || 0) + "/" + ex.current_total_chapters : "";
-          log("Downloading " + job.done + "/" + job.total + ": " + ex.current_title + ch + rateNote(ex), "log-info");
+          var resumed = ex.resumed ? " · " + ex.resumed + " reused from last run" : "";
+          log("Downloading " + job.done + "/" + job.total + ": " + ex.current_title + ch + rateNote(ex) + resumed, "log-info");
           if (ex.last_fail_title && ex.last_fail_reason) {
             log("  ⚠ last issue: " + ex.last_fail_title + " — " + ex.last_fail_reason +
               (ex.last_fail_detail ? " (" + ex.last_fail_detail + ")" : ""), "log-err");
@@ -460,6 +489,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           });
           if (extra.saved_to) log("Saved to Desktop: " + extra.saved_to, "log-ok");
           if (extra.export_file) downloadBlob(id, extra.export_name);
+          loadLibrary(window._lncrawlUserId);
         } else {
           setExportControls(null, id);
           log("Export ended: " + status + (job.error ? " — " + job.error : "") +
@@ -519,19 +549,16 @@ _TOOLS_HTML = """<!DOCTYPE html>
       .catch(function () {});
   }
 
-  document.getElementById("export-btn").addEventListener("click", function () {
-    if (!requireAuth()) return;
-    var btn = this;
+  function buildExportBody() {
     var url = document.getElementById("exp-url").value.trim();
-    var format = document.getElementById("exp-format").value;
+    if (!url) { log("Enter a source URL.", "log-err"); return null; }
+    var body = { url: url, format: document.getElementById("exp-format").value };
     var limitRaw = document.getElementById("exp-limit").value.trim();
-    var retriesRaw = document.getElementById("exp-retries").value.trim();
-    if (!url) { log("Enter a source URL.", "log-err"); return; }
-    var body = { url: url, format: format };
     if (limitRaw) {
       var limit = parseInt(limitRaw, 10);
       if (!isNaN(limit) && limit > 0) body.limit = limit;
     }
+    var retriesRaw = document.getElementById("exp-retries").value.trim();
     if (retriesRaw) {
       var retries = parseInt(retriesRaw, 10);
       if (!isNaN(retries) && retries >= 0) body.retries = retries;
@@ -555,8 +582,16 @@ _TOOLS_HTML = """<!DOCTYPE html>
     body.dedupe = document.getElementById("exp-dedupe").checked;
     body.resume = document.getElementById("exp-resume").checked;
     body.auto_tune = document.getElementById("exp-autotune").checked;
+    return body;
+  }
+
+  document.getElementById("export-btn").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var btn = this;
+    var body = buildExportBody();
+    if (!body) return;
     busy(btn, true);
-    log("Starting full export of " + url + " (this can take a while) …", "log-info");
+    log("Starting full export of " + body.url + " (this can take a while) …", "log-info");
     api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })
       .then(function (job) {
         log("Export job created: " + job.id, "log-ok");
@@ -564,6 +599,88 @@ _TOOLS_HTML = """<!DOCTYPE html>
       })
       .catch(function (e) { log("Export failed: " + e.message, "log-err"); })
       .finally(function () { busy(btn, false); });
+  });
+
+  // Speed presets — one click sets the pacing fields instead of guessing numbers.
+  var PRESETS = {
+    fast:     { rps: "",     polite: false, retries: "3", note: "Fast — no throttle (friendly sites)" },
+    balanced: { rps: "1",    polite: true,  retries: "3", note: "Balanced — good default" },
+    gentle:   { rps: "0.25", polite: true,  retries: "5", note: "Gentle — for sites that block hard" }
+  };
+  function applyPreset(name) {
+    var p = PRESETS[name]; if (!p) return;
+    document.getElementById("exp-rps").value = p.rps;
+    document.getElementById("exp-polite").checked = p.polite;
+    document.getElementById("exp-retries").value = p.retries;
+    document.getElementById("preset-note").textContent = p.note;
+    var btns = document.querySelectorAll("#exp-presets .preset");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle("active", btns[i].getAttribute("data-preset") === name);
+    }
+  }
+  (function () {
+    var btns = document.querySelectorAll("#exp-presets .preset");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].addEventListener("click", function () { applyPreset(this.getAttribute("data-preset")); });
+    }
+    applyPreset("balanced");
+  })();
+
+  // Test source — a tiny capped export (1 novel, 3 chapters) to confirm a source
+  // actually works with the current settings before committing to a big run.
+  document.getElementById("export-test").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var btn = this;
+    var body = buildExportBody();
+    if (!body) return;
+    body.limit = 1; body.max_chapters = 3; body.dedupe = false; body.resume = false;
+    body.retries = 0; body.discovery_minutes = 2;
+    busy(btn, true);
+    log("Testing " + body.url + " — fetching 1 novel / 3 chapters (saves a small test zip)…", "log-info");
+    api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })
+      .then(function (job) { log("Test started: " + job.id, "log-ok"); pollExport(job.id); })
+      .catch(function (e) { log("Test failed to start: " + e.message, "log-err"); })
+      .finally(function () { busy(btn, false); });
+  });
+
+  function fmtSize(bytes) {
+    if (!bytes) return "";
+    var mb = bytes / (1024 * 1024);
+    return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : mb.toFixed(1) + " MB";
+  }
+  function loadLibrary(userId) {
+    var box = document.getElementById("library-list");
+    var q = "/jobs?type=53&status=2&limit=25" + (userId ? "&user_id=" + encodeURIComponent(userId) : "");
+    api(q, { method: "GET" })
+      .then(function (res) {
+        var items = ((res && res.items) || []).filter(function (j) {
+          return j.extra && j.extra.export_file;
+        });
+        if (!items.length) { box.innerHTML = "<span class='muted'>No exports yet.</span>"; return; }
+        box.innerHTML = "";
+        items.forEach(function (j) {
+          var ex = j.extra || {};
+          var row = document.createElement("div");
+          row.className = "libitem";
+          var left = document.createElement("a");
+          left.textContent = (ex.domain || "export") +
+            "  ·  " + (ex.exported || 0) + " novels" +
+            (ex.export_size ? "  ·  " + fmtSize(ex.export_size) : "");
+          left.addEventListener("click", function () { downloadBlob(j.id, ex.export_name); });
+          var right = document.createElement("span");
+          right.className = "muted";
+          right.textContent = "↓ download";
+          right.style.cursor = "pointer";
+          right.addEventListener("click", function () { downloadBlob(j.id, ex.export_name); });
+          row.appendChild(left); row.appendChild(right);
+          box.appendChild(row);
+        });
+      })
+      .catch(function () { box.innerHTML = "<span class='muted'>Couldn't load exports.</span>"; });
+  }
+  document.getElementById("library-refresh").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    loadLibrary(window._lncrawlUserId);
   });
 
   function loadNotifyConfig() {

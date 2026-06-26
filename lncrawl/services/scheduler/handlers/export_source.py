@@ -416,6 +416,8 @@ class ExportSourceHandler(BaseHandler):
                     f"Resuming {domain}: {len(complete)} novel(s) already done, "
                     f"{len(pending)} to go"
                 )
+                # surface how many were reused so the UI can show resume working
+                self._set_extra(resumed=len(complete), total_novels=total)
                 self._set_progress(len(complete), total)
 
             # Adaptive pacing between novels (see ADAPTIVE_* constants).
