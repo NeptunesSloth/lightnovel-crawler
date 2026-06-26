@@ -255,7 +255,27 @@ class Sources:
         parser: Optional[str] = None,
     ) -> Crawler:
         domain = self.get_domain(url)
-        source = self.get_source(domain)
+        try:
+            source = self.get_source(domain)
+        except Exception:
+            # No hand-written crawler for this domain. Fall back to the AI
+            # universal crawler when an OpenAI key is configured; otherwise
+            # surface the original "no crawler" error.
+            from ...core import ai_extract
+
+            if not ai_extract.is_available():
+                raise
+            from ...core.ai_crawler import AIUniversalCrawler
+
+            ctx.logger.info(f"No registered crawler for {domain}; using AI crawler")
+            crawler = AIUniversalCrawler(
+                origin=f"https://{domain}",
+                workers=workers,
+                parser=parser,
+            )
+            crawler.initialize()
+            return crawler
+
         cid = source.crawler_id
         constructor = self.crawlers[cid]
 
