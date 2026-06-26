@@ -9,7 +9,7 @@ markup is embedded as a string so it always ships with the wheel/exe.
 """
 
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 router = APIRouter()
 
@@ -19,7 +19,14 @@ _READER_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0f1115" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="LNCrawl" />
+<link rel="manifest" href="/reader/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/reader/icon.svg" />
 <title>LNCrawl · Reader</title>
 <style>
   :root { color-scheme: dark; }
@@ -84,6 +91,23 @@ _READER_HTML = """<!DOCTYPE html>
     margin: 0 16px 8px 0; background: #0b0d11; border: 1px solid #262b36;
   }
   #novel-synopsis { color: #cbd2dd; font-size: 14px; margin: 6px 0; }
+  .shelf-title { font-size: 14px; color: #cbd2dd; margin: 2px 0 8px; }
+  .shelf { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 6px; }
+  .shelf .mini { flex: 0 0 104px; cursor: pointer; }
+  .shelf .mini img {
+    width: 104px; height: 148px; object-fit: cover; border-radius: 6px; display: block;
+    background: #0b0d11; border: 1px solid #262b36;
+  }
+  .shelf .mini .mt {
+    font-size: 12px; color: #cbd2dd; margin-top: 5px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .progress { height: 4px; background: #20242d; border-radius: 999px; margin-top: 6px; overflow: hidden; }
+  .progress > span { display: block; height: 100%; background: #3b82f6; }
+  .badge {
+    font-size: 10px; color: #aab2c0; background: #20242d; border: 1px solid #2a2f3a;
+    border-radius: 4px; padding: 1px 6px; margin-left: 7px; vertical-align: middle;
+  }
   .chap {
     display: flex; justify-content: space-between; gap: 10px; align-items: center;
     padding: 9px 6px; border-bottom: 1px solid #20242d; cursor: pointer;
@@ -103,6 +127,24 @@ _READER_HTML = """<!DOCTYPE html>
   .back:hover { text-decoration: underline; }
   #auth { max-width: 360px; margin: 60px auto; }
   label { display:block; font-size: 13px; color: #aab2c0; margin: 10px 0 4px; }
+
+  /* ---- Mobile / small screens ---- */
+  @media (max-width: 640px) {
+    .topbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); }
+    .topbar h1 { font-size: 15px; }
+    #search-wrap { order: 3; flex: 1 1 100%; max-width: none; }
+    .wrap { padding: 14px 12px 90px; }
+    button { padding: 10px 14px; }            /* larger tap targets */
+    .back { padding: 6px 2px; }
+    #novel-cover { width: 92px; height: 132px; margin: 0 12px 6px 0; }
+    .libcard .cover { width: 56px; height: 80px; flex-basis: 56px; }
+    #reader-content { font-size: 17px; }
+    .reader-nav { padding: 10px 0 max(10px, env(safe-area-inset-bottom)); }
+    .reader-nav button { padding: 12px 16px; }
+  }
+  @media (hover: none) {
+    .card:active { border-color: #3b4250; }    /* touch feedback */
+  }
 </style>
 </head>
 <body>
@@ -128,6 +170,10 @@ _READER_HTML = """<!DOCTYPE html>
   </div>
 
   <div id="view-library">
+    <div id="lib-continue-wrap" class="hidden">
+      <div class="shelf-title">⏵ Continue reading</div>
+      <div id="lib-continue" class="shelf"></div>
+    </div>
     <div class="toolbar">
       <select id="lib-sort" title="Sort">
         <option value="recent">Recently added</option>
@@ -173,8 +219,9 @@ _READER_HTML = """<!DOCTYPE html>
 <script>
 (function () {
   var KEY = "lncrawl_token";
-  var POS = "lncrawl_reader_pos";    // { novelId: chapterId }
+  var POS = "lncrawl_reader_pos";    // { novelId: {id, serial, ts} | legacy chapterId string }
   var FONT = "lncrawl_reader_font";
+  var VIEW = "lncrawl_reader_view";  // { sort, cat }
 
   (function () {
     var params = new URLSearchParams(window.location.search);
@@ -207,16 +254,28 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   function loadPos() { try { return JSON.parse(localStorage.getItem(POS) || "{}"); } catch (e) { return {}; } }
-  function savePos(novelId, chapterId) {
-    var p = loadPos(); p[novelId] = chapterId; localStorage.setItem(POS, JSON.stringify(p));
+  function posOf(novelId) {
+    var v = loadPos()[novelId];
+    if (!v) return null;
+    if (typeof v === "string") return { id: v, serial: null, ts: 0 };  // legacy
+    return v;
+  }
+  function savePos(novelId, chapterId, serial) {
+    var p = loadPos();
+    p[novelId] = { id: chapterId, serial: (serial != null ? serial : null), ts: Date.now() };
+    localStorage.setItem(POS, JSON.stringify(p));
+  }
+  function loadView() { try { return JSON.parse(localStorage.getItem(VIEW) || "{}"); } catch (e) { return {}; } }
+  function saveView() {
+    localStorage.setItem(VIEW, JSON.stringify({ sort: els["lib-sort"].value, cat: lib.cat }));
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-sort","lib-cats","lib-status","lib-list","view-novel",
-   "novel-cover","novel-title","novel-meta","novel-tags","novel-synopsis","continue-btn","heal-btn",
-   "heal-msg","chap-list","chap-more-wrap","chap-more","view-reader","reader-title","reader-content",
-   "prev-btn","next-btn","reader-pos","font-up","font-dn","auth","email","password","login",
-   "auth-msg","search-wrap"].forEach(function (id) {
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-cats",
+   "lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
+   "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
+   "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
+   "font-dn","auth","email","password","login","auth-msg","search-wrap"].forEach(function (id) {
     els[id] = document.getElementById(id);
   });
 
@@ -247,9 +306,43 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-list"].innerHTML = "";
     api("/novels?limit=100&search=" + encodeURIComponent(q || "")).then(function (res) {
       lib.all = (res && res.items) || [];
+      renderContinue();
       renderCategories();
       renderLibrary();
     }).catch(function (e) { els["lib-status"].textContent = "Couldn't load library: " + e.message; });
+  }
+
+  // A "Continue reading" shelf of the most recently opened novels.
+  function renderContinue() {
+    var byId = {}; lib.all.forEach(function (n) { byId[n.id] = n; });
+    var recent = [];
+    var posMap = loadPos();
+    Object.keys(posMap).forEach(function (id) {
+      var n = byId[id]; var pe = posOf(id);
+      if (n && pe) recent.push({ n: n, pe: pe });
+    });
+    recent.sort(function (a, b) { return (b.pe.ts || 0) - (a.pe.ts || 0); });
+    recent = recent.slice(0, 12);
+    els["lib-continue"].innerHTML = "";
+    els["lib-continue-wrap"].classList.toggle("hidden", !recent.length);
+    recent.forEach(function (r) {
+      var mini = document.createElement("div"); mini.className = "mini";
+      var img = document.createElement("img"); img.alt = "";
+      if (r.n.cover_available) loadCover(img, r.n.id);
+      var t = document.createElement("div"); t.className = "mt"; t.textContent = r.n.title || "Untitled";
+      mini.appendChild(img); mini.appendChild(t);
+      if (r.pe.serial && r.n.chapter_count) {
+        var pr = document.createElement("div"); pr.className = "progress";
+        var sp = document.createElement("span");
+        sp.style.width = Math.min(100, Math.round(100 * r.pe.serial / r.n.chapter_count)) + "%";
+        pr.appendChild(sp); mini.appendChild(pr);
+      }
+      mini.addEventListener("click", function () {
+        current = { novel: r.n, chapters: [], offset: 0 };
+        openChapter(r.pe.id);
+      });
+      els["lib-continue"].appendChild(mini);
+    });
   }
 
   function renderCategories() {
@@ -273,6 +366,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   function renderLibrary() {
+    saveView();
     var items = lib.all.slice();
     if (lib.cat) items = items.filter(function (n) { return (n.tags || []).indexOf(lib.cat) >= 0; });
 
@@ -299,10 +393,25 @@ _READER_HTML = """<!DOCTYPE html>
 
       var body = document.createElement("div"); body.className = "body";
       var h = document.createElement("h3"); h.textContent = n.title || "Untitled";
+      if (n.manga) { var bd = document.createElement("span"); bd.className = "badge"; bd.textContent = "Manga"; h.appendChild(bd); }
       var m = document.createElement("div"); m.className = "meta";
       m.textContent = [n.authors || "", (n.chapter_count || 0) + " chapters", n.domain || ""]
         .filter(Boolean).join("  ·  ");
       body.appendChild(h); body.appendChild(m);
+
+      var pe = posOf(n.id);
+      if (pe) {
+        var line = document.createElement("div"); line.className = "meta";
+        line.style.color = "#7aa2ff";
+        line.textContent = "▶ Resume" + (pe.serial ? (" · ch " + pe.serial + (n.chapter_count ? " / " + n.chapter_count : "")) : "");
+        body.appendChild(line);
+        if (pe.serial && n.chapter_count) {
+          var pr = document.createElement("div"); pr.className = "progress";
+          var sp = document.createElement("span");
+          sp.style.width = Math.min(100, Math.round(100 * pe.serial / n.chapter_count)) + "%";
+          pr.appendChild(sp); body.appendChild(pr);
+        }
+      }
 
       if (n.synopsis) {
         var d = document.createElement("p"); d.className = "desc";
@@ -349,9 +458,10 @@ _READER_HTML = """<!DOCTYPE html>
     els["novel-synopsis"].classList.toggle("hidden", !syn);
 
     els["chap-list"].innerHTML = "";
-    var pos = loadPos()[novel.id];
-    els["continue-btn"].classList.toggle("hidden", !pos);
-    els["continue-btn"].onclick = function () { if (pos) openChapter(pos); };
+    var pe = posOf(novel.id);
+    els["continue-btn"].classList.toggle("hidden", !pe);
+    els["continue-btn"].textContent = pe && pe.serial ? ("▶ Continue · ch " + pe.serial) : "▶ Continue reading";
+    els["continue-btn"].onclick = function () { if (pe) openChapter(pe.id); };
     els["heal-btn"].classList.add("hidden");
     els["heal-msg"].classList.add("hidden");
     show("view-novel");
@@ -412,7 +522,7 @@ _READER_HTML = """<!DOCTYPE html>
       els["reader-content"].innerHTML = res.content || "<p class='muted'>No content available for this chapter.</p>";
       els["reader-pos"].textContent = "#" + (ch.serial || "");
       hydrateImages(els["reader-content"]);
-      savePos(novel.id, chapterId);
+      savePos(novel.id, chapterId, ch.serial);
       els["prev-btn"].disabled = !res.previous_id;
       els["next-btn"].disabled = !res.next_id;
       els["prev-btn"].onclick = function () { if (res.previous_id) openChapter(res.previous_id); };
@@ -481,10 +591,19 @@ _READER_HTML = """<!DOCTYPE html>
       .catch(function (e) { els["auth-msg"].textContent = "Sign in failed: " + e.message; });
   });
 
+  // Offline support: a service worker caches the app shell and every chapter,
+  // cover and image you open, so previously-read content works with no network.
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/reader/sw.js", { scope: "/reader" }).catch(function () { /* offline cache unavailable */ });
+  }
+
   var toolsLink = els["tools-link"];
   function start() {
     if (toolsLink) toolsLink.href = "/tools" + (token() ? ("?authToken=" + encodeURIComponent(token())) : "");
     applyFont();
+    var v = loadView();
+    if (v.sort) els["lib-sort"].value = v.sort;
+    if (v.cat) lib.cat = v.cat;
     if (!token()) { show("auth"); return; }
     api("/auth/me", { method: "GET" })
       .then(function () { show("view-library"); loadLibrary(""); })
@@ -498,6 +617,98 @@ _READER_HTML = """<!DOCTYPE html>
 """
 
 
+# --------------------------------------------------------------------------- #
+# Offline (PWA) assets: a service worker + manifest + icon make the Reader
+# installable on mobile and let it serve previously-opened content with no
+# network. The service worker is network-first with a cache fallback, so it is
+# always fresh online and still readable offline.
+# --------------------------------------------------------------------------- #
+
+_SERVICE_WORKER = """
+const CACHE = "lncrawl-reader-v1";
+const SHELL = ["/reader", "/reader/manifest.webmanifest", "/reader/icon.svg"];
+
+self.addEventListener("install", function (e) {
+  e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).catch(function () {}));
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", function (e) {
+  e.waitUntil(
+    caches.keys().then(function (keys) {
+      return Promise.all(keys.filter(function (k) { return k !== CACHE; }).map(function (k) { return caches.delete(k); }));
+    }).then(function () { return self.clients.claim(); })
+  );
+});
+
+// Network-first, fall back to cache: fresh when online, readable when offline.
+self.addEventListener("fetch", function (e) {
+  var req = e.request;
+  if (req.method !== "GET") return;
+  var url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+  e.respondWith(
+    fetch(req).then(function (res) {
+      if (res && res.ok) {
+        var copy = res.clone();
+        caches.open(CACHE).then(function (c) { c.put(req, copy); }).catch(function () {});
+      }
+      return res;
+    }).catch(function () {
+      return caches.match(req).then(function (hit) {
+        return hit || (req.mode === "navigate" ? caches.match("/reader") : undefined);
+      });
+    })
+  );
+});
+"""
+
+_MANIFEST = """{
+  "name": "LNCrawl Reader",
+  "short_name": "LNCrawl",
+  "description": "Read your downloaded light-novel and manga library, online or offline.",
+  "start_url": "/reader",
+  "scope": "/reader",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "icons": [
+    { "src": "/reader/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}"""
+
+_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="36" fill="#0f1115"/>
+  <rect x="48" y="40" width="96" height="112" rx="8" fill="#3b82f6"/>
+  <rect x="64" y="40" width="16" height="112" fill="#2f6fe0"/>
+  <rect x="92" y="64" width="40" height="8" rx="4" fill="#cbd2dd"/>
+  <rect x="92" y="84" width="40" height="8" rx="4" fill="#cbd2dd"/>
+  <rect x="92" y="104" width="28" height="8" rx="4" fill="#cbd2dd"/>
+</svg>"""
+
+
 @router.get("/reader", include_in_schema=False)
 async def reader_page() -> HTMLResponse:
     return HTMLResponse(content=_READER_HTML)
+
+
+@router.get("/reader/sw.js", include_in_schema=False)
+async def reader_service_worker() -> Response:
+    # Service-Worker-Allowed lets the worker claim the wider "/reader" scope so
+    # it controls the reader page (served at "/reader", not "/reader/").
+    return Response(
+        content=_SERVICE_WORKER,
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/reader", "Cache-Control": "no-cache"},
+    )
+
+
+@router.get("/reader/manifest.webmanifest", include_in_schema=False)
+async def reader_manifest() -> Response:
+    return Response(content=_MANIFEST, media_type="application/manifest+json")
+
+
+@router.get("/reader/icon.svg", include_in_schema=False)
+async def reader_icon() -> Response:
+    return Response(content=_ICON_SVG, media_type="image/svg+xml")
