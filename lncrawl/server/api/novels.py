@@ -49,6 +49,17 @@ def get_novel(
     return ctx.novels.get(novel_id, language)
 
 
+@router.post(
+    "/{novel_id}/heal",
+    summary="Fill missing chapters from another copy of the same novel in the library",
+)
+def heal_novel(
+    novel_id: str = Path(),
+    user: User = Security(ensure_user),
+) -> Dict[str, object]:
+    return ctx.novels.heal_from_library(novel_id)
+
+
 @router.get("/{novel_id}/languages", summary="Gets available translation languages")
 def get_novel_languages(
     novel_id: str = Path(),
