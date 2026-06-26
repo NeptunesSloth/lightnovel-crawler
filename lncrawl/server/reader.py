@@ -109,6 +109,8 @@ _READER_HTML = """<!DOCTYPE html>
     <h2 id="novel-title"></h2>
     <p class="meta muted" id="novel-meta"></p>
     <button id="continue-btn" class="primary hidden" style="margin-bottom:12px">▶ Continue reading</button>
+    <button id="heal-btn" class="hidden" style="margin:0 0 12px 8px" title="Fill gaps from another copy of this novel in your library">✨ Fill missing chapters</button>
+    <span class="muted hidden" id="heal-msg" style="margin-left:8px"></span>
     <div id="chap-list"></div>
     <div id="chap-more-wrap" class="hidden" style="text-align:center;margin-top:12px">
       <button id="chap-more">Load more chapters</button>
@@ -171,9 +173,9 @@ _READER_HTML = """<!DOCTYPE html>
 
   var els = {};
   ["nav-back","search","view-library","lib-status","lib-list","view-novel","novel-title",
-   "novel-meta","continue-btn","chap-list","chap-more-wrap","chap-more","view-reader",
-   "reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up","font-dn",
-   "auth","email","password","login","auth-msg","search-wrap"].forEach(function (id) {
+   "novel-meta","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
+   "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
+   "font-dn","auth","email","password","login","auth-msg","search-wrap"].forEach(function (id) {
     els[id] = document.getElementById(id);
   });
 
@@ -224,6 +226,8 @@ _READER_HTML = """<!DOCTYPE html>
     var pos = loadPos()[novel.id];
     els["continue-btn"].classList.toggle("hidden", !pos);
     els["continue-btn"].onclick = function () { if (pos) openChapter(pos); };
+    els["heal-btn"].classList.add("hidden");
+    els["heal-msg"].classList.add("hidden");
     show("view-novel");
     loadChapters();
   }
@@ -231,6 +235,7 @@ _READER_HTML = """<!DOCTYPE html>
     api("/novel/" + current.novel.id + "/chapters?limit=100&offset=" + current.offset).then(function (res) {
       var items = (res && res.items) || [];
       current.chapters = current.chapters.concat(items);
+      var gaps = false;
       items.forEach(function (ch) {
         var row = document.createElement("div");
         row.className = "chap" + (ch.is_available ? "" : " unavail");
@@ -238,14 +243,33 @@ _READER_HTML = """<!DOCTYPE html>
         var t = document.createElement("span"); t.className = "t"; t.textContent = ch.title || ("Chapter " + ch.serial);
         row.appendChild(n); row.appendChild(t);
         if (ch.is_available) row.addEventListener("click", function () { openChapter(ch.id); });
-        else { var u = document.createElement("span"); u.className = "muted"; u.textContent = "not downloaded"; row.appendChild(u); }
+        else { gaps = true; var u = document.createElement("span"); u.className = "muted"; u.textContent = "not downloaded"; row.appendChild(u); }
         els["chap-list"].appendChild(row);
       });
       current.offset += items.length;
       var total = (res && res.total) || current.offset;
       els["chap-more-wrap"].classList.toggle("hidden", current.offset >= total);
+      // offer cross-source healing only when there are gaps to fill
+      if (gaps) els["heal-btn"].classList.remove("hidden");
     }).catch(function (e) { els["chap-list"].innerHTML = "<p class='muted'>Couldn't load chapters: " + e.message + "</p>"; });
   }
+  els["heal-btn"].addEventListener("click", function () {
+    if (!current.novel) return;
+    var btn = this;
+    btn.disabled = true;
+    els["heal-msg"].textContent = "Looking for another copy in your library…";
+    els["heal-msg"].classList.remove("hidden");
+    api("/novel/" + current.novel.id + "/heal", { method: "POST" }).then(function (res) {
+      els["heal-msg"].textContent = (res && res.message) || "Done.";
+      if (res && res.healed) {
+        // reload the chapter list to reflect the filled chapters
+        current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
+        loadChapters();
+      }
+    }).catch(function (e) {
+      els["heal-msg"].textContent = "Heal failed: " + e.message;
+    }).finally(function () { btn.disabled = false; });
+  });
 
   // ---- Reader ----
   function openChapter(chapterId) {
