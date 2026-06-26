@@ -249,6 +249,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <h2>Activity</h2>
     <div id="log"><span class="muted">Responses will appear here.</span></div>
   </div>
+
+  <p class="sub" style="text-align:center;margin-top:8px">__BUILD_INFO__</p>
 </div>
 
 <script>
@@ -679,4 +681,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
 @router.get("/tools", include_in_schema=False)
 async def tools_page() -> HTMLResponse:
-    return HTMLResponse(content=_TOOLS_HTML)
+    from ..context import ctx
+
+    info = f"Lightnovel Crawler v{ctx.config.app.version} · build {ctx.config.app.build}"
+    return HTMLResponse(content=_TOOLS_HTML.replace("__BUILD_INFO__", info))
