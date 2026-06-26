@@ -57,6 +57,33 @@ _READER_HTML = """<!DOCTYPE html>
   .card:hover { border-color: #3b4250; }
   .card h3 { margin: 0 0 3px; font-size: 15px; }
   .card .meta { color: #8b93a1; font-size: 13px; }
+  .libcard { display: flex; gap: 12px; align-items: flex-start; }
+  .libcard .cover {
+    width: 64px; height: 92px; flex: 0 0 64px; border-radius: 6px; object-fit: cover;
+    background: #0b0d11; border: 1px solid #262b36;
+  }
+  .libcard .body { flex: 1; min-width: 0; }
+  .libcard .desc {
+    color: #aab2c0; font-size: 13px; margin: 5px 0 0;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .chip {
+    font-size: 11px; color: #aab2c0; background: #20242d; border: 1px solid #2a2f3a;
+    border-radius: 999px; padding: 2px 9px; cursor: pointer; white-space: nowrap;
+  }
+  .chip:hover { color: #e6e6e6; border-color: #3b4250; }
+  .chip.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  select {
+    padding: 7px 10px; border-radius: 8px; border: 1px solid #303644;
+    background: #0f1115; color: #e6e6e6; font-size: 13px;
+  }
+  #novel-cover {
+    width: 110px; height: 158px; border-radius: 8px; object-fit: cover; float: left;
+    margin: 0 16px 8px 0; background: #0b0d11; border: 1px solid #262b36;
+  }
+  #novel-synopsis { color: #cbd2dd; font-size: 14px; margin: 6px 0; }
   .chap {
     display: flex; justify-content: space-between; gap: 10px; align-items: center;
     padding: 9px 6px; border-bottom: 1px solid #20242d; cursor: pointer;
@@ -101,13 +128,26 @@ _READER_HTML = """<!DOCTYPE html>
   </div>
 
   <div id="view-library">
+    <div class="toolbar">
+      <select id="lib-sort" title="Sort">
+        <option value="recent">Recently added</option>
+        <option value="updated">Recently updated</option>
+        <option value="chapters">Most chapters</option>
+        <option value="title">Title A–Z</option>
+      </select>
+      <div id="lib-cats" class="tags"></div>
+    </div>
     <p class="muted" id="lib-status">Loading your library…</p>
     <div id="lib-list"></div>
   </div>
 
   <div id="view-novel" class="hidden">
+    <img id="novel-cover" class="hidden" alt="" />
     <h2 id="novel-title"></h2>
     <p class="meta muted" id="novel-meta"></p>
+    <div id="novel-tags" class="tags"></div>
+    <p id="novel-synopsis"></p>
+    <div style="clear:both"></div>
     <button id="continue-btn" class="primary hidden" style="margin-bottom:12px">▶ Continue reading</button>
     <button id="heal-btn" class="hidden" style="margin:0 0 12px 8px" title="Fill gaps from another copy of this novel in your library">✨ Fill missing chapters</button>
     <span class="muted hidden" id="heal-msg" style="margin-left:8px"></span>
@@ -172,10 +212,11 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-status","lib-list","view-novel","novel-title",
-   "novel-meta","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
-   "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
-   "font-dn","auth","email","password","login","auth-msg","search-wrap"].forEach(function (id) {
+  ["nav-back","search","view-library","lib-sort","lib-cats","lib-status","lib-list","view-novel",
+   "novel-cover","novel-title","novel-meta","novel-tags","novel-synopsis","continue-btn","heal-btn",
+   "heal-msg","chap-list","chap-more-wrap","chap-more","view-reader","reader-title","reader-content",
+   "prev-btn","next-btn","reader-pos","font-up","font-dn","auth","email","password","login",
+   "auth-msg","search-wrap"].forEach(function (id) {
     els[id] = document.getElementById(id);
   });
 
@@ -191,29 +232,99 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   // ---- Library ----
+  var lib = { all: [], cat: "" };
+
+  // Load a cover through the authenticated endpoint and swap in an object URL.
+  function loadCover(img, novelId) {
+    fetch("/api/novel/" + novelId + "/cover", { headers: { "Authorization": "Bearer " + token() } })
+      .then(function (r) { if (!r.ok) throw new Error("cover"); return r.blob(); })
+      .then(function (b) { img.src = URL.createObjectURL(b); img.classList.remove("hidden"); })
+      .catch(function () { /* leave placeholder */ });
+  }
+
   function loadLibrary(q) {
     els["lib-status"].textContent = "Loading your library…";
     els["lib-list"].innerHTML = "";
     api("/novels?limit=100&search=" + encodeURIComponent(q || "")).then(function (res) {
-      var items = (res && res.items) || [];
-      if (!items.length) {
-        els["lib-status"].textContent = q ? "No matches." : "Your library is empty — download something first (Tools).";
-        return;
-      }
-      els["lib-status"].textContent = items.length + " novel(s)";
-      items.forEach(function (n) {
-        var c = document.createElement("div");
-        c.className = "card";
-        var h = document.createElement("h3"); h.textContent = n.title || "Untitled";
-        var m = document.createElement("div"); m.className = "meta";
-        m.textContent = [n.authors || "", (n.chapter_count || 0) + " chapters", n.domain || ""]
-          .filter(Boolean).join("  ·  ");
-        c.appendChild(h); c.appendChild(m);
-        c.addEventListener("click", function () { openNovel(n); });
-        els["lib-list"].appendChild(c);
-      });
+      lib.all = (res && res.items) || [];
+      renderCategories();
+      renderLibrary();
     }).catch(function (e) { els["lib-status"].textContent = "Couldn't load library: " + e.message; });
   }
+
+  function renderCategories() {
+    var counts = {};
+    lib.all.forEach(function (n) {
+      (n.tags || []).forEach(function (t) { if (t) counts[t] = (counts[t] || 0) + 1; });
+    });
+    var top = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; }).slice(0, 12);
+    els["lib-cats"].innerHTML = "";
+    if (!top.length) return;
+    top.forEach(function (t) {
+      var chip = document.createElement("span");
+      chip.className = "chip" + (lib.cat === t ? " active" : "");
+      chip.textContent = t;
+      chip.addEventListener("click", function () {
+        lib.cat = (lib.cat === t) ? "" : t;
+        renderCategories(); renderLibrary();
+      });
+      els["lib-cats"].appendChild(chip);
+    });
+  }
+
+  function renderLibrary() {
+    var items = lib.all.slice();
+    if (lib.cat) items = items.filter(function (n) { return (n.tags || []).indexOf(lib.cat) >= 0; });
+
+    var sort = els["lib-sort"].value;
+    items.sort(function (a, b) {
+      if (sort === "title") return (a.title || "").localeCompare(b.title || "");
+      if (sort === "chapters") return (b.chapter_count || 0) - (a.chapter_count || 0);
+      if (sort === "updated") return (b.updated_at || 0) - (a.updated_at || 0);
+      return (b.created_at || 0) - (a.created_at || 0);  // recent
+    });
+
+    els["lib-list"].innerHTML = "";
+    if (!items.length) {
+      els["lib-status"].textContent = lib.all.length ? "No matches." : "Your library is empty — download something first (Tools).";
+      return;
+    }
+    els["lib-status"].textContent = items.length + " novel(s)" + (lib.cat ? (" · " + lib.cat) : "");
+    items.forEach(function (n) {
+      var c = document.createElement("div");
+      c.className = "card libcard";
+
+      var img = document.createElement("img"); img.className = "cover hidden"; img.alt = "";
+      if (n.cover_available) loadCover(img, n.id);
+
+      var body = document.createElement("div"); body.className = "body";
+      var h = document.createElement("h3"); h.textContent = n.title || "Untitled";
+      var m = document.createElement("div"); m.className = "meta";
+      m.textContent = [n.authors || "", (n.chapter_count || 0) + " chapters", n.domain || ""]
+        .filter(Boolean).join("  ·  ");
+      body.appendChild(h); body.appendChild(m);
+
+      if (n.synopsis) {
+        var d = document.createElement("p"); d.className = "desc";
+        d.textContent = n.synopsis.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim();
+        body.appendChild(d);
+      }
+      if (n.tags && n.tags.length) {
+        var tg = document.createElement("div"); tg.className = "tags";
+        n.tags.slice(0, 5).forEach(function (t) {
+          var chip = document.createElement("span"); chip.className = "chip"; chip.textContent = t;
+          tg.appendChild(chip);
+        });
+        body.appendChild(tg);
+      }
+
+      c.appendChild(img); c.appendChild(body);
+      c.addEventListener("click", function () { openNovel(n); });
+      els["lib-list"].appendChild(c);
+    });
+  }
+
+  els["lib-sort"].addEventListener("change", renderLibrary);
 
   // ---- Novel ----
   var current = { novel: null, chapters: [], offset: 0 };
@@ -222,6 +333,21 @@ _READER_HTML = """<!DOCTYPE html>
     els["novel-title"].textContent = novel.title || "Untitled";
     els["novel-meta"].textContent = [novel.authors || "", (novel.chapter_count || 0) + " chapters", novel.domain || ""]
       .filter(Boolean).join("  ·  ");
+
+    var cover = els["novel-cover"];
+    cover.classList.add("hidden"); cover.removeAttribute("src");
+    if (novel.cover_available) loadCover(cover, novel.id);
+
+    els["novel-tags"].innerHTML = "";
+    (novel.tags || []).slice(0, 12).forEach(function (t) {
+      var chip = document.createElement("span"); chip.className = "chip"; chip.textContent = t;
+      els["novel-tags"].appendChild(chip);
+    });
+
+    var syn = (novel.synopsis || "").replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim();
+    els["novel-synopsis"].textContent = syn;
+    els["novel-synopsis"].classList.toggle("hidden", !syn);
+
     els["chap-list"].innerHTML = "";
     var pos = loadPos()[novel.id];
     els["continue-btn"].classList.toggle("hidden", !pos);
