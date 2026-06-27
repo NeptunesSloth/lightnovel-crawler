@@ -1,14 +1,27 @@
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Path, Query, Security
+from fastapi.responses import FileResponse
 
 from ...context import ctx
 from ...dao import ActivityType, Artifact, Chapter, LanguageCode, Novel, User, Volume
+from ...exceptions import ServerErrors
 from ..models import Paginated
 from ..security import ensure_admin, ensure_user
 
 # The root router
 router = APIRouter()
+
+
+@router.get("/{novel_id}/cover", summary="Serve the novel cover image (for the reader)")
+def novel_cover(
+    novel_id: str = Path(),
+) -> FileResponse:
+    novel = ctx.novels.get(novel_id)
+    path = ctx.files.resolve(novel.cover_file)
+    if not path.is_file():
+        raise ServerErrors.no_such_file
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @router.get(
