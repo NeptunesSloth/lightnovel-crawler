@@ -53,6 +53,12 @@ def build_command():
 def gather_packages():
     packages = [
         "pylsp",
+        # Bundle every nodriver submodule, including all ~50 nodriver.cdp domain
+        # modules. They are imported via a single static statement and lazily at
+        # runtime; collecting them all guarantees none are missing in the frozen
+        # build, where a missing/partial cdp submodule surfaces as the "cannot
+        # import name 'network' from partially initialized module" crash.
+        "nodriver",
     ]
     return [f"--collect-all={pkg}" for pkg in packages]
 
