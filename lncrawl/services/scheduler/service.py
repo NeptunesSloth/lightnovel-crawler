@@ -54,6 +54,18 @@ class JobScheduler:
             ctx.jobs.requeue_stale_running()
         except Exception:
             logger.error("Failed to requeue stale running jobs", exc_info=True)
+        # Force nodriver + its CDP submodules to import now, in this single thread,
+        # before any worker can race the first import. nodriver.cdp is a web of
+        # circular submodule imports that is only safe to use once fully loaded; a
+        # concurrent first import (a batch export hitting several JS-rendered novels)
+        # can otherwise leave it half-initialized and crash every later browser op
+        # with "cannot import name 'network' from partially initialized module".
+        try:
+            from ...webdriver import warmup_nodriver
+
+            warmup_nodriver()
+        except Exception:
+            logger.warning("nodriver warmup failed; will retry on first browser use", exc_info=True)
         for _ in range(ctx.config.crawler.runner_concurrency):
             self._thread(run_jobs, ctx.config.crawler.runner_cooldown)
         self._thread(run_scrubber, ctx.config.crawler.scrubber_cooldown)

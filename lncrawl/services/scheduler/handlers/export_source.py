@@ -435,6 +435,14 @@ class ExportSourceHandler(BaseHandler):
             # first time a novel is blocked, then reused for every HTTP request.
             warmed_up = False
 
+            # Per-novel missing-chapter count from the previous pass. Used to stop
+            # retrying a novel that isn't improving: if a whole pass fills in no new
+            # chapters, the rest are unreachable from this source (deleted/blocked
+            # pages) and further rounds just waste time and block the batch. A
+            # throttled novel that recovers after the backoff shows fewer missing and
+            # keeps going; one whose count holds steady is abandoned as partial.
+            prev_missing: Dict[str, int] = {}
+
             # initial pass + retry rounds over whatever still isn't complete
             for attempt in range(retries + 1):
                 if not pending:
@@ -520,15 +528,28 @@ class ExportSourceHandler(BaseHandler):
                                 success_streak = 0
                                 tuned_rps = min(RPS_MAX, tuned_rps + 0.5)
                     else:
+                        give_up = False
                         if file is not None:
                             partial[novel_url] = file  # keep the best version so far
                             # a partial novel has no exception reason; always refresh
                             # it with the latest missing count so retries that fill in
                             # chapters report the current number, not a stale one
                             last_error[novel_url] = f"{result['missing']} chapter(s) still missing"
+                            # stop retrying once a pass makes no progress (the missing
+                            # chapters are unreachable, not just throttled) — keep the
+                            # partial and move on instead of blocking the batch
+                            prev = prev_missing.get(novel_url)
+                            prev_missing[novel_url] = result["missing"]
+                            if prev is not None and result["missing"] >= prev:
+                                give_up = True
+                                ctx.logger.info(
+                                    f"No progress on {novel_url} "
+                                    f"({result['missing']} still missing) — keeping partial"
+                                )
                         elif novel_url not in last_error:
                             last_error[novel_url] = "No chapters found or ebook could not be built"
-                        next_pending.append(novel_url)
+                        if not give_up:
+                            next_pending.append(novel_url)
                         reason_text = last_error[novel_url]
                         throttled = _looks_throttled(reason_text)
                         # a failure: slow down (harder if it looks like throttling)
@@ -579,11 +600,15 @@ class ExportSourceHandler(BaseHandler):
                             raise AbortedException()
                 pending = next_pending
 
-            # bundle the complete ones, plus the best partial we have for the rest
+            # bundle the complete ones, plus the best partial we have for the rest.
+            # Iterate `partial` directly (not just novels still in `pending`) so a
+            # novel we stopped retrying early — because it stopped improving — is
+            # still included as an incomplete book rather than silently dropped.
             files: List[Path] = list(complete.values())
-            for novel_url in pending:
-                if novel_url in partial:
-                    files.append(partial[novel_url])
+            for novel_url, partial_file in partial.items():
+                if novel_url not in complete:
+                    files.append(partial_file)
+            # a novel is "failed" only if it produced no book at all (no partial)
             failed = sum(1 for u in pending if u not in partial)
 
             # tally the failure reasons so the UI can show *why* novels failed
