@@ -63,6 +63,18 @@ def get_novel(
 
 
 @router.post(
+    "/{novel_id}/refresh",
+    summary="Re-fetch novel info from the source (synopsis, tags, cover, new chapters)",
+)
+def refresh_novel(
+    novel_id: str = Path(),
+    user: User = Security(ensure_user),
+) -> Novel:
+    novel = ctx.novels.get(novel_id)
+    return ctx.crawler.fetch_novel(user.id, novel.url)
+
+
+@router.post(
     "/{novel_id}/heal",
     summary="Fill missing chapters from another copy of the same novel in the library",
 )

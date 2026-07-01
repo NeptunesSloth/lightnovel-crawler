@@ -28,6 +28,12 @@ class NovelFireCrawler(LegacyCrawler):
         img = soup.select_one(".cover img")
         self.novel_cover = self.absolute_url(img["src"])
 
+        summary = soup.select_one(".summary .content")
+        if summary:
+            self.novel_synopsis = self.cleaner.extract_contents(summary)
+
+        self.novel_tags = [a.text.strip() for a in soup.select(".categories a") if a.text.strip()]
+
         vol_id = 1
         vol_url = self.novel_url + "/chapters"
 

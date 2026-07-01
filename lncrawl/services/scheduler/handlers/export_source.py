@@ -761,9 +761,11 @@ def _download_novel(
     """
     # Reuse already-fetched metadata: on retry rounds (and re-runs) the novel and
     # its chapter list are already in the DB, so skip re-downloading the info page
-    # — a wasted network round-trip per novel per round. Only fetch when new.
+    # — a wasted network round-trip per novel per round. Only fetch when new, or
+    # when the stored record predates synopsis/tags parsing (backfills old
+    # library entries with a single page request on the next run).
     novel = ctx.novels.find_by_url(novel_url)
-    if novel is None or not ctx.chapters.list_ids(novel_id=novel.id):
+    if novel is None or not ctx.chapters.list_ids(novel_id=novel.id) or not novel.synopsis:
         novel = ctx.crawler.fetch_novel(user_id, novel_url, signal=signal, custom=crawler)
 
     norm = _norm_title(novel.title)

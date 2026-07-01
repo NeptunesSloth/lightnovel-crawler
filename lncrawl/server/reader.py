@@ -222,6 +222,7 @@ _READER_HTML = """<!DOCTYPE html>
   var POS = "lncrawl_reader_pos";    // { novelId: {id, serial, ts} | legacy chapterId string }
   var FONT = "lncrawl_reader_font";
   var VIEW = "lncrawl_reader_view";  // { sort, cat }
+  var REFRESH = "lncrawl_reader_refresh";  // { novelId: last info-refresh ts }
 
   (function () {
     var params = new URLSearchParams(window.location.search);
@@ -437,8 +438,7 @@ _READER_HTML = """<!DOCTYPE html>
 
   // ---- Novel ----
   var current = { novel: null, chapters: [], offset: 0 };
-  function openNovel(novel) {
-    current = { novel: novel, chapters: [], offset: 0 };
+  function renderNovelHeader(novel) {
     els["novel-title"].textContent = novel.title || "Untitled";
     els["novel-meta"].textContent = [novel.authors || "", (novel.chapter_count || 0) + " chapters", novel.domain || ""]
       .filter(Boolean).join("  ·  ");
@@ -456,6 +456,35 @@ _READER_HTML = """<!DOCTYPE html>
     var syn = (novel.synopsis || "").replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim();
     els["novel-synopsis"].textContent = syn;
     els["novel-synopsis"].classList.toggle("hidden", !syn);
+  }
+
+  // Backfill: novels downloaded before synopsis/tags parsing have no description.
+  // When such a novel is opened, quietly re-fetch its info from the source (at
+  // most once a day per novel) and update the view in place — this also picks up
+  // newly released chapters.
+  function maybeRefreshInfo(novel) {
+    if (novel.synopsis) return;
+    var map = {};
+    try { map = JSON.parse(localStorage.getItem(REFRESH) || "{}"); } catch (e) { map = {}; }
+    if (Date.now() - (map[novel.id] || 0) < 86400000) return;
+    map[novel.id] = Date.now();
+    localStorage.setItem(REFRESH, JSON.stringify(map));
+    api("/novel/" + novel.id + "/refresh", { method: "POST" }).then(function (n) {
+      if (!n || !current.novel || current.novel.id !== n.id) return;
+      var moreChapters = (n.chapter_count || 0) !== (novel.chapter_count || 0);
+      current.novel = n;
+      renderNovelHeader(n);
+      if (moreChapters) {
+        current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
+        loadChapters();
+      }
+    }).catch(function () { /* refresh is best-effort */ });
+  }
+
+  function openNovel(novel) {
+    current = { novel: novel, chapters: [], offset: 0 };
+    renderNovelHeader(novel);
+    maybeRefreshInfo(novel);
 
     els["chap-list"].innerHTML = "";
     var pe = posOf(novel.id);
