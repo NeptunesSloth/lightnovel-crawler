@@ -205,3 +205,42 @@ class NovelService:
             "sources": sources,
             "message": f"Filled {healed} missing chapter(s) from your other copies.",
         }
+
+    def merge_duplicates(self, novel_id: str) -> Dict[str, Any]:
+        """Merge all same-title copies of a novel into the most complete one.
+
+        The copy with the most chapters becomes canonical; matching chapters from
+        the other copies are healed into it, then the other copies are deleted.
+        Chapters that exist only in a deleted copy under a different chapter title
+        cannot be matched and are lost — the UI must warn before calling this.
+        Returns the canonical novel id and a summary.
+        """
+        novel = self.get(novel_id)
+        norm_title = _norm(novel.title)
+        if not norm_title:
+            return {"canonical_id": novel_id, "merged": 0, "message": "Novel has no title."}
+
+        with ctx.db.session() as sess:
+            all_novels = sess.exec(sq.select(Novel)).all()
+        group = [n for n in all_novels if _norm(n.title) == norm_title]
+        if len(group) < 2:
+            return {"canonical_id": novel_id, "merged": 0, "message": "No other copy found."}
+
+        canonical = max(group, key=lambda n: n.chapter_count or 0)
+        heal = self.heal_from_library(canonical.id)
+        merged = 0
+        for other in group:
+            if other.id == canonical.id:
+                continue
+            self.delete(other.id)
+            merged += 1
+        healed = heal.get("healed", 0)
+        return {
+            "canonical_id": canonical.id,
+            "merged": merged,
+            "healed": healed,
+            "message": (
+                f"Merged {merged} duplicate cop{'ies' if merged != 1 else 'y'} into the most "
+                f"complete one ({healed} chapter(s) filled in)."
+            ),
+        }

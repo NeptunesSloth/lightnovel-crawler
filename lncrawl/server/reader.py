@@ -249,6 +249,8 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="title">Title A–Z</option>
       </select>
       <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
+      <button id="lib-select" title="Select novels to delete">☑ Select</button>
+      <button id="lib-del" class="hidden">🗑 Delete (0)</button>
       <div id="lib-cats" class="tags"></div>
     </div>
     <p class="muted" id="lib-status">Loading your library…</p>
@@ -265,6 +267,8 @@ _READER_HTML = """<!DOCTYPE html>
     <button id="continue-btn" class="primary hidden" style="margin-bottom:12px">▶ Continue reading</button>
     <button id="fav-btn" style="margin:0 0 12px 8px" title="Add to favorites">☆ Favorite</button>
     <button id="heal-btn" class="hidden" style="margin:0 0 12px 8px" title="Fill gaps from another copy of this novel in your library">✨ Fill missing chapters</button>
+    <button id="merge-btn" class="hidden" style="margin:0 0 12px 8px" title="Combine all copies of this title into the most complete one">⧉ Merge copies</button>
+    <button id="del-btn" style="margin:0 0 12px 8px" title="Delete this novel from your library">🗑</button>
     <span class="muted hidden" id="heal-msg" style="margin-left:8px"></span>
     <div id="bmk-list"></div>
     <div id="chap-list"></div>
@@ -373,7 +377,7 @@ _READER_HTML = """<!DOCTYPE html>
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
    "font-dn","auth","email","password","login","auth-msg","search-wrap","aa-btn","aa-panel",
    "aa-theme","aa-font","aa-width","aa-trans","fit-btn","fav-btn","bmk-btn","bmk-list",
-   "trans-pop"].forEach(function (id) {
+   "trans-pop","lib-select","lib-del","merge-btn","del-btn"].forEach(function (id) {
     els[id] = document.getElementById(id);
   });
 
@@ -393,7 +397,8 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   // ---- Library ----
-  var lib = { all: [], cat: "" };
+  var lib = { all: [], cat: "", manage: false, sel: {} };
+  function normTitle(t) { return (t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
 
   // Load a cover through the authenticated endpoint and swap in an object URL.
   function loadCover(img, novelId) {
@@ -544,10 +549,50 @@ _READER_HTML = """<!DOCTYPE html>
       }
 
       c.appendChild(img); c.appendChild(body);
-      c.addEventListener("click", function () { openNovel(n); });
+      if (lib.manage && lib.sel[n.id]) c.style.outline = "2px solid #3b82f6";
+      c.addEventListener("click", function () {
+        if (!lib.manage) { openNovel(n); return; }
+        if (lib.sel[n.id]) { delete lib.sel[n.id]; c.style.outline = ""; }
+        else { lib.sel[n.id] = true; c.style.outline = "2px solid #3b82f6"; }
+        updateDelBtn();
+      });
       els["lib-list"].appendChild(c);
     });
   }
+
+  // ---- Select mode: bulk delete ----
+  function updateDelBtn() {
+    var n = Object.keys(lib.sel).length;
+    els["lib-del"].textContent = "🗑 Delete (" + n + ")";
+    els["lib-del"].classList.toggle("hidden", !lib.manage);
+  }
+  els["lib-select"].addEventListener("click", function () {
+    lib.manage = !lib.manage;
+    lib.sel = {};
+    this.textContent = lib.manage ? "✕ Cancel" : "☑ Select";
+    updateDelBtn();
+    renderLibrary();
+  });
+  els["lib-del"].addEventListener("click", function () {
+    var ids = Object.keys(lib.sel);
+    if (!ids.length) return;
+    if (!confirm("Delete " + ids.length + " novel(s) and their downloaded chapters? This cannot be undone.")) return;
+    var btn = this;
+    btn.disabled = true;
+    var i = 0;
+    (function step() {
+      if (i >= ids.length) {
+        btn.disabled = false;
+        lib.manage = false; lib.sel = {};
+        els["lib-select"].textContent = "☑ Select";
+        updateDelBtn();
+        loadLibrary(els["search"].value.trim());
+        return;
+      }
+      var id = ids[i++];
+      api("/novel/" + id, { method: "DELETE" }).then(step).catch(step);
+    })();
+  });
 
   els["lib-sort"].addEventListener("change", renderLibrary);
 
@@ -649,6 +694,11 @@ _READER_HTML = """<!DOCTYPE html>
     renderFavBtn(novel);
     renderBookmarks(novel);
 
+    // offer merging only when another copy of the same title is in the library
+    var copies = lib.all.filter(function (n) { return normTitle(n.title) === normTitle(novel.title); });
+    els["merge-btn"].classList.toggle("hidden", copies.length < 2);
+    if (copies.length > 1) els["merge-btn"].textContent = "⧉ Merge " + copies.length + " copies";
+
     els["chap-list"].innerHTML = "";
     var pe = posOf(novel.id);
     els["continue-btn"].classList.toggle("hidden", !pe);
@@ -717,6 +767,32 @@ _READER_HTML = """<!DOCTYPE html>
     }).catch(function (e) {
       els["heal-msg"].textContent = "Heal failed: " + e.message;
     }).finally(function () { btn.disabled = false; });
+  });
+
+  els["merge-btn"].addEventListener("click", function () {
+    if (!current.novel) return;
+    if (!confirm('Combine all copies of this title into the most complete one and delete the others? Chapters that only exist in a deleted copy under a different chapter name can be lost.')) return;
+    var btn = this; btn.disabled = true;
+    api("/novel/" + current.novel.id + "/merge", { method: "POST" }).then(function (res) {
+      var cid = res && res.canonical_id;
+      return api("/novels?limit=100&search=").then(function (r) {
+        lib.all = (r && r.items) || [];
+        renderCategories();
+        var canon = null;
+        for (var i = 0; i < lib.all.length; i++) { if (lib.all[i].id === cid) canon = lib.all[i]; }
+        if (canon) openNovel(canon); else { show("view-library"); renderLibrary(); }
+      });
+    }).catch(function (e) { alert("Merge failed: " + e.message); })
+      .finally(function () { btn.disabled = false; });
+  });
+
+  els["del-btn"].addEventListener("click", function () {
+    if (!current.novel) return;
+    if (!confirm('Delete "' + (current.novel.title || "this novel") + '" and all its downloaded chapters? This cannot be undone.')) return;
+    api("/novel/" + current.novel.id, { method: "DELETE" }).then(function () {
+      show("view-library");
+      loadLibrary(els["search"].value.trim());
+    }).catch(function (e) { alert("Delete failed: " + e.message); });
   });
 
   // ---- Reader ----

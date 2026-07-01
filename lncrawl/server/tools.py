@@ -225,6 +225,27 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
   <div class="card">
     <details class="card-fold">
+    <summary>Storage, backup &amp; phone</summary>
+    <p class="hint" id="storage-line">Sign in to see disk usage.</p>
+    <div id="storage-largest" class="muted" style="font-size:13px"></div>
+    <div class="row" style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+      <button id="storage-refresh" class="secondary">Check usage</button>
+      <button id="storage-clean" class="secondary" title="Deletes generated export ZIPs (your novels stay). Backups are kept.">🧹 Clean export zips</button>
+      <button id="backup-btn" class="secondary" title="Zips the database + every downloaded novel. Saved to the exports folder and your Desktop.">💾 Create backup</button>
+      <button id="phone-btn" class="secondary" title="Show a QR code to open the Reader on your phone (same Wi-Fi)">📱 Read on phone</button>
+    </div>
+    <div id="phone-box" class="hidden" style="margin-top:12px;text-align:center">
+      <div id="phone-qr" style="background:#fff;display:inline-block;padding:10px;border-radius:10px"></div>
+      <p class="muted" id="phone-url" style="word-break:break-all"></p>
+      <p class="hint">Scan with your phone's camera (same Wi-Fi as this PC), then sign in with the
+        same email &amp; password. If it doesn't load, allow the app through Windows Firewall
+        and make sure both devices are on the same network.</p>
+    </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <details class="card-fold">
     <summary>Finish notifications</summary>
     <p class="hint">Get pinged when a long overnight export finishes so you don't have to keep
       checking. A desktop notification pops on this machine; a webhook can reach your phone
@@ -682,6 +703,60 @@ _TOOLS_HTML = """<!DOCTYPE html>
   document.getElementById("library-refresh").addEventListener("click", function () {
     if (!requireAuth()) return;
     loadLibrary(window._lncrawlUserId);
+  });
+
+  // ---- Storage, backup & phone ----
+  function loadStorage() {
+    api("/novels/storage", { method: "GET" }).then(function (s) {
+      document.getElementById("storage-line").textContent =
+        (s.novel_count || 0) + " novel(s) use " + (fmtSize(s.total || 0) || "0 MB") +
+        " · export zips use " + (fmtSize(s.exports || 0) || "0 MB");
+      var box = document.getElementById("storage-largest");
+      box.innerHTML = "";
+      (s.largest || []).slice(0, 8).forEach(function (n) {
+        var d = document.createElement("div");
+        d.textContent = fmtSize(n.size) + "  ·  " + n.title;
+        box.appendChild(d);
+      });
+    }).catch(function (e) {
+      document.getElementById("storage-line").textContent = "Couldn't check usage: " + e.message;
+    });
+  }
+  document.getElementById("storage-refresh").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    loadStorage();
+  });
+  document.getElementById("storage-clean").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    if (!confirm("Delete all generated export ZIPs? Your downloaded novels are not touched; backups are kept.")) return;
+    api("/novels/storage/exports", { method: "DELETE" }).then(function (r) {
+      log("Removed " + r.removed + " zip(s), freed " + (fmtSize(r.freed) || "0 MB") + ".", "log-ok");
+      loadStorage();
+    }).catch(function (e) { log("Cleanup failed: " + e.message, "log-err"); });
+  });
+  document.getElementById("backup-btn").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var btn = this; busy(btn, true);
+    log("Creating backup (database + all novels)… this can take a while for a big library.", "log-info");
+    api("/admin/backup", { method: "POST" }).then(function (r) {
+      log("Backup ready: " + r.file + " (" + fmtSize(r.size) + ")" +
+        (r.saved_to ? " — saved to your Desktop." : " — in the exports folder."), "log-ok");
+    }).catch(function (e) { log("Backup failed: " + e.message, "log-err"); })
+      .finally(function () { busy(btn, false); });
+  });
+  document.getElementById("phone-btn").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var box = document.getElementById("phone-box");
+    if (!box.classList.contains("hidden")) { box.classList.add("hidden"); return; }
+    api("/settings/lan", { method: "GET" }).then(function (r) {
+      document.getElementById("phone-url").textContent = r.url;
+      return fetch("/api/settings/lan-qr", { headers: { "Authorization": "Bearer " + token() } });
+    }).then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.text(); })
+      .then(function (svg) {
+        document.getElementById("phone-qr").innerHTML = svg;
+        box.classList.remove("hidden");
+      })
+      .catch(function (e) { log("Couldn't get the phone link: " + e.message, "log-err"); });
   });
 
   function loadNotifyConfig() {

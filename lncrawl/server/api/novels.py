@@ -1,4 +1,5 @@
-from typing import Dict, List, Optional
+from pathlib import Path as FilePath
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Path, Query, Security
 from fastapi.responses import FileResponse
@@ -50,6 +51,60 @@ def list_sources() -> Dict[str, int]:
     return ctx.novels.list_domains()
 
 
+def _dir_size(path: FilePath) -> int:
+    total = 0
+    if not path.is_dir():
+        return 0
+    for f in path.rglob("*"):
+        try:
+            if f.is_file():
+                total += f.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+@router.get("s/storage", summary="Disk usage of the downloaded library and exports")
+def novels_storage() -> Dict[str, Any]:
+    novels_dir = ctx.files.resolve("novels")
+    sizes: Dict[str, int] = {}
+    if novels_dir.is_dir():
+        for child in novels_dir.iterdir():
+            if child.is_dir():
+                sizes[child.name] = _dir_size(child)
+    titles: Dict[str, str] = {}
+    for novel in ctx.novels.list(limit=100, offset=0).items:
+        titles[novel.id] = novel.title
+    largest = sorted(sizes.items(), key=lambda kv: -kv[1])[:15]
+    exports_size = _dir_size(ctx.files.resolve("exports"))
+    return {
+        "total": sum(sizes.values()),
+        "exports": exports_size,
+        "novel_count": len(sizes),
+        "largest": [
+            {"id": nid, "title": titles.get(nid, nid), "size": size} for nid, size in largest
+        ],
+    }
+
+
+@router.delete("s/storage/exports", summary="Delete generated export zips to free disk space")
+def cleanup_exports() -> Dict[str, int]:
+    exports = ctx.files.resolve("exports")
+    removed = 0
+    freed = 0
+    if exports.is_dir():
+        for f in exports.glob("*.zip"):
+            if f.name.startswith("backup-"):
+                continue  # never touch backups here
+            try:
+                freed += f.stat().st_size
+                f.unlink()
+                removed += 1
+            except OSError:
+                continue
+    return {"removed": removed, "freed": freed}
+
+
 @router.get("/{novel_id}", summary="Returns a novel")
 def get_novel(
     novel_id: str = Path(),
@@ -72,6 +127,17 @@ def refresh_novel(
 ) -> Novel:
     novel = ctx.novels.get(novel_id)
     return ctx.crawler.fetch_novel(user.id, novel.url)
+
+
+@router.post(
+    "/{novel_id}/merge",
+    summary="Merge all same-title copies into the most complete one (deletes the others)",
+)
+def merge_novel(
+    novel_id: str = Path(),
+    user: User = Security(ensure_user),
+) -> Dict[str, object]:
+    return ctx.novels.merge_duplicates(novel_id)
 
 
 @router.post(
