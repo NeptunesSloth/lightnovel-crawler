@@ -158,6 +158,22 @@ class DB:
         if ctx.logger.is_debug:
             engine.logger = logger
 
+        # SQLite: enable WAL so readers (the Reader UI, library lists, status
+        # polls) never block the single writer (a running export) and vice versa,
+        # and wait out brief lock contention instead of failing with "database is
+        # locked". Without this, actively reading while an export runs makes the
+        # export's chapter writes stall behind read transactions.
+        if engine.dialect.name == "sqlite":
+            from sqlalchemy import event
+
+            @event.listens_for(engine, "connect")
+            def _sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:
+                cur = dbapi_conn.cursor()
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA synchronous=NORMAL")
+                cur.execute("PRAGMA busy_timeout=15000")
+                cur.close()
+
         return engine
 
     def _reset_database(self):

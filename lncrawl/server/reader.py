@@ -108,6 +108,7 @@ _READER_HTML = """<!DOCTYPE html>
     font-size: 10px; color: #aab2c0; background: #20242d; border: 1px solid #2a2f3a;
     border-radius: 4px; padding: 1px 6px; margin-left: 7px; vertical-align: middle;
   }
+  .badge.new { color: #7ee2a8; border-color: #2f5d43; background: #12291c; }
   .chap {
     display: flex; justify-content: space-between; gap: 10px; align-items: center;
     padding: 9px 6px; border-bottom: 1px solid #20242d; cursor: pointer;
@@ -153,7 +154,7 @@ _READER_HTML = """<!DOCTYPE html>
   <a class="back hidden" id="nav-back">&larr; Back</a>
   <div class="spacer"></div>
   <div id="search-wrap" style="flex:1;max-width:380px"><input id="search" type="text" placeholder="Search your library…" /></div>
-  <a class="back" href="/tools" id="tools-link">Tools</a>
+  <a class="back" href="/tools" target="_blank" id="tools-link">Tools</a>
   <button id="font-dn" class="hidden">A-</button>
   <button id="font-up" class="hidden">A+</button>
 </div>
@@ -181,6 +182,7 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="chapters">Most chapters</option>
         <option value="title">Title A–Z</option>
       </select>
+      <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
       <div id="lib-cats" class="tags"></div>
     </div>
     <p class="muted" id="lib-status">Loading your library…</p>
@@ -223,6 +225,8 @@ _READER_HTML = """<!DOCTYPE html>
   var FONT = "lncrawl_reader_font";
   var VIEW = "lncrawl_reader_view";  // { sort, cat }
   var REFRESH = "lncrawl_reader_refresh";  // { novelId: last info-refresh ts }
+  var HEALED = "lncrawl_reader_autoheal";  // { novelId: last auto-heal attempt ts }
+  var UPD = "lncrawl_reader_updates";  // { novelId: {found, ts} } new chapters found
 
   (function () {
     var params = new URLSearchParams(window.location.search);
@@ -263,9 +267,22 @@ _READER_HTML = """<!DOCTYPE html>
   }
   function savePos(novelId, chapterId, serial) {
     var p = loadPos();
-    p[novelId] = { id: chapterId, serial: (serial != null ? serial : null), ts: Date.now() };
+    // keep the in-chapter scroll position when re-saving the same chapter;
+    // start a newly-opened chapter at the top
+    var prev = p[novelId];
+    var scroll = (prev && typeof prev === "object" && prev.id === chapterId) ? (prev.scroll || 0) : 0;
+    p[novelId] = { id: chapterId, serial: (serial != null ? serial : null), ts: Date.now(), scroll: scroll };
     localStorage.setItem(POS, JSON.stringify(p));
   }
+  function saveScroll(novelId, chapterId, frac) {
+    var p = loadPos();
+    var e = p[novelId];
+    if (!e || typeof e === "string" || e.id !== chapterId) return;
+    e.scroll = frac; e.ts = Date.now();
+    localStorage.setItem(POS, JSON.stringify(p));
+  }
+  function loadUpdates() { try { return JSON.parse(localStorage.getItem(UPD) || "{}"); } catch (e) { return {}; } }
+  function saveUpdates(m) { localStorage.setItem(UPD, JSON.stringify(m)); }
   function loadView() { try { return JSON.parse(localStorage.getItem(VIEW) || "{}"); } catch (e) { return {}; } }
   function saveView() {
     localStorage.setItem(VIEW, JSON.stringify({ sort: els["lib-sort"].value, cat: lib.cat }));
@@ -273,7 +290,7 @@ _READER_HTML = """<!DOCTYPE html>
 
   var els = {};
   ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-cats",
-   "lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
+   "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
    "font-dn","auth","email","password","login","auth-msg","search-wrap"].forEach(function (id) {
@@ -395,6 +412,11 @@ _READER_HTML = """<!DOCTYPE html>
       var body = document.createElement("div"); body.className = "body";
       var h = document.createElement("h3"); h.textContent = n.title || "Untitled";
       if (n.manga) { var bd = document.createElement("span"); bd.className = "badge"; bd.textContent = "Manga"; h.appendChild(bd); }
+      var upd = loadUpdates()[n.id];
+      if (upd && upd.found) {
+        var nb = document.createElement("span"); nb.className = "badge new";
+        nb.textContent = "+" + upd.found + " new"; h.appendChild(nb);
+      }
       var m = document.createElement("div"); m.className = "meta";
       m.textContent = [n.authors || "", (n.chapter_count || 0) + " chapters", n.domain || ""]
         .filter(Boolean).join("  ·  ");
@@ -435,6 +457,47 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   els["lib-sort"].addEventListener("change", renderLibrary);
+
+  // "Check updates": re-fetch every novel's info from its source, one at a time
+  // (sequential on purpose — polite to the sources), and badge the ones that
+  // gained chapters. Click again to stop mid-run.
+  var checking = false;
+  els["lib-update"].addEventListener("click", function () {
+    var btn = this;
+    if (checking) { checking = false; return; }
+    if (!lib.all.length) return;
+    checking = true;
+    btn.textContent = "■ Stop checking";
+    var items = lib.all.slice();
+    var updates = loadUpdates();
+    var i = 0, found = 0;
+    function finish() {
+      checking = false;
+      btn.textContent = "⟳ Check updates";
+      renderLibrary();
+      els["lib-status"].textContent = found
+        ? ("Update check done — " + found + " novel(s) have new chapters.")
+        : "Update check done — no new chapters found.";
+    }
+    function next() {
+      if (!checking || i >= items.length) { finish(); return; }
+      var n = items[i++];
+      els["lib-status"].textContent = "Checking " + i + "/" + items.length + ": " + (n.title || "");
+      api("/novel/" + n.id + "/refresh", { method: "POST" }).then(function (r) {
+        if (r && (r.chapter_count || 0) > (n.chapter_count || 0)) {
+          found++;
+          updates[n.id] = { found: (r.chapter_count || 0) - (n.chapter_count || 0), ts: Date.now() };
+          saveUpdates(updates);
+        }
+        if (r) {
+          for (var k = 0; k < lib.all.length; k++) {
+            if (lib.all[k].id === r.id) lib.all[k] = r;
+          }
+        }
+      }).catch(function () { /* skip novels that fail to refresh */ }).then(next);
+    }
+    next();
+  });
 
   // ---- Novel ----
   var current = { novel: null, chapters: [], offset: 0 };
@@ -482,9 +545,13 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   function openNovel(novel) {
-    current = { novel: novel, chapters: [], offset: 0 };
+    current = { novel: novel, chapters: [], offset: 0, chapterId: null };
     renderNovelHeader(novel);
     maybeRefreshInfo(novel);
+
+    // opening the novel acknowledges its "+N new" badge
+    var updates = loadUpdates();
+    if (updates[novel.id]) { delete updates[novel.id]; saveUpdates(updates); }
 
     els["chap-list"].innerHTML = "";
     var pe = posOf(novel.id);
@@ -515,9 +582,29 @@ _READER_HTML = """<!DOCTYPE html>
       var total = (res && res.total) || current.offset;
       els["chap-more-wrap"].classList.toggle("hidden", current.offset >= total);
       // offer cross-source healing only when there are gaps to fill
-      if (gaps) els["heal-btn"].classList.remove("hidden");
+      if (gaps) { els["heal-btn"].classList.remove("hidden"); maybeAutoHeal(); }
     }).catch(function (e) { els["chap-list"].innerHTML = "<p class='muted'>Couldn't load chapters: " + e.message + "</p>"; });
   }
+  // Auto-heal: when a novel with gaps is opened and another copy of the same
+  // title exists in the library, quietly fill what can be filled (at most one
+  // attempt per novel per day). The button stays as a manual retry.
+  function maybeAutoHeal() {
+    var novel = current.novel;
+    if (!novel) return;
+    var map = {};
+    try { map = JSON.parse(localStorage.getItem(HEALED) || "{}"); } catch (e) { map = {}; }
+    if (Date.now() - (map[novel.id] || 0) < 86400000) return;
+    map[novel.id] = Date.now();
+    localStorage.setItem(HEALED, JSON.stringify(map));
+    api("/novel/" + novel.id + "/heal", { method: "POST" }).then(function (res) {
+      if (!res || !res.healed || !current.novel || current.novel.id !== novel.id) return;
+      els["heal-msg"].textContent = "✨ " + (res.message || "Filled missing chapters.");
+      els["heal-msg"].classList.remove("hidden");
+      current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
+      loadChapters();
+    }).catch(function () { /* auto-heal is best-effort */ });
+  }
+
   els["heal-btn"].addEventListener("click", function () {
     if (!current.novel) return;
     var btn = this;
@@ -551,7 +638,17 @@ _READER_HTML = """<!DOCTYPE html>
       els["reader-content"].innerHTML = res.content || "<p class='muted'>No content available for this chapter.</p>";
       els["reader-pos"].textContent = "#" + (ch.serial || "");
       hydrateImages(els["reader-content"]);
+      current.chapterId = chapterId;
       savePos(novel.id, chapterId, ch.serial);
+      // resume mid-chapter where reading stopped (savePos keeps the saved
+      // fraction when re-opening the same chapter, resets it on a new one)
+      var pe = posOf(novel.id);
+      if (pe && pe.id === chapterId && pe.scroll > 0.01) {
+        setTimeout(function () {
+          var max = document.documentElement.scrollHeight - window.innerHeight;
+          if (max > 0) window.scrollTo(0, pe.scroll * max);
+        }, 60);
+      }
       els["prev-btn"].disabled = !res.previous_id;
       els["next-btn"].disabled = !res.next_id;
       els["prev-btn"].onclick = function () { if (res.previous_id) openChapter(res.previous_id); };
@@ -609,6 +706,19 @@ _READER_HTML = """<!DOCTYPE html>
     if (els["view-reader"].classList.contains("hidden")) return;
     if (e.key === "ArrowRight" && !els["next-btn"].disabled) els["next-btn"].click();
     if (e.key === "ArrowLeft" && !els["prev-btn"].disabled) els["prev-btn"].click();
+  });
+
+  // remember the in-chapter position while reading (throttled)
+  var scrollTimer = null;
+  window.addEventListener("scroll", function () {
+    if (els["view-reader"].classList.contains("hidden")) return;
+    if (!current.novel || !current.chapterId) return;
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(function () {
+      var max = document.documentElement.scrollHeight - window.innerHeight;
+      var frac = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+      saveScroll(current.novel.id, current.chapterId, frac);
+    }, 400);
   });
 
   // ---- Auth ----

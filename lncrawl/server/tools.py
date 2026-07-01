@@ -100,7 +100,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
 <body>
 <div class="wrap">
   <a id="back-link" href="/" class="back">&larr; Back to app</a>
-  <a id="reader-link" href="/reader" class="back" style="margin-left:14px">📖 Open Reader</a>
+  <a id="reader-link" href="/reader" target="_blank" class="back" style="margin-left:14px" title="Opens in its own window so this page keeps watching your export">📖 Open Reader</a>
   <h1>LNCrawl Tools</h1>
   <p class="sub">Lightweight power-user actions wired straight to the REST API.</p>
 
@@ -502,15 +502,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
       })
       .catch(function (e) {
         // a transient blip (busy server / connection hiccup) shouldn't freeze the
-        // progress view — the export keeps running server-side, so keep retrying
+        // progress view — the export keeps running server-side, so NEVER give up:
+        // keep retrying forever, just more slowly after repeated failures
         var n = fails + 1;
-        if (n <= 15) {
-          if (n === 1) log("Status check hiccup — still retrying… (" + e.message + ")", "log-err");
-          setTimeout(function () { pollExport(id, n); }, 8000);
-        } else {
-          log("Stopped checking status after repeated failures. The export may still be running — reopen Tools to reattach.", "log-err");
-          setExportControls(null, id);
-        }
+        if (n === 1) log("Status check hiccup — still retrying… (" + e.message + ")", "log-err");
+        else if (n === 15) log("Still can't reach the server — the export keeps running; retrying every 15s…", "log-err");
+        setTimeout(function () { pollExport(id, n); }, n < 15 ? 8000 : 15000);
       });
   }
 
