@@ -360,6 +360,7 @@ def export_source(
         resume=body.resume,
         requests_per_sec=body.requests_per_sec,
         auto_tune=body.auto_tune,
+        update_only=body.update_only,
         urls=[str(u) for u in body.urls] if body.urls else None,
     )
 

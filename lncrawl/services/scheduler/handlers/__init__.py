@@ -13,6 +13,7 @@ from .discover_source import DiscoverSourceHandler
 from .export_source import ExportSourceHandler
 from .fetch_latest import FetchLatestHandler
 from .fetch_missing import FetchMissingHandler
+from .heal_novel import HealNovelHandler
 from .image import ImageHandler
 from .image_batch import ImageBatchHandler
 from .list_source import ListSourceHandler
@@ -35,6 +36,7 @@ _HANDLER_REGISTRY: List[Type[BaseHandler]] = [
     NovelTranslationBatchHandler,
     FetchMissingHandler,
     FetchLatestHandler,
+    HealNovelHandler,
     VolumeHandler,
     VolumeBatchHandler,
     VolumeTranslationHandler,

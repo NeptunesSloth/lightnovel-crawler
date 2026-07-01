@@ -199,6 +199,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <label for="exp-resume" style="margin:0">Resume — reuse novels already finished in a previous run</label>
       </div>
       <div class="row checkbox">
+        <input id="exp-update" type="checkbox" />
+        <label for="exp-update" style="margin:0">Update only — re-check finished novels for new chapters and grab just those</label>
+      </div>
+      <div class="row checkbox">
         <input id="exp-autotune" type="checkbox" checked />
         <label for="exp-autotune" style="margin:0">Auto-tune rate — slow down when blocked, speed up when clear</label>
       </div>
@@ -480,8 +484,15 @@ _TOOLS_HTML = """<!DOCTYPE html>
       .then(function (job) {
         var status = statusName(job.status);
         var ex = job.extra || {};
-        if (isActive(status)) setExportControls(id, id);
-        if (status === "RUNNING" && ex.phase === "discovering") {
+        if (status === "RUNNING") setExportControls(id, id);
+        if (status === "PENDING") {
+          // queued behind another export — say so once, then wait quietly
+          pollExport._queued = pollExport._queued || {};
+          if (!pollExport._queued[id]) {
+            pollExport._queued[id] = 1;
+            log("⏳ Queued — will start automatically when the current export finishes.", "log-info");
+          }
+        } else if (status === "RUNNING" && ex.phase === "discovering") {
           log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches)", "log-info");
         } else if (status === "RUNNING" && ex.phase === "solving-challenge") {
           log("Site is blocking requests — solving the Cloudflare challenge in a browser…", "log-info");
@@ -495,6 +506,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
           }
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
           log("Retry " + (ex.retry || "") + " — waiting for the source to recover…", "log-info");
+        } else if (status === "RUNNING" && ex.phase === "checking-updates") {
+          log("Checking finished novels for new chapters… (" + job.done + "/" + job.total + ")", "log-info");
         } else {
           log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
         }
@@ -604,6 +617,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     body.dedupe = document.getElementById("exp-dedupe").checked;
     body.resume = document.getElementById("exp-resume").checked;
     body.auto_tune = document.getElementById("exp-autotune").checked;
+    body.update_only = document.getElementById("exp-update").checked;
     return body;
   }
 
@@ -616,7 +630,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
     log("Starting full export of " + body.url + " (this can take a while) …", "log-info");
     api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })
       .then(function (job) {
-        log("Export job created: " + job.id, "log-ok");
+        if (activeExportId && activeExportId !== job.id) {
+          log("Export job created: " + job.id + " — queued behind the running export; it starts automatically when that one succeeds or fails.", "log-ok");
+        } else {
+          log("Export job created: " + job.id, "log-ok");
+        }
         pollExport(job.id);
       })
       .catch(function (e) { log("Export failed: " + e.message, "log-err"); })

@@ -620,6 +620,31 @@ class JobService:
             type=JobType.FETCH_MISSING,
         )
 
+    def heal_novel(
+        self,
+        user: User,
+        novel_id: str,
+        *,
+        parent_id: Optional[str] = None,
+        depends_on: Optional[str] = None,
+        **data: Any,
+    ) -> Job:
+        """Create a job that fills missing chapters from other sites (deep heal)."""
+        novel = ctx.novels.get(novel_id)
+        data.update(
+            {
+                "novel_id": novel_id,
+                "novel_title": novel.title,
+            }
+        )
+        return self._create(
+            user=user,
+            data=data,
+            parent_id=parent_id,
+            depends_on=depends_on,
+            type=JobType.HEAL_NOVEL,
+        )
+
     def fetch_latest(
         self,
         user: User,
@@ -728,6 +753,7 @@ class JobService:
         resume: bool = True,
         requests_per_sec: float = 0,
         auto_tune: bool = True,
+        update_only: bool = False,
         urls: Optional[List[str]] = None,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
@@ -748,6 +774,7 @@ class JobService:
         data["resume"] = bool(resume)
         data["requests_per_sec"] = max(0.0, float(requests_per_sec))
         data["auto_tune"] = bool(auto_tune)
+        data["update_only"] = bool(update_only)
         if limit:
             data["limit"] = int(limit)
         # When specific novels are picked, export exactly those (skip discovery)

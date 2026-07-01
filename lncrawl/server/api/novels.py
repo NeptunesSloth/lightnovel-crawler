@@ -5,7 +5,7 @@ from fastapi import APIRouter, Path, Query, Security
 from fastapi.responses import FileResponse
 
 from ...context import ctx
-from ...dao import ActivityType, Artifact, Chapter, LanguageCode, Novel, User, Volume
+from ...dao import ActivityType, Artifact, Chapter, Job, LanguageCode, Novel, User, Volume
 from ...exceptions import ServerErrors
 from ..models import Paginated
 from ..security import ensure_admin, ensure_user
@@ -149,6 +149,17 @@ def heal_novel(
     user: User = Security(ensure_user),
 ) -> Dict[str, object]:
     return ctx.novels.heal_from_library(novel_id)
+
+
+@router.post(
+    "/{novel_id}/heal-deep",
+    summary="Create a job that searches other sites for this novel's missing chapters",
+)
+def heal_novel_deep(
+    novel_id: str = Path(),
+    user: User = Security(ensure_user),
+) -> Job:
+    return ctx.jobs.heal_novel(user, novel_id)
 
 
 @router.get("/{novel_id}/languages", summary="Gets available translation languages")

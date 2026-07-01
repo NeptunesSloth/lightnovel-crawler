@@ -267,6 +267,7 @@ _READER_HTML = """<!DOCTYPE html>
     <button id="continue-btn" class="primary hidden" style="margin-bottom:12px">▶ Continue reading</button>
     <button id="fav-btn" style="margin:0 0 12px 8px" title="Add to favorites">☆ Favorite</button>
     <button id="heal-btn" class="hidden" style="margin:0 0 12px 8px" title="Fill gaps from another copy of this novel in your library">✨ Fill missing chapters</button>
+    <button id="deep-btn" class="hidden" style="margin:0 0 12px 8px" title="Search other sites for the missing chapters and download them">🔍 Find missing on other sites</button>
     <button id="merge-btn" class="hidden" style="margin:0 0 12px 8px" title="Combine all copies of this title into the most complete one">⧉ Merge copies</button>
     <button id="del-btn" style="margin:0 0 12px 8px" title="Delete this novel from your library">🗑</button>
     <span class="muted hidden" id="heal-msg" style="margin-left:8px"></span>
@@ -377,7 +378,7 @@ _READER_HTML = """<!DOCTYPE html>
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
    "font-dn","auth","email","password","login","auth-msg","search-wrap","aa-btn","aa-panel",
    "aa-theme","aa-font","aa-width","aa-trans","fit-btn","fav-btn","bmk-btn","bmk-list",
-   "trans-pop","lib-select","lib-del","merge-btn","del-btn"].forEach(function (id) {
+   "trans-pop","lib-select","lib-del","merge-btn","del-btn","deep-btn"].forEach(function (id) {
     els[id] = document.getElementById(id);
   });
 
@@ -705,6 +706,7 @@ _READER_HTML = """<!DOCTYPE html>
     els["continue-btn"].textContent = pe && pe.serial ? ("▶ Continue · ch " + pe.serial) : "▶ Continue reading";
     els["continue-btn"].onclick = function () { if (pe) openChapter(pe.id); };
     els["heal-btn"].classList.add("hidden");
+    els["deep-btn"].classList.add("hidden");
     els["heal-msg"].classList.add("hidden");
     show("view-novel");
     loadChapters();
@@ -728,7 +730,11 @@ _READER_HTML = """<!DOCTYPE html>
       var total = (res && res.total) || current.offset;
       els["chap-more-wrap"].classList.toggle("hidden", current.offset >= total);
       // offer cross-source healing only when there are gaps to fill
-      if (gaps) { els["heal-btn"].classList.remove("hidden"); maybeAutoHeal(); }
+      if (gaps) {
+        els["heal-btn"].classList.remove("hidden");
+        els["deep-btn"].classList.remove("hidden");
+        maybeAutoHeal();
+      }
     }).catch(function (e) { els["chap-list"].innerHTML = "<p class='muted'>Couldn't load chapters: " + e.message + "</p>"; });
   }
   // Auto-heal: when a novel with gaps is opened and another copy of the same
@@ -767,6 +773,42 @@ _READER_HTML = """<!DOCTYPE html>
     }).catch(function (e) {
       els["heal-msg"].textContent = "Heal failed: " + e.message;
     }).finally(function () { btn.disabled = false; });
+  });
+
+  // Deep heal: a background job searches other sites for the missing chapters,
+  // downloads them, and copies matches in. Poll it and refresh when done.
+  els["deep-btn"].addEventListener("click", function () {
+    if (!current.novel) return;
+    var btn = this; btn.disabled = true;
+    var novelId = current.novel.id;
+    els["heal-msg"].textContent = "Searching other sites for the missing chapters…";
+    els["heal-msg"].classList.remove("hidden");
+    api("/novel/" + novelId + "/heal-deep", { method: "POST" }).then(function (job) {
+      (function poll() {
+        api("/job/" + job.id).then(function (j) {
+          if (!current.novel || current.novel.id !== novelId) { btn.disabled = false; return; }
+          var ex = j.extra || {};
+          var active = j.status === 0 || j.status === 1 || j.status === "PENDING" || j.status === "RUNNING";
+          if (active) {
+            if (ex.source) {
+              els["heal-msg"].textContent = (ex.phase === "searching" ? "Searching " : "Downloading from ") +
+                ex.source + "… (" + (j.done || 0) + "/" + (j.total || 0) + " filled)";
+            }
+            setTimeout(poll, 3000);
+            return;
+          }
+          btn.disabled = false;
+          els["heal-msg"].textContent = ex.message || (j.error ? ("Failed: " + j.error) : "Done.");
+          if (ex.healed) {
+            current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
+            loadChapters();
+          }
+        }).catch(function () { setTimeout(poll, 5000); });
+      })();
+    }).catch(function (e) {
+      btn.disabled = false;
+      els["heal-msg"].textContent = "Couldn't start the search: " + e.message;
+    });
   });
 
   els["merge-btn"].addEventListener("click", function () {

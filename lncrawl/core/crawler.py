@@ -85,6 +85,24 @@ class Crawler(ABC):
 
         self.scraper = Scraper(origin=origin, parser=parser, config=config)
 
+        # Ride a previously-solved Cloudflare clearance for this host, if one is
+        # saved and still fresh — avoids re-solving the challenge in a browser on
+        # every restart. Expired cookies are harmless (the site just challenges
+        # again and the new clearance replaces the old one).
+        try:
+            from .clearance import load_clearance
+
+            entry = load_clearance(origin)
+            if entry:
+                self.scraper.apply_browser_clearance(
+                    origin,
+                    cf_clearance=entry.get("cf_clearance"),
+                    user_agent=entry.get("user_agent") or None,
+                    cookies=entry.get("cookies") or {},
+                )
+        except Exception:
+            pass
+
     def close(self) -> None:
         self.scraper.close()
         self.taskman.close()
