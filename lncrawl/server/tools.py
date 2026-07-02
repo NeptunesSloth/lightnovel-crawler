@@ -248,6 +248,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
         Screen</b> (iPhone), then tap <b>⬇ All offline</b> in the library to take everything with you.
       </p>
       <p class="hint" style="text-align:left;max-width:440px;margin:8px auto 0">
+        <b>No Wi-Fi at all (gym / travelling)?</b> Make your own network — no internet needed:
+        on the phone turn on <b>Personal Hotspot</b> and connect the laptop to it, <i>or</i> on
+        Windows turn on <b>Mobile hotspot</b> (Settings → Network &amp; internet) and join it from
+        the phone. Then close and reopen this section to refresh the code, and scan as usual.
+      </p>
+      <p class="hint" style="text-align:left;max-width:440px;margin:8px auto 0">
         Not loading? Click <b>Allow access</b> if Windows Firewall asks (or allow "lncrawl" under
         Windows Security → Firewall), and double-check both devices are on the same network.
       </p>
