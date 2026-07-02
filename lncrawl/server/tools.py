@@ -329,13 +329,25 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (reader && tok) reader.href = "/reader?authToken=" + encodeURIComponent(tok);
   })();
 
+  var lastLogMsg = null, lastLogEl = null, lastLogCount = 0;
   function log(msg, cls) {
     if (firstLog) { logEl.innerHTML = ""; firstLog = false; }
+    var ts = new Date().toLocaleTimeString();
+    // collapse consecutive repeats (status polls re-report the same state every
+    // few seconds) into one line that updates in place, instead of a wall of spam
+    if (msg === lastLogMsg && lastLogEl) {
+      lastLogCount += 1;
+      lastLogEl.textContent = "[" + ts + "] " + msg + "  ×" + lastLogCount;
+      logEl.scrollTop = logEl.scrollHeight;
+      return;
+    }
     var line = document.createElement("div");
     if (cls) line.className = cls;
-    var ts = new Date().toLocaleTimeString();
     line.textContent = "[" + ts + "] " + msg;
     logEl.appendChild(line);
+    lastLogMsg = msg; lastLogEl = line; lastLogCount = 1;
+    // keep the log bounded on very long runs
+    while (logEl.childNodes.length > 400) logEl.removeChild(logEl.firstChild);
     logEl.scrollTop = logEl.scrollHeight;
   }
 
@@ -518,7 +530,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
               (ex.last_fail_detail ? " (" + ex.last_fail_detail + ")" : ""), "log-err");
           }
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
-          log("Retry " + (ex.retry || "") + " — waiting for the source to recover…", "log-info");
+          var waitSec = Math.min(30 * (ex.retry || 1), 300);
+          log("Retry " + (ex.retry || "") + " — waiting ~" + waitSec + "s for the source to recover…", "log-info");
         } else if (status === "RUNNING" && ex.phase === "checking-updates") {
           log("Checking finished novels for new chapters… (" + job.done + "/" + job.total + ")", "log-info");
         } else if (status === "RUNNING" && ex.phase === "cooling-down") {
