@@ -228,7 +228,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card">
-    <details class="card-fold">
+    <details class="card-fold" id="storage-card">
     <summary>Storage, backup &amp; phone</summary>
     <p class="hint" id="storage-line">Sign in to see disk usage.</p>
     <div id="storage-largest" class="muted" style="font-size:13px"></div>
@@ -240,10 +240,23 @@ _TOOLS_HTML = """<!DOCTYPE html>
     </div>
     <div id="phone-box" class="hidden" style="margin-top:12px;text-align:center">
       <div id="phone-qr" style="background:#fff;display:inline-block;padding:10px;border-radius:10px"></div>
-      <p class="muted" id="phone-url" style="word-break:break-all"></p>
-      <p class="hint">Scan with your phone's camera (same Wi-Fi as this PC), then sign in with the
-        same email &amp; password. If it doesn't load, allow the app through Windows Firewall
-        and make sure both devices are on the same network.</p>
+      <p class="hint" style="text-align:left;max-width:440px;margin:10px auto 0">
+        <b>1.</b> Put your phone on the <b>same Wi-Fi</b> as this PC.<br/>
+        <b>2.</b> Point the phone's <b>camera</b> at this code and tap the link — the Reader opens
+        <b>already signed in</b>.<br/>
+        <b>3.</b> On the phone, tap <b>📲 Install</b> (Android) or <b>Share&nbsp;→&nbsp;Add to Home
+        Screen</b> (iPhone), then tap <b>⬇ All offline</b> in the library to take everything with you.
+      </p>
+      <p class="hint" style="text-align:left;max-width:440px;margin:8px auto 0">
+        <b>No Wi-Fi at all (gym / travelling)?</b> Make your own network — no internet needed:
+        on the phone turn on <b>Personal Hotspot</b> and connect the laptop to it, <i>or</i> on
+        Windows turn on <b>Mobile hotspot</b> (Settings → Network &amp; internet) and join it from
+        the phone. Then close and reopen this section to refresh the code, and scan as usual.
+      </p>
+      <p class="hint" style="text-align:left;max-width:440px;margin:8px auto 0">
+        Not loading? Click <b>Allow access</b> if Windows Firewall asks (or allow "lncrawl" under
+        Windows Security → Firewall), and double-check both devices are on the same network.
+      </p>
     </div>
     </details>
   </div>
@@ -316,13 +329,25 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (reader && tok) reader.href = "/reader?authToken=" + encodeURIComponent(tok);
   })();
 
+  var lastLogMsg = null, lastLogEl = null, lastLogCount = 0;
   function log(msg, cls) {
     if (firstLog) { logEl.innerHTML = ""; firstLog = false; }
+    var ts = new Date().toLocaleTimeString();
+    // collapse consecutive repeats (status polls re-report the same state every
+    // few seconds) into one line that updates in place, instead of a wall of spam
+    if (msg === lastLogMsg && lastLogEl) {
+      lastLogCount += 1;
+      lastLogEl.textContent = "[" + ts + "] " + msg + "  ×" + lastLogCount;
+      logEl.scrollTop = logEl.scrollHeight;
+      return;
+    }
     var line = document.createElement("div");
     if (cls) line.className = cls;
-    var ts = new Date().toLocaleTimeString();
     line.textContent = "[" + ts + "] " + msg;
     logEl.appendChild(line);
+    lastLogMsg = msg; lastLogEl = line; lastLogCount = 1;
+    // keep the log bounded on very long runs
+    while (logEl.childNodes.length > 400) logEl.removeChild(logEl.firstChild);
     logEl.scrollTop = logEl.scrollHeight;
   }
 
@@ -505,9 +530,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
               (ex.last_fail_detail ? " (" + ex.last_fail_detail + ")" : ""), "log-err");
           }
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
-          log("Retry " + (ex.retry || "") + " — waiting for the source to recover…", "log-info");
+          var waitSec = Math.min(30 * (ex.retry || 1), 300);
+          log("Retry " + (ex.retry || "") + " — waiting ~" + waitSec + "s for the source to recover…", "log-info");
         } else if (status === "RUNNING" && ex.phase === "checking-updates") {
           log("Checking finished novels for new chapters… (" + job.done + "/" + job.total + ")", "log-info");
+        } else if (status === "RUNNING" && ex.phase === "cooling-down") {
+          log("Cooling off ~" + (ex.cooldown_minutes || 20) + " min so the site unblocks, then the follow-up run starts…", "log-info");
         } else {
           log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
         }
@@ -528,6 +556,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
           if (extra.saved_to) log("Saved to Desktop: " + extra.saved_to, "log-ok");
           if (extra.export_file) downloadBlob(id, extra.export_name);
           loadLibrary(window._lncrawlUserId);
+          if (extra.continued_job_id) {
+            log("⏳ " + (extra.failed || "Some") + " novel(s) were still blocked — a follow-up run is queued and starts by itself after a cool-off. Each round's zip includes everything finished so far.", "log-info");
+            pollExport(extra.continued_job_id);
+          }
         } else {
           setExportControls(null, id);
           log("Export ended: " + status + (job.error ? " — " + job.error : "") +
@@ -762,19 +794,27 @@ _TOOLS_HTML = """<!DOCTYPE html>
     }).catch(function (e) { log("Backup failed: " + e.message, "log-err"); })
       .finally(function () { busy(btn, false); });
   });
-  document.getElementById("phone-btn").addEventListener("click", function () {
-    if (!requireAuth()) return;
+  function showPhoneBox() {
     var box = document.getElementById("phone-box");
-    if (!box.classList.contains("hidden")) { box.classList.add("hidden"); return; }
-    api("/settings/lan", { method: "GET" }).then(function (r) {
-      document.getElementById("phone-url").textContent = r.url;
-      return fetch("/api/settings/lan-qr", { headers: { "Authorization": "Bearer " + token() } });
-    }).then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.text(); })
+    fetch("/api/settings/lan-qr", { headers: { "Authorization": "Bearer " + token() } })
+      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.text(); })
       .then(function (svg) {
         document.getElementById("phone-qr").innerHTML = svg;
         box.classList.remove("hidden");
       })
-      .catch(function (e) { log("Couldn't get the phone link: " + e.message, "log-err"); });
+      .catch(function (e) { log("Couldn't get the phone code: " + e.message, "log-err"); });
+  }
+  document.getElementById("phone-btn").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var box = document.getElementById("phone-box");
+    if (!box.classList.contains("hidden")) { box.classList.add("hidden"); return; }
+    showPhoneBox();
+  });
+  // idiot-proof: opening the fold shows usage AND the phone QR without extra clicks
+  document.getElementById("storage-card").addEventListener("toggle", function () {
+    if (!this.open || !token()) return;
+    loadStorage();
+    showPhoneBox();
   });
 
   function loadNotifyConfig() {
