@@ -527,6 +527,13 @@ class ExportSourceHandler(BaseHandler):
             # keeps going; one whose count holds steady is abandoned as partial.
             prev_missing: Dict[str, int] = {}
 
+            # Per-novel failure reason from the previous pass. A novel that crashes
+            # with the *identical* error twice in a row is failing deterministically
+            # (e.g. a corrupted file, a parse bug) — retry rounds can't fix that, so
+            # drop it instead of burning backoff time on it every round. Throttling
+            # errors are exempt: those are exactly what the backoff is for.
+            prev_error: Dict[str, str] = {}
+
             # initial pass + retry rounds over whatever still isn't complete
             for attempt in range(retries + 1):
                 if not pending:
@@ -632,10 +639,20 @@ class ExportSourceHandler(BaseHandler):
                                 )
                         elif novel_url not in last_error:
                             last_error[novel_url] = "No chapters found or ebook could not be built"
-                        if not give_up:
-                            next_pending.append(novel_url)
                         reason_text = last_error[novel_url]
                         throttled = _looks_throttled(reason_text)
+                        # deterministic failure: the identical (non-throttle) error
+                        # twice in a row won't be fixed by another round — drop it
+                        if file is None and not throttled:
+                            if prev_error.get(novel_url) == reason_text:
+                                give_up = True
+                                ctx.logger.info(
+                                    f"Same error twice for {novel_url} — giving up on it: "
+                                    f"{reason_text}"
+                                )
+                            prev_error[novel_url] = reason_text
+                        if not give_up:
+                            next_pending.append(novel_url)
                         # a failure: slow down (harder if it looks like throttling)
                         bump = ADAPTIVE_STEP * (2 if throttled else 1)
                         adaptive_delay = min(ADAPTIVE_MAX, max(adaptive_delay, floor_delay) + bump)
