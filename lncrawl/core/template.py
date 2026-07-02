@@ -160,6 +160,15 @@ class BrowserTemplate(CrawlerTemplate):
                 )
                 if clearance:
                     logger.info("Obtained Cloudflare clearance via browser for %s", url)
+                    # persist so restarts / later runs skip the browser solve
+                    from .clearance import save_clearance
+
+                    save_clearance(
+                        url,
+                        cf_clearance=clearance,
+                        user_agent=user_agent or None,
+                        cookies=cookies,
+                    )
                 else:
                     logger.warning("Browser visit to %s did not yield a cf_clearance cookie", url)
                 return bool(clearance)

@@ -1,8 +1,15 @@
-from typing import List, Literal, Union
+from pathlib import Path
+import sqlite3
+import time
+from typing import Any, Dict, List, Literal, Union
+import zipfile
 
 from fastapi import APIRouter, Body, Query
+from fastapi.responses import FileResponse
+from sqlalchemy.engine import make_url
 
 from ...context import ctx
+from ...exceptions import ServerErrors
 from ..models import (
     ConfigSection,
     ConfigUpdateRequest,
@@ -16,6 +23,59 @@ from ..models.activity import (
 
 # The root router
 router = APIRouter()
+
+
+@router.post("/backup", summary="Create a full backup zip (database + downloaded library)")
+def create_backup() -> Dict[str, Any]:
+    """Zip a consistent snapshot of the database plus the whole novels library.
+
+    Stored (not compressed) for speed — chapter JSON and JPEGs barely compress.
+    The zip lands in the exports folder and is also copied to the Desktop when
+    one exists. Restore = extract into the data folder while the app is closed.
+    """
+    from ...services.scheduler.handlers.export_source import _copy_to_desktop
+
+    exports = ctx.files.resolve("exports")
+    exports.mkdir(parents=True, exist_ok=True)
+    name = f"backup-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+    out = exports / name
+
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as zf:
+        # a consistent DB snapshot via SQLite's online backup API (safe mid-run)
+        if ctx.db.engine.dialect.name == "sqlite":
+            db_path = make_url(ctx.config.db.url).database
+            if db_path:
+                tmp = out.with_suffix(".db-snapshot")
+                src = sqlite3.connect(db_path)
+                dst = sqlite3.connect(str(tmp))
+                try:
+                    with dst:
+                        src.backup(dst)
+                finally:
+                    src.close()
+                    dst.close()
+                zf.write(tmp, arcname=f"database/{Path(db_path).name}")
+                tmp.unlink()
+        # every downloaded novel: chapters, images, covers
+        novels_dir = ctx.files.resolve("novels")
+        if novels_dir.is_dir():
+            for f in novels_dir.rglob("*"):
+                if f.is_file():
+                    zf.write(f, arcname=f"novels/{f.relative_to(novels_dir).as_posix()}")
+
+    size = out.stat().st_size
+    saved_to = _copy_to_desktop(out, name)
+    return {"file": name, "size": size, "saved_to": saved_to}
+
+
+@router.get("/backup/file", summary="Download the most recent backup zip")
+def download_backup() -> FileResponse:
+    exports = ctx.files.resolve("exports")
+    backups = sorted(exports.glob("backup-*.zip")) if exports.is_dir() else []
+    if not backups:
+        raise ServerErrors.no_such_file
+    latest = backups[-1]
+    return FileResponse(latest, media_type="application/zip", filename=latest.name)
 
 
 @router.post("/update-sources", summary="Update sources from the repository")

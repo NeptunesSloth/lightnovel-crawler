@@ -141,11 +141,14 @@ def start() -> None:
     port = free_port(host, 31580)
     cdp_port = free_port(host, 31590)
 
+    # Bind on all interfaces so phones/tablets on the same Wi-Fi can open the
+    # Reader (the app window itself still connects via localhost). The whole
+    # API stays behind sign-in, so LAN exposure is auth-gated.
     Thread(
         daemon=True,
         name="server",
         target=_start_server,
-        args=(host, port),
+        args=("0.0.0.0", port),
     ).start()
 
     try:

@@ -236,26 +236,42 @@ def _manifest_path(domain: str) -> Path:
     return ctx.files.resolve(f"exports/manifest/{safe_filename(domain)}.json")
 
 
-def _load_manifest(domain: str) -> Dict[str, dict]:
-    """Load the resume manifest: ``{novel_url: {"file": str, "missing": int}}``."""
+def _load_manifest_file(domain: str) -> dict:
     path = _manifest_path(domain)
     if not path.is_file():
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        novels = data.get("novels")
-        return novels if isinstance(novels, dict) else {}
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
 
-def _save_manifest(domain: str, novels: Dict[str, dict]) -> None:
+def _load_manifest(domain: str) -> Dict[str, dict]:
+    """Load the resume manifest: ``{novel_url: {"file": str, "missing": int}}``."""
+    novels = _load_manifest_file(domain).get("novels")
+    return novels if isinstance(novels, dict) else {}
+
+
+def _load_tuned_rps(domain: str) -> float:
+    """The request rate (req/s) the auto-tuner settled on in the last run, or 0."""
+    try:
+        return float(_load_manifest_file(domain).get("tuned_rps") or 0)
+    except Exception:
+        return 0.0
+
+
+def _save_manifest(domain: str, novels: Dict[str, dict], tuned_rps: float = 0) -> None:
     """Persist the resume manifest (best-effort; never raises into the caller)."""
     path = _manifest_path(domain)
     try:
+        data = _load_manifest_file(domain)
+        data["novels"] = novels
+        if tuned_rps > 0:
+            data["tuned_rps"] = round(tuned_rps, 2)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"novels": novels}, ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
     except Exception as e:
         ctx.logger.debug(f"Could not save export manifest for {domain}: {e}")
@@ -330,10 +346,20 @@ class ExportSourceHandler(BaseHandler):
         resume = bool(self.job.extra.get("resume", True))
         # How fast to fire chapter/image requests. Polite mode defaults to a gentle
         # rate; a value can be set explicitly to go slower (flagged IP) or faster.
-        requests_per_sec = float(self.job.extra.get("requests_per_sec", 0) or 0)
+        explicit_rps = float(self.job.extra.get("requests_per_sec", 0) or 0)
+        requests_per_sec = explicit_rps
         if polite and requests_per_sec <= 0:
             requests_per_sec = POLITE_REQUESTS_PER_SEC
         auto_tune = bool(self.job.extra.get("auto_tune", True))
+        update_only = bool(self.job.extra.get("update_only", False))
+        # Speed memory: unless a rate was set explicitly, start at the rate the
+        # auto-tuner settled on last run, so a known-touchy site isn't re-blocked
+        # while the tuner re-learns from scratch.
+        if auto_tune and not explicit_rps:
+            saved_rps = _load_tuned_rps(self.job.extra.get("domain") or "")
+            if saved_rps > 0:
+                requests_per_sec = saved_rps
+                ctx.logger.info(f"Starting at remembered rate: {saved_rps} req/s")
 
         # Seed the de-dupe set with titles already in the library from *other*
         # sources, so a story grabbed from one site isn't redone from another.
@@ -404,13 +430,40 @@ class ExportSourceHandler(BaseHandler):
             # re-attempted (cheap, since downloaded chapters are skipped).
             manifest = _load_manifest(domain) if resume else {}
             pending = []
+            finished_urls = []
             for novel_url in urls:
                 rec = manifest.get(novel_url) if resume else None
                 done_file = rec.get("file") if isinstance(rec, dict) else None
                 if done_file and not (rec or {}).get("missing") and Path(done_file).is_file():
                     complete[novel_url] = Path(done_file)
+                    finished_urls.append(novel_url)
                 else:
                     pending.append(novel_url)
+
+            # Update-only: re-check each finished novel's source page for newly
+            # released chapters; those with something new go back to pending (only
+            # the new chapters download — the rest are already on disk).
+            if update_only and finished_urls:
+                self._set_extra(phase="checking-updates")
+                for idx, novel_url in enumerate(finished_urls):
+                    if self.signal.is_set():
+                        raise AbortedException()
+                    self._set_progress(idx, len(finished_urls))
+                    try:
+                        novel = ctx.crawler.fetch_novel(
+                            self.user.id, novel_url, signal=self.signal, custom=crawler
+                        )
+                        all_ids = ctx.chapters.list_ids(novel_id=novel.id)
+                        done_ids = set(ctx.chapters.list_ids(novel_id=novel.id, is_crawled=True))
+                        if any(cid not in done_ids for cid in all_ids):
+                            complete.pop(novel_url, None)
+                            pending.append(novel_url)
+                            ctx.logger.info(f"New chapters found: {novel.title}")
+                    except AbortedException:
+                        raise
+                    except Exception as e:
+                        ctx.logger.debug(f"Update check failed for {novel_url}: {e}")
+                self._set_extra(phase="downloading", updated=len(pending))
             if complete:
                 ctx.logger.info(
                     f"Resuming {domain}: {len(complete)} novel(s) already done, "
@@ -600,6 +653,10 @@ class ExportSourceHandler(BaseHandler):
                             raise AbortedException()
                 pending = next_pending
 
+            # speed memory: remember the rate the tuner settled on for next run
+            if auto_tune and tuned_rps > 0:
+                _save_manifest(domain, manifest, tuned_rps=tuned_rps)
+
             # bundle the complete ones, plus the best partial we have for the rest.
             # Iterate `partial` directly (not just novels still in `pending`) so a
             # novel we stopped retrying early — because it stopped improving — is
@@ -761,9 +818,11 @@ def _download_novel(
     """
     # Reuse already-fetched metadata: on retry rounds (and re-runs) the novel and
     # its chapter list are already in the DB, so skip re-downloading the info page
-    # — a wasted network round-trip per novel per round. Only fetch when new.
+    # — a wasted network round-trip per novel per round. Only fetch when new, or
+    # when the stored record predates synopsis/tags parsing (backfills old
+    # library entries with a single page request on the next run).
     novel = ctx.novels.find_by_url(novel_url)
-    if novel is None or not ctx.chapters.list_ids(novel_id=novel.id):
+    if novel is None or not ctx.chapters.list_ids(novel_id=novel.id) or not novel.synopsis:
         novel = ctx.crawler.fetch_novel(user_id, novel_url, signal=signal, custom=crawler)
 
     norm = _norm_title(novel.title)

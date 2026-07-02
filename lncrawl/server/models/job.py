@@ -116,6 +116,11 @@ class ExportSourceRequest(BaseModel):
         description="Automatically lower the request rate when blocking is detected and raise it "
         "back when clear, so the run finds the fastest rate that isn't blocked",
     )
+    update_only: bool = Field(
+        default=False,
+        description="Re-check novels finished in a prior run for newly released chapters and "
+        "grab just those (with resume on); novels with nothing new are reused as-is",
+    )
 
 
 class ListSourceRequest(BaseModel):

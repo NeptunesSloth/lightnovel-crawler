@@ -15,6 +15,7 @@ from .meta import router as metadata
 from .novels import router as novel
 from .settings import router as settings
 from .sources import router as sources
+from .translate import router as translate
 from .users import router as user
 from .volumes import router as volume
 
@@ -83,6 +84,13 @@ router.include_router(
     artifact,
     prefix="/artifact",
     tags=["Artifacts"],
+    dependencies=[Security(ensure_user)],
+)
+
+router.include_router(
+    translate,
+    prefix="/translate",
+    tags=["Translate"],
     dependencies=[Security(ensure_user)],
 )
 

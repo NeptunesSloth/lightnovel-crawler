@@ -42,6 +42,7 @@ class JobType(IntEnum):
     LIST_SOURCE = 54
     FETCH_MISSING = 60
     FETCH_LATEST = 61
+    HEAL_NOVEL = 62
 
 
 class JobStatus(IntEnum):
