@@ -46,6 +46,13 @@ POLITE_REQUESTS_PER_SEC = 1.0
 RETRY_BACKOFF = 30.0
 MAX_RETRY_BACKOFF = 300.0
 
+# Auto-continue: when a run ends with novels still failing but DID make progress,
+# queue a follow-up run automatically (after a cool-off long enough for the site
+# to unblock) instead of making the user click again. Runs stop chaining when a
+# round adds nothing new, or after this many rounds.
+MAX_AUTO_CONTINUE = 6
+CONTINUE_COOLDOWN_MIN = 20.0
+
 # Adaptive per-novel pacing. The delay between novels climbs when downloads start
 # failing (so an overnight run automatically slows down when a site begins
 # throttling it) and decays back toward the floor as they succeed again. This is
@@ -201,18 +208,26 @@ def _drain(crawler, futures, on_tick, signal) -> int:
     return done_count
 
 
-def _build_index_html(domain: str, entries: List[Tuple[str, str, str]]) -> str:
+def _build_index_html(domain: str, entries: List[Tuple[str, str, str]], failed: int = 0) -> str:
     """A self-contained clickable index of the novels bundled in the export zip.
 
     ``entries`` is a list of ``(arcname, display_name, status)``. Opening this file
     from the unzipped folder lists every novel with a link to its ebook so the
-    archive can be browsed offline.
+    archive can be browsed offline. ``failed`` novels are named in the header so a
+    short archive explains itself instead of looking silently complete.
     """
     rows = []
     for arcname, name, status in sorted(entries, key=lambda e: e[1].lower()):
         badge = "" if status == "complete" else ' <span class="inc">(incomplete)</span>'
         rows.append(f'<li><a href="{quote(arcname)}">{escape(name)}</a>{badge}</li>')
     total = len(entries)
+    n_complete = sum(1 for _, _, s in entries if s == "complete")
+    breakdown = f"{n_complete} complete, {total - n_complete} incomplete"
+    if failed:
+        breakdown += (
+            f" — {failed} more novel(s) could not be downloaded this run (the site was "
+            "blocking) and are NOT in this archive; re-run the export to add them"
+        )
     return (
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
@@ -226,7 +241,8 @@ def _build_index_html(domain: str, entries: List[Tuple[str, str, str]]) -> str:
         "a{color:#7aa2ff;text-decoration:none}a:hover{text-decoration:underline}"
         ".inc{color:#d98b3a;font-size:12px}</style></head><body><div class='wrap'>"
         f"<h1>{escape(domain)}</h1>"
-        f"<p class='sub'>{total} novel(s) in this archive. Click a title to open it.</p>"
+        f"<p class='sub'>{total} novel(s) in this archive ({escape(breakdown)}). "
+        "Click a title to open it.</p>"
         f"<ul>{''.join(rows)}</ul></div></body></html>"
     )
 
@@ -352,6 +368,8 @@ class ExportSourceHandler(BaseHandler):
             requests_per_sec = POLITE_REQUESTS_PER_SEC
         auto_tune = bool(self.job.extra.get("auto_tune", True))
         update_only = bool(self.job.extra.get("update_only", False))
+        auto_continue = bool(self.job.extra.get("auto_continue", True))
+        continue_round = int(self.job.extra.get("continue_round", 0) or 0)
         # Speed memory: unless a rate was set explicitly, start at the rate the
         # auto-tuner settled on last run, so a known-touchy site isn't re-blocked
         # while the tuner re-learns from scratch.
@@ -368,6 +386,15 @@ class ExportSourceHandler(BaseHandler):
             seen_titles = {_norm_title(t) for t in ctx.novels.list_titles(exclude_domain=domain)}
 
         self._set_running()
+
+        # A follow-up run queued by auto-continue waits out a cool-off first, so
+        # the source has time to unblock before it gets hit again.
+        cooldown = float(self.job.extra.get("cooldown_minutes", 0) or 0)
+        if cooldown > 0:
+            ctx.logger.info(f"Follow-up export: cooling off {cooldown:.0f} min before {domain}")
+            self._set_extra(phase="cooling-down", cooldown_minutes=cooldown)
+            if self.signal.wait(cooldown * 60):
+                raise AbortedException()
 
         # one crawler session reused for discovery and every download
         crawler = ctx.sources.init_crawler(source.url)
@@ -472,6 +499,10 @@ class ExportSourceHandler(BaseHandler):
                 # surface how many were reused so the UI can show resume working
                 self._set_extra(resumed=len(complete), total_novels=total)
                 self._set_progress(len(complete), total)
+
+            # how many came from the manifest (vs newly completed this run) —
+            # auto-continue only chains when a run adds something new
+            reused_count = len(complete)
 
             # Adaptive pacing between novels (see ADAPTIVE_* constants).
             floor_delay = POLITE_DELAY if polite else 0.0
@@ -728,7 +759,7 @@ class ExportSourceHandler(BaseHandler):
                     status = "incomplete" if file in partial_paths else "complete"
                     index_entries.append((arcname, file.stem, status))
                 # a clickable offline index of everything in the archive
-                zf.writestr("index.html", _build_index_html(domain, index_entries))
+                zf.writestr("index.html", _build_index_html(domain, index_entries, failed=failed))
             if not zipped:
                 raise HandlerException("Could not add any novel to the export zip")
 
@@ -766,6 +797,58 @@ class ExportSourceHandler(BaseHandler):
                 summary += f" {zip_skipped} could not be added to the zip."
             if saved_to:
                 summary += " Saved to your Desktop."
+
+            # Auto-continue: the site blocked some novels but this run added new
+            # ones, so queue a follow-up run (with a cool-off) instead of making
+            # the user click again. Chaining stops when a round adds nothing new,
+            # after MAX_AUTO_CONTINUE rounds, or if the user stops the job.
+            if (
+                auto_continue
+                and resume
+                and failed > 0
+                and continue_round < MAX_AUTO_CONTINUE
+                and len(complete) > reused_count
+            ):
+                data = dict(**self.job.extra)
+                for key in (
+                    "export_file",
+                    "export_name",
+                    "export_size",
+                    "saved_to",
+                    "exported",
+                    "complete",
+                    "incomplete",
+                    "failed",
+                    "skipped",
+                    "zip_skipped",
+                    "total_novels",
+                    "fail_reasons",
+                    "last_fail_title",
+                    "last_fail_reason",
+                    "last_fail_detail",
+                    "phase",
+                    "current_title",
+                    "current_chapters",
+                    "current_total_chapters",
+                    "done_novels",
+                    "resumed",
+                    "updated",
+                    "retry",
+                    "adaptive_delay",
+                    "browser_cleared",
+                    "continued_job_id",
+                    "found",
+                ):
+                    data.pop(key, None)
+                data["continue_round"] = continue_round + 1
+                data["cooldown_minutes"] = CONTINUE_COOLDOWN_MIN
+                follow = ctx.jobs._create(user=self.user, type=JobType.EXPORT_SOURCE, data=data)
+                self._set_extra(continued_job_id=follow.id)
+                summary += (
+                    f" {failed} still blocked — follow-up run #{continue_round + 1} queued "
+                    f"(starts after a {int(CONTINUE_COOLDOWN_MIN)} min cool-off)."
+                )
+
             self._notify_finish(summary)
         finally:
             crawler.close()

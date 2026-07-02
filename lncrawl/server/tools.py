@@ -521,6 +521,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
           log("Retry " + (ex.retry || "") + " — waiting for the source to recover…", "log-info");
         } else if (status === "RUNNING" && ex.phase === "checking-updates") {
           log("Checking finished novels for new chapters… (" + job.done + "/" + job.total + ")", "log-info");
+        } else if (status === "RUNNING" && ex.phase === "cooling-down") {
+          log("Cooling off ~" + (ex.cooldown_minutes || 20) + " min so the site unblocks, then the follow-up run starts…", "log-info");
         } else {
           log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
         }
@@ -541,6 +543,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
           if (extra.saved_to) log("Saved to Desktop: " + extra.saved_to, "log-ok");
           if (extra.export_file) downloadBlob(id, extra.export_name);
           loadLibrary(window._lncrawlUserId);
+          if (extra.continued_job_id) {
+            log("⏳ " + (extra.failed || "Some") + " novel(s) were still blocked — a follow-up run is queued and starts by itself after a cool-off. Each round's zip includes everything finished so far.", "log-info");
+            pollExport(extra.continued_job_id);
+          }
         } else {
           setExportControls(null, id);
           log("Export ended: " + status + (job.error ? " — " + job.error : "") +
