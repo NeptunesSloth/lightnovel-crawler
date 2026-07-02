@@ -176,6 +176,14 @@ _READER_HTML = """<!DOCTYPE html>
   .bmk-row .x { color: #6b7280; padding: 0 6px; }
   .bmk-row .x:hover { color: #e66; }
 
+  /* ---- iOS install tip ---- */
+  #ios-tip {
+    position: fixed; left: 12px; right: 12px; z-index: 35; font-size: 14px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    background: #1d2129; border: 1px solid #3b4250; border-radius: 10px;
+    padding: 12px 14px; box-shadow: 0 6px 24px rgba(0,0,0,.5); text-align: center;
+  }
+
   /* ---- Tap-translate popup ---- */
   #trans-pop {
     position: fixed; z-index: 40; max-width: 300px; font-size: 14px;
@@ -211,8 +219,14 @@ _READER_HTML = """<!DOCTYPE html>
   <div class="spacer"></div>
   <div id="search-wrap" style="flex:1;max-width:380px"><input id="search" type="text" placeholder="Search your library…" /></div>
   <a class="back" href="/tools" target="_blank" id="tools-link">Tools</a>
+  <button id="install-btn" class="primary hidden" title="Install the Reader as an app on this device">📲 Install</button>
   <button id="fit-btn" class="hidden" title="Image fit mode">Fit: width</button>
   <button id="aa-btn" class="hidden" title="Reading settings">Aa</button>
+</div>
+
+<div id="ios-tip" class="hidden">
+  📲 Install this app: tap the <b>Share</b> button below, then <b>“Add to Home Screen”</b>.
+  <button id="ios-tip-x" style="margin-left:10px">Got it</button>
 </div>
 
 <div id="aa-panel" class="hidden">
@@ -250,6 +264,7 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="title">Title A–Z</option>
       </select>
       <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
+      <button id="lib-offline" title="Download every novel to this device for offline reading">⬇ All offline</button>
       <button id="lib-select" title="Select novels to delete">☑ Select</button>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
       <div id="lib-cats" class="tags"></div>
@@ -384,7 +399,7 @@ _READER_HTML = """<!DOCTYPE html>
    "font-dn","auth","email","password","login","auth-msg","search-wrap","aa-btn","aa-panel",
    "aa-theme","aa-font","aa-width","aa-trans","fit-btn","fav-btn","bmk-btn","bmk-list",
    "trans-pop","lib-select","lib-del","merge-btn","del-btn","deep-btn","off-btn",
-   "net-dot"].forEach(function (id) {
+   "net-dot","install-btn","ios-tip","ios-tip-x","lib-offline"].forEach(function (id) {
     els[id] = document.getElementById(id);
   });
 
@@ -1094,9 +1109,13 @@ _READER_HTML = """<!DOCTYPE html>
       : "Download the whole novel to this device for offline reading";
   }
 
-  function startOfflineDownload(novel) {
-    if (!("serviceWorker" in navigator) || !navigator.serviceWorker.controller) {
+  function swReady() {
+    return ("serviceWorker" in navigator) && !!navigator.serviceWorker.controller;
+  }
+  function startOfflineDownload(novel, onDone) {
+    if (!swReady()) {
       alert("Offline storage isn't ready yet — reload the page once and try again.");
+      if (onDone) onDone();
       return;
     }
     offRun = { novelId: novel.id, cancelled: false, done: 0, total: 0 };
@@ -1124,6 +1143,7 @@ _READER_HTML = """<!DOCTYPE html>
       saveOffline(m);
       offRun = null;
       if (current.novel && current.novel.id === novel.id) renderOffBtn(novel);
+      if (onDone) onDone();
     }
     pages(0).then(function () {
       offRun.total = chapters.length;
@@ -1157,6 +1177,82 @@ _READER_HTML = """<!DOCTYPE html>
     }
     if (offRun) { alert("Another novel is still downloading — stop it first."); return; }
     startOfflineDownload(current.novel);
+  });
+
+  // ---- All offline: one tap takes the entire library offline ----
+  var allOff = null;
+  els["lib-offline"].addEventListener("click", function () {
+    var btn = this;
+    if (allOff) {
+      allOff.cancelled = true;
+      if (offRun) offRun.cancelled = true;
+      return;
+    }
+    if (offRun) { alert("A novel is already downloading — stop it first."); return; }
+    if (!lib.all.length) return;
+    if (!swReady()) {
+      alert("Offline storage isn't ready yet — reload the page once and try again.");
+      return;
+    }
+    var items = lib.all.filter(function (n) {
+      var st = loadOffline()[n.id];
+      return !(st && st.complete);
+    });
+    if (!items.length) {
+      els["lib-status"].textContent = "Everything is already available offline. ✓";
+      return;
+    }
+    if (!confirm("Download " + items.length + " novel(s) to this device for offline reading? Manga can use a lot of storage — best done on Wi-Fi.")) return;
+    allOff = { cancelled: false };
+    btn.textContent = "✕ Stop download";
+    var i = 0;
+    (function next() {
+      if (!allOff || allOff.cancelled || i >= items.length) {
+        var finished = allOff && !allOff.cancelled && i >= items.length;
+        allOff = null;
+        btn.textContent = "⬇ All offline";
+        els["lib-status"].textContent = finished
+          ? "✓ Done — your whole library now reads offline."
+          : "Offline download stopped — tap ⬇ All offline to continue later.";
+        renderLibrary();
+        return;
+      }
+      var n = items[i++];
+      els["lib-status"].textContent = "Saving for offline " + i + "/" + items.length + ": " + (n.title || "");
+      startOfflineDownload(n, next);
+    })();
+  });
+
+  // ---- Install prompts (make Add-to-Home-Screen obvious) ----
+  var deferredInstall = null;
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    deferredInstall = e;
+    els["install-btn"].classList.remove("hidden");
+  });
+  els["install-btn"].addEventListener("click", function () {
+    if (!deferredInstall) return;
+    var evt = deferredInstall;
+    deferredInstall = null;
+    els["install-btn"].classList.add("hidden");
+    evt.prompt();
+  });
+  window.addEventListener("appinstalled", function () {
+    deferredInstall = null;
+    els["install-btn"].classList.add("hidden");
+  });
+  // iOS has no install prompt API — show a one-time how-to banner instead
+  (function () {
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    var standalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+      window.navigator.standalone === true;
+    if (isIOS && !standalone && !localStorage.getItem("lncrawl_ios_tip")) {
+      els["ios-tip"].classList.remove("hidden");
+    }
+  })();
+  els["ios-tip-x"].addEventListener("click", function () {
+    localStorage.setItem("lncrawl_ios_tip", "1");
+    els["ios-tip"].classList.add("hidden");
   });
 
   // ---- Offline indicator ----

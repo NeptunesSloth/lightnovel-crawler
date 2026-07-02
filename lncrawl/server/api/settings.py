@@ -27,8 +27,20 @@ def _lan_ip() -> str:
 
 @router.get("/lan", summary="LAN address of this server (read on your phone)")
 def lan_info(request: Request) -> Dict[str, str]:
+    """LAN reader URL, with the caller's own session token embedded.
+
+    Scanning the QR then signs the phone in automatically — no password typing.
+    The reader page strips the token from the address bar immediately on load.
+    Only ever returned to an already-authenticated caller, over the local network.
+    """
     port = request.url.port or (443 if request.url.scheme == "https" else 80)
-    return {"url": f"http://{_lan_ip()}:{port}/reader"}
+    url = f"http://{_lan_ip()}:{port}/reader"
+    auth = request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+        if token:
+            url += f"?authToken={token}"
+    return {"url": url}
 
 
 @router.get("/lan-qr", summary="QR code (SVG) of the LAN reader address")
