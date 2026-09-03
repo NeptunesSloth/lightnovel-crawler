@@ -4,6 +4,12 @@ from ....context import ctx
 from ....enums import JobType
 from ._base import AbortedException, BatchHandler, HandlerException
 
+# Discovery enumerates a source's whole catalogue (its sitemap included), which on
+# a big site runs to tens of thousands of novels — and this job queues a metadata
+# fetch for every one of them. Cap it so one discover job can't flood the
+# scheduler; ``extra["limit"]`` overrides it for a deliberate bigger run.
+MAX_DISCOVERED = 2000
+
 
 class DiscoverSourceHandler(BatchHandler):
     @staticmethod
@@ -50,5 +56,10 @@ class DiscoverSourceHandler(BatchHandler):
         if self.signal.is_set():
             raise AbortedException()
 
-        self._set_extra(discovered=urls)
+        cap = int(self.job.extra.get("limit") or MAX_DISCOVERED)
+        total = len(urls)
+        if total > cap:
+            urls = urls[:cap]
+
+        self._set_extra(discovered=urls, total_found=total, truncated=total > cap)
         return urls

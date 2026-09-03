@@ -121,6 +121,12 @@ class ExportSourceRequest(BaseModel):
         description="Re-check novels finished in a prior run for newly released chapters and "
         "grab just those (with resume on); novels with nothing new are reused as-is",
     )
+    use_sitemap: bool = Field(
+        default=True,
+        description="Enumerate the catalogue from the site's sitemap as well as its search; "
+        "a search only returns one page of results, so turning this off limits an export to "
+        "the few dozen novels the seed searches return",
+    )
 
 
 class ListSourceRequest(BaseModel):

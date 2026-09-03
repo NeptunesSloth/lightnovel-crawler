@@ -344,6 +344,9 @@ class ExportSourceHandler(BaseHandler):
         discovery_timeout = float(self.job.extra.get("discovery_minutes", 10)) * 60
         max_chapters = int(self.job.extra.get("max_chapters", 0))
         resume = bool(self.job.extra.get("resume", True))
+        # Sitemap mining is what lifts discovery past the one page of results a
+        # source's search returns; only turned off when a site's sitemap is junk.
+        use_sitemap = bool(self.job.extra.get("use_sitemap", True))
         # How fast to fire chapter/image requests. Polite mode defaults to a gentle
         # rate; a value can be set explicitly to go slower (flagged IP) or faster.
         explicit_rps = float(self.job.extra.get("requests_per_sec", 0) or 0)
@@ -398,11 +401,26 @@ class ExportSourceHandler(BaseHandler):
                     on_progress=_on_discover,
                     time_budget=discovery_timeout,
                     delay=POLITE_DELAY if polite else 0,
+                    use_sitemap=use_sitemap,
                 )
-                self._set_extra(phase="downloading")
+                # Discovery stopping on its time cap is why an export comes back
+                # with only part of a source; record it so the UI can say so
+                # instead of leaving a short catalogue unexplained.
+                discovery_capped = monotonic() - discover_start >= discovery_timeout
+                self._set_extra(
+                    phase="downloading",
+                    discovered=len(urls),
+                    discovery_capped=discovery_capped,
+                )
+                if discovery_capped and urls:
+                    ctx.logger.warn(
+                        f"Discovery on {domain} stopped at its "
+                        f"{round(discovery_timeout / 60)} minute cap with {len(urls)} novel(s); "
+                        "raise 'Max discovery (min)' to enumerate more of the catalogue"
+                    )
                 # If discovery hit its time cap and turned up nothing, the source
                 # is almost certainly throttling/blocking — fail fast and clearly.
-                if not urls and monotonic() - discover_start >= discovery_timeout:
+                if not urls and discovery_capped:
                     minutes = round(discovery_timeout / 60)
                     raise HandlerException(
                         f"Discovery found no novels on '{domain}' within {minutes} minutes — "

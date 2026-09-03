@@ -206,6 +206,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <input id="exp-autotune" type="checkbox" checked />
         <label for="exp-autotune" style="margin:0">Auto-tune rate — slow down when blocked, speed up when clear</label>
       </div>
+      <div class="row checkbox">
+        <input id="exp-sitemap" type="checkbox" checked />
+        <label for="exp-sitemap" style="margin:0">Use the site's sitemap — finds the whole catalogue instead of the one page of results a search returns</label>
+      </div>
       <p class="hint" style="margin-top:10px">Defaults work for most sites. If a site blocks the run,
         it auto-slows and (when a browser is available) solves the Cloudflare challenge by itself; turn
         on Polite mode or lower Requests/sec to 0.5/0.25 for stubborn ones.</p>
@@ -493,7 +497,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
             log("⏳ Queued — will start automatically when the current export finishes.", "log-info");
           }
         } else if (status === "RUNNING" && ex.phase === "discovering") {
-          log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches)", "log-info");
+          log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches + sitemap pages)", "log-info");
         } else if (status === "RUNNING" && ex.phase === "solving-challenge") {
           log("Site is blocking requests — solving the Cloudflare challenge in a browser…", "log-info");
         } else if (status === "RUNNING" && ex.phase === "downloading" && ex.current_title) {
@@ -522,6 +526,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
           if (extra.failed) parts.push(extra.failed + " failed");
           log("Export done: " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".",
             extra.failed ? "log-info" : "log-ok");
+          if (extra.discovery_capped) {
+            log("  ⚠ Discovery stopped at its time cap, so this is only part of the source's " +
+              "catalogue. Raise \"Max discovery (min)\" in Advanced options and run it again — " +
+              "finished novels are reused.", "log-info");
+          }
           (extra.fail_reasons || []).forEach(function (fr) {
             log("  " + fr.count + "× " + fr.reason, "log-err");
           });
@@ -618,6 +627,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     body.resume = document.getElementById("exp-resume").checked;
     body.auto_tune = document.getElementById("exp-autotune").checked;
     body.update_only = document.getElementById("exp-update").checked;
+    body.use_sitemap = document.getElementById("exp-sitemap").checked;
     return body;
   }
 

@@ -10,6 +10,11 @@ from ._base import BaseHandler, HandlerException
 _NUM_RE = re.compile(r"(\d[\d,]*\.?\d*)\s*([KMB])?", re.IGNORECASE)
 _SUFFIX = {"k": 1e3, "m": 1e6, "b": 1e9}
 
+# Discovery now enumerates a source's whole catalogue (sitemap included), which
+# can run to tens of thousands of novels. The pick-list only needs the top of
+# that, and the whole list is stored as JSON on the job, so keep it bounded.
+MAX_RESULTS = 2000
+
 
 def _score(info: str) -> float:
     """Best-effort rank score: the largest number in the info text (views/rank)."""
@@ -57,4 +62,9 @@ class ListSourceHandler(BaseHandler):
         # rank by the site's own figure, then by title for stable ordering
         results.sort(key=lambda r: (-r["score"], r["title"].lower()))
 
-        self._set_extra(results=results, total_novels=len(results))
+        total = len(results)
+        truncated = total > MAX_RESULTS
+        if truncated:
+            results = results[:MAX_RESULTS]
+
+        self._set_extra(results=results, total_novels=total, truncated=truncated)
