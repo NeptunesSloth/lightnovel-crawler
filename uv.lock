@@ -2376,7 +2376,7 @@ requires-dist = [
     { name = "httpx", extras = ["brotli", "http2"], specifier = ">=0.27.0" },
     { name = "humanize", specifier = ">=4.0.0" },
     { name = "imap-tools", specifier = ">=1.10.0" },
-    { name = "lncrawl-scraper", extras = ["all"], specifier = ">=0.2.3" },
+    { name = "lncrawl-scraper", extras = ["all"], specifier = ">=0.2.3,<1.0" },
     { name = "lxml", specifier = ">=5.4.0,<7.0.0" },
     { name = "nodriver", specifier = ">=0.50" },
     { name = "passlib", extras = ["argon2"], specifier = ">=1.7.0" },
