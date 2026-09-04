@@ -754,6 +754,7 @@ class JobService:
         requests_per_sec: float = 0,
         auto_tune: bool = True,
         update_only: bool = False,
+        use_sitemap: bool = True,
         urls: Optional[List[str]] = None,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
@@ -775,6 +776,7 @@ class JobService:
         data["requests_per_sec"] = max(0.0, float(requests_per_sec))
         data["auto_tune"] = bool(auto_tune)
         data["update_only"] = bool(update_only)
+        data["use_sitemap"] = bool(use_sitemap)
         if limit:
             data["limit"] = int(limit)
         # When specific novels are picked, export exactly those (skip discovery)

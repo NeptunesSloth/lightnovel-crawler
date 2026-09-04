@@ -37,7 +37,10 @@ dependencies = [
   "httpx[brotli,http2]>=0.27.0",
   "humanize>=4.0.0",
   "imap-tools>=1.10.0",
-  "lncrawl-scraper[all]>=0.2.3",
+  # Capped below 1.0: lncrawl-scraper 1.x renamed the exception surface
+  # (AbortedException -> Aborted, CloudflareException dropped), which breaks
+  # lncrawl/exceptions.py on a fresh install. Lift the cap with the 1.x migration.
+  "lncrawl-scraper[all]>=0.2.3,<1.0",
   "lxml>=5.4.0,<7.0.0",
   "nodriver>=0.50",
   "passlib[argon2]>=1.7.0",
