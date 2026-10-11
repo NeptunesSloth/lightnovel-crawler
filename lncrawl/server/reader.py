@@ -26,7 +26,7 @@ _READER_HTML = """<!DOCTYPE html>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="LNCrawl" />
 <link rel="manifest" href="/reader/manifest.webmanifest" />
-<link rel="apple-touch-icon" href="/reader/icon.svg" />
+<link rel="apple-touch-icon" href="/reader/icon.png" />
 <title>LNCrawl · Reader</title>
 <style>
   :root { color-scheme: dark; }
@@ -176,6 +176,14 @@ _READER_HTML = """<!DOCTYPE html>
   .bmk-row .x { color: #6b7280; padding: 0 6px; }
   .bmk-row .x:hover { color: #e66; }
 
+  /* ---- iOS install tip ---- */
+  #ios-tip {
+    position: fixed; left: 12px; right: 12px; z-index: 35; font-size: 14px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    background: #1d2129; border: 1px solid #3b4250; border-radius: 10px;
+    padding: 12px 14px; box-shadow: 0 6px 24px rgba(0,0,0,.5); text-align: center;
+  }
+
   /* ---- Tap-translate popup ---- */
   #trans-pop {
     position: fixed; z-index: 40; max-width: 300px; font-size: 14px;
@@ -206,12 +214,19 @@ _READER_HTML = """<!DOCTYPE html>
 <body>
 <div class="topbar">
   <h1>📖 LNCrawl Reader</h1>
+  <span id="net-dot" class="muted hidden" title="No connection — showing downloaded content">📴 offline</span>
   <a class="back hidden" id="nav-back">&larr; Back</a>
   <div class="spacer"></div>
   <div id="search-wrap" style="flex:1;max-width:380px"><input id="search" type="text" placeholder="Search your library…" /></div>
   <a class="back" href="/tools" target="_blank" id="tools-link">Tools</a>
+  <button id="install-btn" class="primary hidden" title="Install the Reader as an app on this device">📲 Install</button>
   <button id="fit-btn" class="hidden" title="Image fit mode">Fit: width</button>
   <button id="aa-btn" class="hidden" title="Reading settings">Aa</button>
+</div>
+
+<div id="ios-tip" class="hidden">
+  📲 Install this app: tap the <b>Share</b> button below, then <b>“Add to Home Screen”</b>.
+  <button id="ios-tip-x" style="margin-left:10px">Got it</button>
 </div>
 
 <div id="aa-panel" class="hidden">
@@ -249,6 +264,7 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="title">Title A–Z</option>
       </select>
       <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
+      <button id="lib-offline" title="Download every novel to this device for offline reading">⬇ All offline</button>
       <button id="lib-select" title="Select novels to delete">☑ Select</button>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
       <div id="lib-cats" class="tags"></div>
@@ -266,6 +282,7 @@ _READER_HTML = """<!DOCTYPE html>
     <div style="clear:both"></div>
     <button id="continue-btn" class="primary hidden" style="margin-bottom:12px">▶ Continue reading</button>
     <button id="fav-btn" style="margin:0 0 12px 8px" title="Add to favorites">☆ Favorite</button>
+    <button id="off-btn" style="margin:0 0 12px 8px" title="Download the whole novel to this device for offline reading">⬇ Offline</button>
     <button id="heal-btn" class="hidden" style="margin:0 0 12px 8px" title="Fill gaps from another copy of this novel in your library">✨ Fill missing chapters</button>
     <button id="deep-btn" class="hidden" style="margin:0 0 12px 8px" title="Search other sites for the missing chapters and download them">🔍 Find missing on other sites</button>
     <button id="merge-btn" class="hidden" style="margin:0 0 12px 8px" title="Combine all copies of this title into the most complete one">⧉ Merge copies</button>
@@ -304,6 +321,7 @@ _READER_HTML = """<!DOCTYPE html>
   var PREFS = "lncrawl_reader_prefs";  // { theme, font, width, translate, fit }
   var FAV = "lncrawl_reader_favs";  // [novelId, ...]
   var BMK = "lncrawl_reader_bookmarks";  // { novelId: [{id, serial, scroll, title, ts}] }
+  var OFFLINE = "lncrawl_reader_offline";  // { novelId: {ts, complete, done, total} }
 
   (function () {
     var params = new URLSearchParams(window.location.search);
@@ -328,7 +346,9 @@ _READER_HTML = """<!DOCTYPE html>
         try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
         if (!res.ok) {
           var msg = (data && (data.error || data.detail)) || ("HTTP " + res.status);
-          throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+          var err = new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+          err.status = res.status;
+          throw err;
         }
         return data;
       });
@@ -378,7 +398,8 @@ _READER_HTML = """<!DOCTYPE html>
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
    "font-dn","auth","email","password","login","auth-msg","search-wrap","aa-btn","aa-panel",
    "aa-theme","aa-font","aa-width","aa-trans","fit-btn","fav-btn","bmk-btn","bmk-list",
-   "trans-pop","lib-select","lib-del","merge-btn","del-btn","deep-btn"].forEach(function (id) {
+   "trans-pop","lib-select","lib-del","merge-btn","del-btn","deep-btn","off-btn",
+   "net-dot","install-btn","ios-tip","ios-tip-x","lib-offline"].forEach(function (id) {
     els[id] = document.getElementById(id);
   });
 
@@ -515,6 +536,11 @@ _READER_HTML = """<!DOCTYPE html>
       if (upd && upd.found) {
         var nb = document.createElement("span"); nb.className = "badge new";
         nb.textContent = "+" + upd.found + " new"; h.appendChild(nb);
+      }
+      var off = loadOffline()[n.id];
+      if (off && off.complete) {
+        var ob = document.createElement("span"); ob.className = "badge";
+        ob.textContent = "⬇"; ob.title = "Available offline"; h.appendChild(ob);
       }
       var m = document.createElement("div"); m.className = "meta";
       m.textContent = [n.authors || "", (n.chapter_count || 0) + " chapters", n.domain || ""]
@@ -693,6 +719,7 @@ _READER_HTML = """<!DOCTYPE html>
     if (updates[novel.id]) { delete updates[novel.id]; saveUpdates(updates); }
 
     renderFavBtn(novel);
+    renderOffBtn(novel);
     renderBookmarks(novel);
 
     // offer merging only when another copy of the same title is in the library
@@ -1060,6 +1087,182 @@ _READER_HTML = """<!DOCTYPE html>
     setTimeout(function () { btn.textContent = "🔖"; }, 900);
   });
 
+  // ---- Download-for-offline ----
+  // Walks every available chapter (and its images) through the service worker,
+  // which caches each response — afterwards the whole novel reads with no
+  // network. Nothing is held in JS memory; the SW cache is the store.
+  function loadOffline() { try { return JSON.parse(localStorage.getItem(OFFLINE) || "{}"); } catch (e) { return {}; } }
+  function saveOffline(m) { localStorage.setItem(OFFLINE, JSON.stringify(m)); }
+  var offRun = null;  // { novelId, cancelled, done, total }
+
+  function renderOffBtn(novel) {
+    var btn = els["off-btn"];
+    if (offRun && offRun.novelId === novel.id) {
+      btn.textContent = "✕ Downloading " + offRun.done + "/" + (offRun.total || "…");
+      btn.title = "Tap to stop downloading";
+      return;
+    }
+    var st = loadOffline()[novel.id];
+    btn.textContent = st && st.complete ? "✓ Offline" : "⬇ Offline";
+    btn.title = st && st.complete
+      ? "Downloaded — this novel reads without a connection (tap to re-download)"
+      : "Download the whole novel to this device for offline reading";
+  }
+
+  function swReady() {
+    return ("serviceWorker" in navigator) && !!navigator.serviceWorker.controller;
+  }
+  function startOfflineDownload(novel, onDone) {
+    if (!swReady()) {
+      alert("Offline storage isn't ready yet — reload the page once and try again.");
+      if (onDone) onDone();
+      return;
+    }
+    offRun = { novelId: novel.id, cancelled: false, done: 0, total: 0 };
+    renderOffBtn(novel);
+    if (novel.cover_available) {
+      fetch("/api/novel/" + novel.id + "/cover", { headers: { "Authorization": "Bearer " + token() } }).catch(function () {});
+    }
+    var chapters = [];
+    function pages(offset) {
+      return api("/novel/" + novel.id + "/chapters?limit=100&offset=" + offset).then(function (res) {
+        var items = (res && res.items) || [];
+        items.forEach(function (c) { if (c.is_available) chapters.push(c); });
+        var total = (res && res.total) || 0;
+        if (items.length && offset + items.length < total) return pages(offset + items.length);
+      });
+    }
+    function finish() {
+      var m = loadOffline();
+      m[novel.id] = {
+        ts: Date.now(),
+        complete: !offRun.cancelled && chapters.length > 0 && offRun.done >= chapters.length,
+        done: offRun.done,
+        total: chapters.length
+      };
+      saveOffline(m);
+      offRun = null;
+      if (current.novel && current.novel.id === novel.id) renderOffBtn(novel);
+      if (onDone) onDone();
+    }
+    pages(0).then(function () {
+      offRun.total = chapters.length;
+      var i = 0;
+      (function step() {
+        if (!offRun || offRun.cancelled || i >= chapters.length) { finish(); return; }
+        var ch = chapters[i++];
+        api("/chapter/" + ch.id + "/read?auto_fetch=false").then(function (res) {
+          offRun.done += 1;
+          if (current.novel && current.novel.id === novel.id) renderOffBtn(novel);
+          var ids = imageIdsIn(res && res.content);
+          var k = 0;
+          (function imgs() {
+            if (!offRun || offRun.cancelled || k >= ids.length) { step(); return; }
+            fetch("/api/chapter/image/" + ids[k++], { headers: { "Authorization": "Bearer " + token() } })
+              .then(function () { imgs(); }).catch(function () { imgs(); });
+          })();
+        }).catch(function () {
+          offRun.done += 1;
+          step();
+        });
+      })();
+    }).catch(function () { finish(); });
+  }
+
+  els["off-btn"].addEventListener("click", function () {
+    if (!current.novel) return;
+    if (offRun && offRun.novelId === current.novel.id) {
+      offRun.cancelled = true;
+      return;
+    }
+    if (offRun) { alert("Another novel is still downloading — stop it first."); return; }
+    startOfflineDownload(current.novel);
+  });
+
+  // ---- All offline: one tap takes the entire library offline ----
+  var allOff = null;
+  els["lib-offline"].addEventListener("click", function () {
+    var btn = this;
+    if (allOff) {
+      allOff.cancelled = true;
+      if (offRun) offRun.cancelled = true;
+      return;
+    }
+    if (offRun) { alert("A novel is already downloading — stop it first."); return; }
+    if (!lib.all.length) return;
+    if (!swReady()) {
+      alert("Offline storage isn't ready yet — reload the page once and try again.");
+      return;
+    }
+    var items = lib.all.filter(function (n) {
+      var st = loadOffline()[n.id];
+      return !(st && st.complete);
+    });
+    if (!items.length) {
+      els["lib-status"].textContent = "Everything is already available offline. ✓";
+      return;
+    }
+    if (!confirm("Download " + items.length + " novel(s) to this device for offline reading? Manga can use a lot of storage — best done on Wi-Fi.")) return;
+    allOff = { cancelled: false };
+    btn.textContent = "✕ Stop download";
+    var i = 0;
+    (function next() {
+      if (!allOff || allOff.cancelled || i >= items.length) {
+        var finished = allOff && !allOff.cancelled && i >= items.length;
+        allOff = null;
+        btn.textContent = "⬇ All offline";
+        els["lib-status"].textContent = finished
+          ? "✓ Done — your whole library now reads offline."
+          : "Offline download stopped — tap ⬇ All offline to continue later.";
+        renderLibrary();
+        return;
+      }
+      var n = items[i++];
+      els["lib-status"].textContent = "Saving for offline " + i + "/" + items.length + ": " + (n.title || "");
+      startOfflineDownload(n, next);
+    })();
+  });
+
+  // ---- Install prompts (make Add-to-Home-Screen obvious) ----
+  var deferredInstall = null;
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    deferredInstall = e;
+    els["install-btn"].classList.remove("hidden");
+  });
+  els["install-btn"].addEventListener("click", function () {
+    if (!deferredInstall) return;
+    var evt = deferredInstall;
+    deferredInstall = null;
+    els["install-btn"].classList.add("hidden");
+    evt.prompt();
+  });
+  window.addEventListener("appinstalled", function () {
+    deferredInstall = null;
+    els["install-btn"].classList.add("hidden");
+  });
+  // iOS has no install prompt API — show a one-time how-to banner instead
+  (function () {
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    var standalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+      window.navigator.standalone === true;
+    if (isIOS && !standalone && !localStorage.getItem("lncrawl_ios_tip")) {
+      els["ios-tip"].classList.remove("hidden");
+    }
+  })();
+  els["ios-tip-x"].addEventListener("click", function () {
+    localStorage.setItem("lncrawl_ios_tip", "1");
+    els["ios-tip"].classList.add("hidden");
+  });
+
+  // ---- Offline indicator ----
+  function updateNetDot() {
+    els["net-dot"].classList.toggle("hidden", navigator.onLine !== false);
+  }
+  window.addEventListener("online", updateNetDot);
+  window.addEventListener("offline", updateNetDot);
+  updateNetDot();
+
   // ---- Tap-translate (for language learning; enable in the Aa menu) ----
   var transCache = {};
   function hideTransPop() { els["trans-pop"].classList.add("hidden"); }
@@ -1180,7 +1383,17 @@ _READER_HTML = """<!DOCTYPE html>
     if (!token()) { show("auth"); return; }
     api("/auth/me", { method: "GET" })
       .then(function () { show("view-library"); loadLibrary(""); })
-      .catch(function () { localStorage.removeItem(KEY); show("auth"); });
+      .catch(function (e) {
+        // only a real auth rejection signs you out; a network failure means
+        // we're offline — go straight to the cached library instead
+        if (e && (e.status === 401 || e.status === 403)) {
+          localStorage.removeItem(KEY);
+          show("auth");
+        } else {
+          show("view-library");
+          loadLibrary("");
+        }
+      });
   }
   start();
 })();
@@ -1199,7 +1412,7 @@ _READER_HTML = """<!DOCTYPE html>
 
 _SERVICE_WORKER = """
 const CACHE = "lncrawl-reader-v1";
-const SHELL = ["/reader", "/reader/manifest.webmanifest", "/reader/icon.svg"];
+const SHELL = ["/reader", "/reader/manifest.webmanifest", "/reader/icon.svg", "/reader/icon.png"];
 
 self.addEventListener("install", function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).catch(function () {}));
@@ -1247,6 +1460,7 @@ _MANIFEST = """{
   "background_color": "#0f1115",
   "theme_color": "#0f1115",
   "icons": [
+    { "src": "/reader/icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
     { "src": "/reader/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]
 }"""
@@ -1285,3 +1499,26 @@ async def reader_manifest() -> Response:
 @router.get("/reader/icon.svg", include_in_schema=False)
 async def reader_icon() -> Response:
     return Response(content=_ICON_SVG, media_type="image/svg+xml")
+
+
+@router.get("/reader/icon.png", include_in_schema=False)
+async def reader_icon_png() -> Response:
+    """PNG app icon — iOS home-screen (apple-touch-icon) ignores SVG icons."""
+    try:
+        import io
+
+        from PIL import Image, ImageDraw
+
+        img = Image.new("RGBA", (192, 192), (15, 17, 21, 255))
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle((48, 40, 144, 152), radius=8, fill=(59, 130, 246, 255))
+        d.rectangle((64, 40, 80, 152), fill=(47, 111, 224, 255))
+        d.rounded_rectangle((92, 64, 132, 72), radius=4, fill=(203, 210, 221, 255))
+        d.rounded_rectangle((92, 84, 132, 92), radius=4, fill=(203, 210, 221, 255))
+        d.rounded_rectangle((92, 104, 120, 112), radius=4, fill=(203, 210, 221, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return Response(content=buf.getvalue(), media_type="image/png")
+    except Exception:
+        # no Pillow — serve the SVG instead (Android accepts it; iOS falls back)
+        return Response(content=_ICON_SVG, media_type="image/svg+xml")
