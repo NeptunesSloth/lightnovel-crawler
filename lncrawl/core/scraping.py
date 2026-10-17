@@ -32,7 +32,6 @@ from scraper import (
     Scraper,
     ScraperConfig,
     SharedState,
-    extract_host,
 )
 from scraper.memory import Memory
 
@@ -77,30 +76,6 @@ def pacing_for(requests_per_sec: float) -> PacingPolicy:
     # default it becomes the real limit for any rate above about 3/s, so it has
     # to scale with the interval it is a floor for.
     return PacingPolicy(interval=interval, floor=min(0.35, interval / 4))
-
-
-def slow_origin_to(url: str, requests_per_sec: float, rate_cap: float = 0.0) -> None:
-    """Back one origin off to a slower rate, live.
-
-    This is the adaptive half, and it can only slow down: the floor on the
-    interval is the rate the scraper was *built* with (``policy.interval``), and
-    the library narrows back towards it on its own once requests are getting
-    through. The interval is written to the origin's profile rather than to the
-    pacer alone, because a fetch re-seeds the pacer from the profile — a pacer-only
-    change is undone by the very next request.
-    """
-    if requests_per_sec <= 0:
-        return
-    key = extract_host(url) or url
-    interval = 1.0 / requests_per_sec
-    state = shared_state(rate_cap)
-    profile = state.memory.profile(url)
-    if interval <= profile.interval:
-        return
-    profile.interval = interval
-    state.memory.touch()
-    state.pacer.learn(key, interval)
-    logger.debug(f"Backed {key} off to {interval:.3f}s between requests")
 
 
 def _parse_exit(entry: str) -> Optional[ExitSpec]:

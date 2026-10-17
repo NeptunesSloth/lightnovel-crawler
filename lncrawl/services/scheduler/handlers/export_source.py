@@ -12,7 +12,6 @@ from urllib.parse import quote
 import zipfile
 
 from ....context import ctx
-from ....core.scraping import slow_origin_to
 from ....enums import JobType, OutputFormat
 from ....utils.file_tools import safe_filename
 from ....utils.notify import notify_finished
@@ -58,19 +57,17 @@ ADAPTIVE_DECAY = 0.7  # multiply the delay by this after each success
 # Auto-tuning of the request rate (requests/second). When blocking is detected the
 # rate is halved; after a streak of clean novels it creeps back up. Bounds keep it
 # both effective and from thrashing.
-# How many chapters/images may be in flight at once. The rate itself belongs to
-# the scraper's per-origin pacer, so a second worker cannot send sooner — it only
-# waits somewhere else. Measured against a local server, two or more workers
-# overshoot a *configured* rate by up to 2x, and being asked for 1 req/s while
-# sending 2 is how a source starts blocking. So concurrency is only raised when
-# no rate was asked for, where there is nothing to overshoot.
+# How many chapters/images may be in flight at once, whether or not a rate was
+# asked for. The rate is held by the task queue's limiter, which hands out send
+# slots from one shared clock, so these workers overlap each other's latency
+# without ever sending faster than the cap — a worker with no slot yet waits.
 #
-# The cost of that choice: with one request in flight, a rate above roughly
-# 1-2/s is bounded by the site's latency rather than by the cap, so asking for 5
-# does not get 5. Someone who wants maximum speed leaves the rate unset, which is
-# what the "Fast" preset does; the pacer still backs off if the site pushes back.
-PACED_WORKERS = 1
-UNPACED_WORKERS = 4
+# This is why the rate is not given to the scraper's own pacer as well: two
+# throttles in series is the slower of the two, and the pacer's per-request wait
+# cannot be made exact across threads (it reads the last send time, then sleeps,
+# so threads wake together — about 2x over the cap when measured). The pacer
+# still widens by itself when a site starts refusing, underneath all this.
+EXPORT_WORKERS = 4
 RPS_MIN = 0.2  # slowest auto-tuned rate (1 request / 5s)
 RPS_MAX = 5.0  # fastest auto-tuned rate
 RPS_RAISE_AFTER = 3  # consecutive clean novels before nudging the rate up
@@ -153,32 +150,33 @@ def _classify_error(reason: str) -> str:
     return "error"
 
 
-def _workers_for(rps: float) -> int:
-    return PACED_WORKERS if rps and rps > 0 else UNPACED_WORKERS
+def _current_rate(crawler) -> float:
+    """The rate the crawler's queue is limited to, or 0 when it is not limited."""
+    limiter = getattr(crawler.taskman, "_limiter", None)
+    period = getattr(limiter, "period", 0) if limiter is not None else 0
+    return 1.0 / period if period and period > 0 else 0.0
 
 
-def _apply_rate(crawler, rps: float, rate_cap: float = 0.0) -> None:
-    """Back this source off to ``rps``, and size the worker pool to match.
+def _apply_rate(crawler, rps: float) -> None:
+    """Set the rate this source is downloaded at. 0 means no cap.
 
-    The rate lives in the scraper's pacer, not in the task queue's own limiter.
-    Two throttles in series is the slower of the two, and the queue's limiter also
-    pins the pool to one worker — pacing there is what capped every export at the
-    pacer's default interval regardless of the rate that was asked for.
-
-    Only slows down: the floor is the rate the crawler was built with, and the
-    library narrows back towards it by itself once requests get through again.
+    Goes to the queue's limiter, which admits one call per interval from a clock
+    shared by every worker — so the pool stays several deep while the cap holds.
     """
-    slow_origin_to(crawler.scraper.origin, rps, rate_cap)
-    workers = _workers_for(rate_cap)
-    if crawler.taskman.workers != workers:
-        crawler.taskman.init_executor(workers=workers)
+    crawler.taskman.init_executor(
+        workers=EXPORT_WORKERS,
+        ratelimit=rps if rps and rps > 0 else None,
+    )
 
 
 def _refresh_executor(crawler) -> None:
-    """Recreate the download worker pool at its current size, so a worker stuck on
-    a hung request is abandoned instead of blocking every later novel. The rate
-    lives in the scraper's pacer, so it survives this untouched."""
-    crawler.taskman.init_executor(workers=crawler.taskman.workers or PACED_WORKERS)
+    """Recreate the download worker pool so a worker stuck on a hung request is
+    abandoned instead of blocking every later novel.
+
+    Carries the rate across: the limiter belongs to the executor, so rebuilding
+    without it would quietly lift the cap for the rest of the run.
+    """
+    _apply_rate(crawler, _current_rate(crawler))
 
 
 def _drain(crawler, futures, on_tick, signal) -> int:
@@ -394,24 +392,21 @@ class ExportSourceHandler(BaseHandler):
 
         self._set_running()
 
-        # One crawler session reused for discovery and every download, built with
-        # this run's rate: the rate is the pacer's policy, and that policy is the
-        # floor on the interval — the library slows an origin down from there when
-        # it pushes back, and never speeds past what was asked for. Pacing is also
-        # the anti-bot measure, the fix for "ch 0/N" on Cloudflare-protected
-        # sources where unthrottled request timing gets the IP blocked.
-        crawler = ctx.sources.init_crawler(
-            source.url,
-            workers=_workers_for(requests_per_sec),
-            requests_per_sec=requests_per_sec,
-        )
+        # One crawler session reused for discovery and every download. The scraper
+        # is left unpaced on purpose — `_apply_rate` puts this run's cap on the
+        # queue instead, where it can be held exactly with several requests in
+        # flight. Pacing is the anti-bot measure too, the fix for "ch 0/N" on
+        # Cloudflare-protected sources where unthrottled timing gets the IP
+        # blocked, so an uncapped run is still the user asking for that risk.
+        crawler = ctx.sources.init_crawler(source.url, workers=EXPORT_WORKERS)
+        _apply_rate(crawler, requests_per_sec)
         if requests_per_sec > 0:
             ctx.logger.info(
                 f"Export capped at {requests_per_sec} req/s on {domain} "
-                f"({_workers_for(requests_per_sec)} worker)"
+                f"({EXPORT_WORKERS} in flight)"
             )
         else:
-            ctx.logger.info(f"Export unpaced on {domain} ({_workers_for(0)} workers in flight)")
+            ctx.logger.info(f"Export uncapped on {domain} ({EXPORT_WORKERS} in flight)")
         try:
             selected = self.job.extra.get("urls")
             if selected:
@@ -688,7 +683,7 @@ class ExportSourceHandler(BaseHandler):
                     # apply any auto-tuned rate change before the next novel (safe
                     # here — no download futures are in flight between novels)
                     if auto_tune and tuned_rps != applied_rps:
-                        _apply_rate(crawler, tuned_rps, requests_per_sec)
+                        _apply_rate(crawler, tuned_rps)
                         applied_rps = tuned_rps
                         self._set_extra(requests_per_sec=round(tuned_rps, 2))
 
