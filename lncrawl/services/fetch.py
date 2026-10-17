@@ -8,10 +8,9 @@ from threading import Event
 import time
 from typing import Optional
 
-from scraper import Scraper
-
 from ..assets.images import favicon_icon
 from ..context import ctx
+from ..core.scraping import new_scraper
 from ..utils.event_lock import EventLock
 from ..utils.url_tools import extract_base
 
@@ -21,7 +20,10 @@ logger = logging.getLogger(__name__)
 class FetchService:
     def __init__(self) -> None:
         self.lock = EventLock(3)
-        self.scraper = Scraper()
+        # Shares the process-wide configuration and state with every crawler, so
+        # what this service learns about a host (pacing, a solved clearance) is
+        # the same knowledge a crawl of that host uses. See core/scraping.py.
+        self.scraper = new_scraper()
 
     def close(self):
         self.scraper.close()

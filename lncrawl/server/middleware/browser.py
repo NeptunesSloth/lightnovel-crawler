@@ -6,12 +6,12 @@ import pickle
 from urllib.parse import urljoin, urlparse
 
 from requests.structures import CaseInsensitiveDict
-from scraper import ScraperEngine, default_config
-from scraper.exceptions import CloudflareException
+from scraper.exceptions import Blocked
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
 from ...assets.scripts import browser_intercept_script
+from ...core.scraping import new_scraper
 from ...utils import browse_helper as helper
 
 logger = logging.getLogger(__name__)
@@ -56,8 +56,6 @@ class BrowserNavigation:
         await response(scope, receive, send)
 
     async def generate(self, path: str, request: Request) -> Response:
-        engine = ScraperEngine(default_config())
-
         parsed = urlparse(path)
         apex_domain = parsed.hostname or ""
         target_origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -79,33 +77,38 @@ class BrowserNavigation:
         if domain_cookie:
             cookies = pickle.loads(base64.decodebytes(domain_cookie.encode()))
 
+        scraper = new_scraper(origin=target_origin)
+        if cookies:
+            for name, value in cookies.items():
+                scraper.set_cookie(name, value, domain=apex_domain)
         try:
-            resp = engine.request(
-                method=request.method,
-                url=path,
+            # 1.x has no separate engine: `fetch` runs the whole ladder itself,
+            # diagnosing what blocks it and escalating only that far — which is
+            # what the second, hand-rolled attempt used to be for.
+            resp = scraper.fetch(
+                request.method,
+                path,
+                headers=dict(headers),
                 data=body or None,
-            )
-        except CloudflareException as e:
-            logger.warning(f"{path}: {e!r}")
-            resp = engine.perform_request(
-                method=request.method,
-                url=path,
-                headers=headers,
-                data=body or None,
-                cookies=cookies,
                 allow_redirects=False,
             )
+            # Read the body before the transport is closed below: everything
+            # after this point works off the cached content.
+            content = resp.content
+        except Blocked as e:
+            logger.warning(f"{path}: {e!r}")
+            return RedirectResponse(path)
+        finally:
+            scraper.close()
 
         if resp.status_code >= 400:
             return RedirectResponse(path)
 
-        content_type = resp.raw.headers.get("content-type", "")
+        content_type = resp.headers.get("content-type", "")
         response = Response(
             media_type=content_type,
             status_code=resp.status_code,
-            headers=dict(
-                (k, v) for k, v in resp.raw.headers.items() if k.lower() not in _HOP_BY_HOP
-            ),
+            headers=dict((k, v) for k, v in resp.headers.items() if k.lower() not in _HOP_BY_HOP),
         )
         response.set_cookie(
             key=apex_domain,
@@ -117,7 +120,7 @@ class BrowserNavigation:
             absolute = urljoin(path, location)
             response.headers["location"] = f"{prefix_origin}/{absolute}"
         elif "text/html" in content_type:
-            html = resp.content.decode(errors="replace")
+            html = content.decode(errors="replace")
             html = helper.rewrite_html(html, target_origin)
             html = helper.replace_links(html, prefix_origin)
             if "<base href" not in html:
@@ -130,16 +133,16 @@ class BrowserNavigation:
             html = html.replace("<head>", f"<head><script>{js}</script>")
             response.body = html.encode()
         elif "text/css" in content_type:
-            text = resp.content.decode(errors="replace")
+            text = content.decode(errors="replace")
             text = helper.rewrite_css(text, target_origin)
             text = helper.replace_links(text, prefix_origin)
             response.body = text.encode()
         elif "javascript" in content_type:
-            text = resp.content.decode(errors="replace")
+            text = content.decode(errors="replace")
             text = helper.replace_links(text, prefix_origin)
             response.body = text.encode()
         else:
-            response.body = resp.content
+            response.body = content
 
         if response.body:
             response.headers["content-length"] = f"{len(response.body)}"

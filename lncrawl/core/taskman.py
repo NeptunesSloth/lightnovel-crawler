@@ -79,7 +79,10 @@ class TaskManager:
         self.close()  # cleanup previous initialization
 
         if ratelimit and ratelimit > 0:
-            workers = 1  # use single worker if ratelimit is being applied
+            # The limiter admits calls at exactly this rate no matter how many
+            # threads wait on it, so the pool keeps whatever size it was given.
+            # It used to be pinned to one worker here because the limiter kept its
+            # timing on the instance and raced.
             self._limiter = RateLimiter(ratelimit)
         elif hasattr(self, "_limiter"):
             del self._limiter

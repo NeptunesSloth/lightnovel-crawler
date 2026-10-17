@@ -1,4 +1,4 @@
-from pathlib import Path as FilePath
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Path, Query, Security
@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from ...context import ctx
 from ...dao import ActivityType, Artifact, Chapter, Job, LanguageCode, Novel, User, Volume
 from ...exceptions import ServerErrors
+from ...utils.file_tools import dir_size
 from ..models import Paginated
 from ..security import ensure_admin, ensure_user
 
@@ -51,32 +52,26 @@ def list_sources() -> Dict[str, int]:
     return ctx.novels.list_domains()
 
 
-def _dir_size(path: FilePath) -> int:
-    total = 0
-    if not path.is_dir():
-        return 0
-    for f in path.rglob("*"):
-        try:
-            if f.is_file():
-                total += f.stat().st_size
-        except OSError:
-            continue
-    return total
-
-
 @router.get("s/storage", summary="Disk usage of the downloaded library and exports")
 def novels_storage() -> Dict[str, Any]:
     novels_dir = ctx.files.resolve("novels")
     sizes: Dict[str, int] = {}
     if novels_dir.is_dir():
-        for child in novels_dir.iterdir():
-            if child.is_dir():
-                sizes[child.name] = _dir_size(child)
-    titles: Dict[str, str] = {}
-    for novel in ctx.novels.list(limit=100, offset=0).items:
-        titles[novel.id] = novel.title
+        for child in os.scandir(novels_dir):
+            if child.is_dir(follow_symlinks=False):
+                # Allocated blocks, not the apparent byte sum: this view answers
+                # "how full is the disk", and it is the measure the scrubber
+                # decides by when it starts deleting to make room. On a library of
+                # small chapter files the two differ by much more than rounding,
+                # so reporting the other one here invited the obvious complaint —
+                # the cleanup fired while the page still showed plenty of space.
+                sizes[child.name] = dir_size(child.path, allocated=True)
     largest = sorted(sizes.items(), key=lambda kv: -kv[1])[:15]
-    exports_size = _dir_size(ctx.files.resolve("exports"))
+    # Titles for exactly the rows shown. Reading the newest 100 novels instead
+    # left anything outside them labelled with its bare id — and the biggest
+    # novel on disk is rarely the most recently touched one.
+    titles = ctx.novels.titles_by_id([nid for nid, _ in largest])
+    exports_size = dir_size(ctx.files.resolve("exports"), allocated=True)
     return {
         "total": sum(sizes.values()),
         "exports": exports_size,

@@ -42,6 +42,7 @@ class Crawler(ABC):
         workers: Optional[int] = None,
         parser: Optional[str] = None,
         origin: Optional[str] = None,
+        requests_per_sec: Optional[float] = None,
     ) -> None:
         """
         Creates a standalone Crawler instance.
@@ -51,57 +52,33 @@ class Crawler(ABC):
         - workers (int, optional): Number of concurrent workers to expect.
         - parser (Optional[str], optional): Desirable features of the parser. This can be the name of a specific parser
             ("lxml", "lxml-xml", "html.parser", or "html5lib") or it may be the type of markup to be used ("html", "html5", "xml").
+        - requests_per_sec (float, optional): Cap on requests per second to any one
+            host. 0 means uncapped; None takes the configured default. This, not the
+            worker count, is what sets download speed — the scraper spaces requests
+            per host, so an extra worker cannot send sooner.
         """
         if isinstance(self.base_url, str):
             self.base_url = [self.base_url]
         if not origin or origin not in self.base_url:
             origin = self.base_url[0]
 
-        from scraper import Scraper, TorProxyUrl, default_config
-
         from .cleaner import TextCleaner
+        from .scraping import new_scraper
         from .taskman import TaskManager
 
         self.cleaner = TextCleaner()
         self.taskman = TaskManager(workers=workers)
 
-        config = default_config()
-        if ctx.config.crawler.enable_proxy:
-            config.proxy.fallback_to_direct = ctx.config.crawler.allow_fallback_on_proxy_miss
-            for url in ctx.config.crawler.proxy_urls.split(","):
-                if not url.strip():
-                    continue
-                if url.startswith("tor;"):
-                    _, host, port, control_port, control_pass = url.split(";")
-                    tor_proxy = TorProxyUrl(
-                        url=f"socks5h://{host}:{port}/",
-                        control_host=host,
-                        control_password=control_pass,
-                        control_port=int(control_port),
-                    )
-                    config.proxy.proxy_urls.append(tor_proxy)
-                else:
-                    config.proxy.proxy_urls.append(url)
-
-        self.scraper = Scraper(origin=origin, parser=parser, config=config)
-
-        # Ride a previously-solved Cloudflare clearance for this host, if one is
-        # saved and still fresh — avoids re-solving the challenge in a browser on
-        # every restart. Expired cookies are harmless (the site just challenges
-        # again and the new clearance replaces the old one).
-        try:
-            from .clearance import load_clearance
-
-            entry = load_clearance(origin)
-            if entry:
-                self.scraper.apply_browser_clearance(
-                    origin,
-                    cf_clearance=entry.get("cf_clearance"),
-                    user_agent=entry.get("user_agent") or None,
-                    cookies=entry.get("cookies") or {},
-                )
-        except Exception:
-            pass
+        # Built from the process-wide configuration and state, so this crawler
+        # shares one exit pool, one pacing record per origin, and one on-disk
+        # memory with every other scraper here. A previously solved challenge
+        # clearance for this host comes back through that memory, which is why a
+        # restarted export no longer re-solves it — see core/scraping.py.
+        self.scraper = new_scraper(
+            origin=origin,
+            parser=parser,
+            requests_per_sec=requests_per_sec,
+        )
 
     def close(self) -> None:
         self.scraper.close()
@@ -135,6 +112,19 @@ class Crawler(ABC):
     # Utility methods that can be overriden
     # ------------------------------------------------------------------------- #
 
+    @property
+    def last_soup_url(self) -> str:
+        """The last URL fetched. 1.x renamed this to ``Scraper.last_url``.
+
+        Kept because source crawlers read and assign it, including user sources
+        loaded from outside this repository, which a rename here would break.
+        """
+        return self.scraper.last_url
+
+    @last_soup_url.setter
+    def last_soup_url(self, url: str) -> None:
+        self.scraper.last_url = url
+
     def absolute_url(self, any_url: Any, page_url: Optional[str] = None) -> str:
         url = str(any_url or "").strip().rstrip("/")
         if not url:
@@ -144,7 +134,7 @@ class Crawler(ABC):
         if scheme in ("http", "https"):
             return url
 
-        base_url = extract_base(self.scraper.last_soup_url).strip("/")
+        base_url = extract_base(self.scraper.last_url).strip("/")
         if url.startswith("//"):
             scheme = base_url.split(":")[0]
             return f"{scheme}:{url}"
@@ -153,7 +143,7 @@ class Crawler(ABC):
             return base_url + url
 
         if not page_url:
-            page_url = self.scraper.last_soup_url
+            page_url = self.scraper.last_url
 
         page_url = page_url.rstrip("/")
 

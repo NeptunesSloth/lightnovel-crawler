@@ -7,7 +7,7 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from PIL import UnidentifiedImageError
 from requests.exceptions import RequestException
-from scraper.exceptions import AbortedException, CloudflareException
+from scraper.exceptions import Aborted, Blocked, Poisoned
 from urllib3.exceptions import HTTPError
 
 __all__ = [
@@ -32,10 +32,19 @@ class FallbackToBrowser(Exception):
     pass
 
 
+# The name this project uses for it at ~90 call sites, and still exactly what it
+# says: lncrawl-scraper 1.x renamed the class to `Aborted`.
+AbortedException = Aborted
+
+# `Blocked` replaces the old `CloudflareException` and is the base of `Impassable`
+# (the layer reads a secret — nothing to retry) and `Exhausted` (every tier this
+# configuration reaches was spent). Catching the base keeps all three; use
+# `scraper.is_permanent(error)` where the difference decides whether to retry.
 ScraperErrorGroup = (
     URLError,
     HTTPError,
-    CloudflareException,
+    Blocked,
+    Poisoned,
     RequestException,
     FallbackToBrowser,
     UnidentifiedImageError,
@@ -44,7 +53,7 @@ ScraperErrorGroup = (
 RetryErrorGroup = (
     URLError,
     HTTPError,
-    CloudflareException,
+    Blocked,
     RequestException,
     UnidentifiedImageError,
 )

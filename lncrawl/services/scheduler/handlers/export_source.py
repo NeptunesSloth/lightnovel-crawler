@@ -57,7 +57,17 @@ ADAPTIVE_DECAY = 0.7  # multiply the delay by this after each success
 # Auto-tuning of the request rate (requests/second). When blocking is detected the
 # rate is halved; after a streak of clean novels it creeps back up. Bounds keep it
 # both effective and from thrashing.
-DEFAULT_EXPORT_WORKERS = 1  # crawler default — downloads run one at a time
+# How many chapters/images may be in flight at once, whether or not a rate was
+# asked for. The rate is held by the task queue's limiter, which hands out send
+# slots from one shared clock, so these workers overlap each other's latency
+# without ever sending faster than the cap — a worker with no slot yet waits.
+#
+# This is why the rate is not given to the scraper's own pacer as well: two
+# throttles in series is the slower of the two, and the pacer's per-request wait
+# cannot be made exact across threads (it reads the last send time, then sleeps,
+# so threads wake together — about 2x over the cap when measured). The pacer
+# still widens by itself when a site starts refusing, underneath all this.
+EXPORT_WORKERS = 4
 RPS_MIN = 0.2  # slowest auto-tuned rate (1 request / 5s)
 RPS_MAX = 5.0  # fastest auto-tuned rate
 RPS_RAISE_AFTER = 3  # consecutive clean novels before nudging the rate up
@@ -140,23 +150,33 @@ def _classify_error(reason: str) -> str:
     return "error"
 
 
+def _current_rate(crawler) -> float:
+    """The rate the crawler's queue is limited to, or 0 when it is not limited."""
+    limiter = getattr(crawler.taskman, "_limiter", None)
+    period = getattr(limiter, "period", 0) if limiter is not None else 0
+    return 1.0 / period if period and period > 0 else 0.0
+
+
 def _apply_rate(crawler, rps: float) -> None:
-    """Reconfigure the crawler's downloader for a request rate (0 = unthrottled)."""
-    if rps and rps > 0:
-        crawler.taskman.init_executor(ratelimit=rps)
-    else:
-        crawler.taskman.init_executor(workers=DEFAULT_EXPORT_WORKERS)
+    """Set the rate this source is downloaded at. 0 means no cap.
+
+    Goes to the queue's limiter, which admits one call per interval from a clock
+    shared by every worker — so the pool stays several deep while the cap holds.
+    """
+    crawler.taskman.init_executor(
+        workers=EXPORT_WORKERS,
+        ratelimit=rps if rps and rps > 0 else None,
+    )
 
 
 def _refresh_executor(crawler) -> None:
-    """Recreate the download worker pool, preserving the current rate, so a worker
-    stuck on a hung request is abandoned instead of blocking every later novel."""
-    limiter = getattr(crawler.taskman, "_limiter", None)
-    period = getattr(limiter, "period", 0) if limiter is not None else 0
-    if period and period > 0:
-        crawler.taskman.init_executor(ratelimit=1.0 / period)
-    else:
-        crawler.taskman.init_executor(workers=DEFAULT_EXPORT_WORKERS)
+    """Recreate the download worker pool so a worker stuck on a hung request is
+    abandoned instead of blocking every later novel.
+
+    Carries the rate across: the limiter belongs to the executor, so rebuilding
+    without it would quietly lift the cap for the rest of the run.
+    """
+    _apply_rate(crawler, _current_rate(crawler))
 
 
 def _drain(crawler, futures, on_tick, signal) -> int:
@@ -372,14 +392,21 @@ class ExportSourceHandler(BaseHandler):
 
         self._set_running()
 
-        # one crawler session reused for discovery and every download
-        crawler = ctx.sources.init_crawler(source.url)
+        # One crawler session reused for discovery and every download. The scraper
+        # is left unpaced on purpose — `_apply_rate` puts this run's cap on the
+        # queue instead, where it can be held exactly with several requests in
+        # flight. Pacing is the anti-bot measure too, the fix for "ch 0/N" on
+        # Cloudflare-protected sources where unthrottled timing gets the IP
+        # blocked, so an uncapped run is still the user asking for that risk.
+        crawler = ctx.sources.init_crawler(source.url, workers=EXPORT_WORKERS)
+        _apply_rate(crawler, requests_per_sec)
         if requests_per_sec > 0:
-            # Rate-limit chapter/image downloads so they don't fire back-to-back and
-            # trip a site's anti-bot. This is the fix for "ch 0/N" on Cloudflare-
-            # protected sources where unthrottled request timing gets the IP blocked.
-            crawler.taskman.init_executor(ratelimit=requests_per_sec)
-            ctx.logger.info(f"Export throttled to {requests_per_sec} req/s on {domain}")
+            ctx.logger.info(
+                f"Export capped at {requests_per_sec} req/s on {domain} "
+                f"({EXPORT_WORKERS} in flight)"
+            )
+        else:
+            ctx.logger.info(f"Export uncapped on {domain} ({EXPORT_WORKERS} in flight)")
         try:
             selected = self.job.extra.get("urls")
             if selected:

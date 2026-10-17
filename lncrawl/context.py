@@ -216,6 +216,12 @@ class __AppContext__:
             self.translator.close()
         if "http" in self.__dict__:
             self.http.close()
+        # Write out what the scrapers learned (pacing, solved clearances) so the
+        # next run starts from it instead of re-solving. Memory also flushes on a
+        # timer, so this only matters for whatever happened since the last one.
+        from .core.scraping import close_shared_state
+
+        close_shared_state()
 
     def setup(
         self,

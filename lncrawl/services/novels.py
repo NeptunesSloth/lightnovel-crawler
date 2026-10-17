@@ -8,6 +8,7 @@ from ..context import ctx
 from ..dao import LanguageCode, Novel, NovelTranslation
 from ..exceptions import ServerErrors
 from ..server.models import Paginated
+from ..utils.url_tools import extract_host
 
 
 def _norm(text: str) -> str:
@@ -34,7 +35,12 @@ class NovelService:
             conditions: List[Any] = []
 
             if domain:
-                conditions.append(sq.col(Novel.url).ilike(f"%{domain}%"))
+                # Match the indexed `domain` column instead of scanning every
+                # row's url for a substring. Whatever the caller passed is put
+                # through the same normaliser that filled the column, so a bare
+                # host, a "www." prefix and a whole novel URL all still work —
+                # what no longer matches is an arbitrary fragment of a URL.
+                conditions.append(Novel.domain == extract_host(domain.strip()))
 
             if search:
                 conditions.append(sq.col(Novel.title).ilike(f"%{search}%"))
@@ -71,6 +77,16 @@ class NovelService:
             if exclude_domain:
                 stmt = stmt.where(Novel.domain != exclude_domain)
             return [t for t in sess.exec(stmt).all() if t]
+
+    def titles_by_id(self, novel_ids: List[str]) -> Dict[str, str]:
+        """Titles for the given novel ids, in one query."""
+        if not novel_ids:
+            return {}
+        with ctx.db.session() as sess:
+            rows = sess.exec(
+                sq.select(Novel.id, Novel.title).where(sq.col(Novel.id).in_(novel_ids))
+            ).all()
+            return {nid: title for nid, title in rows}
 
     def list_domains(self) -> Dict[str, int]:
         with ctx.db.session() as sess:
@@ -168,6 +184,7 @@ class NovelService:
 
         healed = 0
         filled_ids: set = set()
+        filled: List[Any] = []
         # prefer the most complete other copy first
         for src in sorted(candidates, key=lambda n: -(n.chapter_count or 0)):
             for sc in ctx.chapters.list(novel_id=src.id):
@@ -185,13 +202,21 @@ class NovelService:
                     ctx.logger.debug(f"Heal copy failed for chapter {target.id}: {e}")
                     continue
                 target.is_done = True
-                with ctx.db.session() as sess:
-                    sess.merge(target)
-                    sess.commit()
+                filled.append(target)
                 filled_ids.add(target.id)
                 healed += 1
             if healed >= len(missing):
                 break
+
+        # One transaction for the whole fill. A session and a commit per chapter
+        # meant a separate fsync each, which is most of the wall time when a few
+        # hundred gaps are filled at once — and left a half-healed novel behind
+        # if the run died midway.
+        if filled:
+            with ctx.db.session() as sess:
+                for target in filled:
+                    sess.merge(target)
+                sess.commit()
 
         sources = sorted({c.domain for c in candidates})
         if not healed:
