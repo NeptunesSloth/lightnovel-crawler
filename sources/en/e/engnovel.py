@@ -92,9 +92,9 @@ class EngNovel(LegacyCrawler):
                 "page": page,
             }
             chapter_list = self.make_soup(
-                self.post_response("https://engnovel.com/wp-admin/admin-ajax.php", data).json()[
-                    "list_chap"
-                ]
+                self.post_response(
+                    "https://engnovel.com/wp-admin/admin-ajax.php", data=data
+                ).json()["list_chap"]
             )
 
             for a in chapter_list.select("ul.list-chapter li a"):

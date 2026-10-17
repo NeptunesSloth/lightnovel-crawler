@@ -3,7 +3,6 @@ from io import BytesIO
 import json
 import logging
 from threading import Event
-from time import monotonic
 from typing import Iterable, MutableMapping, Optional
 
 from requests.utils import CaseInsensitiveDict
@@ -79,7 +78,8 @@ class BrowserTemplate(CrawlerTemplate):
 
         def get_json(url: str, headers: MutableMapping = {}, **kwargs):
             try:
-                return origin_method(url, headers, **kwargs)
+                # 1.x takes everything but the URL by keyword
+                return origin_method(url, headers=headers, **kwargs)
             except ScraperErrorGroup:
                 headers = CaseInsensitiveDict(headers or {})
                 url_js = json.dumps(url)
@@ -118,60 +118,26 @@ class BrowserTemplate(CrawlerTemplate):
     # ------------------------------------------------------------------------- #
 
     def warm_up_clearance(self, url: str, signal: Optional[Event] = None) -> bool:
-        """Solve a Cloudflare challenge once in a real browser and reuse it.
+        """Clear a challenge for ``url`` once, before a bulk run depends on it.
 
-        Drives the headless browser to ``url`` to pass the managed challenge /
-        Turnstile, then hands the resulting ``cf_clearance`` cookie and the
-        browser's exact User-Agent to the lightweight scraper so subsequent HTTP
-        requests ride the cleared session (far faster than browser-fetching every
-        page). Returns True if a ``cf_clearance`` cookie was obtained. Degrades
-        gracefully — returns False if browsing is disabled or no browser is
-        available, never raising into the caller.
+        The scraper owns challenge solving now: it diagnoses which layer is
+        blocking it, escalates to the configured browser only that far, and keeps
+        the clearance it earns — bound to the identity that earned it, and
+        written to disk — so later requests and later runs ride it instead of
+        solving again. All this does is make that happen up front, so a long
+        export meets the challenge here rather than part-way through its first
+        novel.
+
+        Returns True when the page came back: either nothing challenged us, or
+        something did and it cleared. Degrades gracefully — False when browsing
+        is disabled or the site stays blocked, never raising into the caller.
         """
         if not ctx.config.crawler.can_use_browser:
             return False
-        signal = signal or Event()
         try:
-            from .browser import By
-
-            with self.create_browser() as browser:
-                browser.visit(url)
-                try:
-                    browser.wait("body", By.TAG_NAME, timeout=60)
-                except Exception:
-                    pass
-                # a managed challenge can take a few seconds to set the cookie
-                clearance: Optional[str] = None
-                cookies: dict = {}
-                deadline = monotonic() + 40
-                while monotonic() < deadline:
-                    cookies = {c["name"]: c["value"] for c in browser.get_cookies()}
-                    clearance = cookies.get("cf_clearance")
-                    if clearance or signal.is_set():
-                        break
-                    if signal.wait(2):
-                        break
-                user_agent = browser.user_agent
-                self.scraper.apply_browser_clearance(
-                    url,
-                    cf_clearance=clearance,
-                    user_agent=user_agent or None,
-                    cookies=cookies,
-                )
-                if clearance:
-                    logger.info("Obtained Cloudflare clearance via browser for %s", url)
-                    # persist so restarts / later runs skip the browser solve
-                    from .clearance import save_clearance
-
-                    save_clearance(
-                        url,
-                        cf_clearance=clearance,
-                        user_agent=user_agent or None,
-                        cookies=cookies,
-                    )
-                else:
-                    logger.warning("Browser visit to %s did not yield a cf_clearance cookie", url)
-                return bool(clearance)
+            self.scraper.get(url, signal=signal)
+            logger.info("Cleared %s for this run", url)
+            return True
         except Exception as e:
             logger.warning("Cloudflare warm-up failed for %s | %s", url, e)
             return False
@@ -207,7 +173,7 @@ class BrowserTemplate(CrawlerTemplate):
             def override_visit(url: str) -> None:
                 _visit(url)
                 if browser.current_url:
-                    self.scraper.last_soup_url = browser.current_url
+                    self.scraper.last_url = browser.current_url
 
             setattr(browser, "close", override_close)
             setattr(browser, "visit", override_visit)
