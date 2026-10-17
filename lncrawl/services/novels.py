@@ -8,6 +8,7 @@ from ..context import ctx
 from ..dao import LanguageCode, Novel, NovelTranslation
 from ..exceptions import ServerErrors
 from ..server.models import Paginated
+from ..utils.url_tools import extract_host
 
 
 def _norm(text: str) -> str:
@@ -34,7 +35,12 @@ class NovelService:
             conditions: List[Any] = []
 
             if domain:
-                conditions.append(sq.col(Novel.url).ilike(f"%{domain}%"))
+                # Match the indexed `domain` column instead of scanning every
+                # row's url for a substring. Whatever the caller passed is put
+                # through the same normaliser that filled the column, so a bare
+                # host, a "www." prefix and a whole novel URL all still work —
+                # what no longer matches is an arbitrary fragment of a URL.
+                conditions.append(Novel.domain == extract_host(domain.strip()))
 
             if search:
                 conditions.append(sq.col(Novel.title).ilike(f"%{search}%"))

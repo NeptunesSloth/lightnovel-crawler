@@ -59,13 +59,19 @@ def novels_storage() -> Dict[str, Any]:
     if novels_dir.is_dir():
         for child in os.scandir(novels_dir):
             if child.is_dir(follow_symlinks=False):
-                sizes[child.name] = dir_size(child.path)
+                # Allocated blocks, not the apparent byte sum: this view answers
+                # "how full is the disk", and it is the measure the scrubber
+                # decides by when it starts deleting to make room. On a library of
+                # small chapter files the two differ by much more than rounding,
+                # so reporting the other one here invited the obvious complaint —
+                # the cleanup fired while the page still showed plenty of space.
+                sizes[child.name] = dir_size(child.path, allocated=True)
     largest = sorted(sizes.items(), key=lambda kv: -kv[1])[:15]
     # Titles for exactly the rows shown. Reading the newest 100 novels instead
     # left anything outside them labelled with its bare id — and the biggest
     # novel on disk is rarely the most recently touched one.
     titles = ctx.novels.titles_by_id([nid for nid, _ in largest])
-    exports_size = dir_size(ctx.files.resolve("exports"))
+    exports_size = dir_size(ctx.files.resolve("exports"), allocated=True)
     return {
         "total": sum(sizes.values()),
         "exports": exports_size,
