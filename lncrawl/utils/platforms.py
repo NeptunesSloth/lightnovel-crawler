@@ -83,6 +83,39 @@ class Platform:
     @static_cached_property
     @staticmethod
     def has_display():
+        # Windows asks the OS directly. Measuring the screen through Tk meant the
+        # frozen build had to carry the whole Tcl runtime for this one question,
+        # and PyInstaller's tkinter hook installs a startup hook that aborts the
+        # process when it cannot find the Tcl data directory it expects — so a
+        # missing data folder killed `lncrawl.exe` before main() ran, on a code
+        # path the CLI never uses.
+        if Platform.windows:
+            try:
+                import ctypes
+
+                user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+                # Report real pixels rather than the DPI-virtualised ones.
+                try:
+                    user32.SetProcessDPIAware()
+                except Exception:
+                    pass
+                width = int(user32.GetSystemMetrics(0))  # SM_CXSCREEN
+                height = int(user32.GetSystemMetrics(1))  # SM_CYSCREEN
+                if width <= 0 or height <= 0:
+                    return False
+                Screen.width = width
+                Screen.height = height
+                # The area a maximised window gets, i.e. minus the taskbar. This
+                # is what tk.maxsize() reported, and it is what the callers size
+                # their browser windows against.
+                view_width = int(user32.GetSystemMetrics(16))  # SM_CXFULLSCREEN
+                view_height = int(user32.GetSystemMetrics(17))  # SM_CYFULLSCREEN
+                Screen.view_width = view_width if view_width > 0 else width
+                Screen.view_height = view_height if view_height > 0 else height
+                return True
+            except Exception:
+                return False
+
         try:
             from tkinter import Tk
 

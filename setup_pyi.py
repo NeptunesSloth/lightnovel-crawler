@@ -104,6 +104,13 @@ def gather_excluded_modules():
         "pkg_resources",
         "pyinstaller-hooks-contrib",
     ]
+    if IS_WINDOWS:
+        # Nothing on Windows needs Tk any more — Platform.has_display asks the
+        # OS instead. Keeping it would pull in PyInstaller's tkinter startup
+        # hook, which aborts the whole executable when the Tcl data directory it
+        # expects was not collected, however little of the app wanted a GUI.
+        # Left in place on other platforms, where has_display still uses Tk.
+        exclude += ["tkinter", "_tkinter"]
     return [flag for mod in exclude for flag in ["--exclude-module", mod]]
 
 
