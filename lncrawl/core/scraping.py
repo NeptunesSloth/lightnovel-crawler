@@ -22,16 +22,19 @@ into a block.
 
 import logging
 import threading
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from scraper import (
     BrowserSolver,
     ExitKind,
     ExitSpec,
+    PacingPolicy,
     Scraper,
     ScraperConfig,
     SharedState,
+    extract_host,
 )
+from scraper.memory import Memory
 
 from ..context import ctx
 
@@ -44,9 +47,60 @@ logger = logging.getLogger(__name__)
 # blame the site for a block the address caused.
 DEFAULT_EXIT_KIND = ExitKind.DATACENTER
 
+# The scraper spaces requests per origin, and that spacing — not the number of
+# download workers — is what sets throughput: a worker that is not allowed to
+# send yet simply waits somewhere else. Measured against a local server, raising
+# the worker count alone moved 1.8x while lowering the interval moved 9.2x.
+#
+# Kept above zero even when nothing is throttling us, because the adaptive
+# backoff multiplies the interval in force: from a literal zero there is nothing
+# to grow, and a site that starts pushing back could never be backed away from.
+PACING_FLOOR = 0.05
+
 _lock = threading.RLock()
-_config: Optional[ScraperConfig] = None
-_state: Optional[SharedState] = None
+_memory: Optional[Memory] = None
+_configs: Dict[float, ScraperConfig] = {}
+_states: Dict[float, SharedState] = {}
+
+
+def pacing_for(requests_per_sec: float) -> PacingPolicy:
+    """Pacing policy for a target request rate. ``0`` or less means unpaced.
+
+    The library's own default is a 3 second mean interval — right for an
+    unattended scrape of a protected site, and roughly nine times slower than
+    what someone who picked a rate asked for.
+    """
+    if requests_per_sec <= 0:
+        return PacingPolicy(interval=0.0, floor=PACING_FLOOR)
+    interval = 1.0 / requests_per_sec
+    # The floor clamps the short tail of the gap distribution. Left at its
+    # default it becomes the real limit for any rate above about 3/s, so it has
+    # to scale with the interval it is a floor for.
+    return PacingPolicy(interval=interval, floor=min(0.35, interval / 4))
+
+
+def slow_origin_to(url: str, requests_per_sec: float, rate_cap: float = 0.0) -> None:
+    """Back one origin off to a slower rate, live.
+
+    This is the adaptive half, and it can only slow down: the floor on the
+    interval is the rate the scraper was *built* with (``policy.interval``), and
+    the library narrows back towards it on its own once requests are getting
+    through. The interval is written to the origin's profile rather than to the
+    pacer alone, because a fetch re-seeds the pacer from the profile — a pacer-only
+    change is undone by the very next request.
+    """
+    if requests_per_sec <= 0:
+        return
+    key = extract_host(url) or url
+    interval = 1.0 / requests_per_sec
+    state = shared_state(rate_cap)
+    profile = state.memory.profile(url)
+    if interval <= profile.interval:
+        return
+    profile.interval = interval
+    state.memory.touch()
+    state.pacer.learn(key, interval)
+    logger.debug(f"Backed {key} off to {interval:.3f}s between requests")
 
 
 def _parse_exit(entry: str) -> Optional[ExitSpec]:
@@ -133,10 +187,11 @@ def _browser_solver() -> Optional[BrowserSolver]:
         return None
 
 
-def _build_config() -> ScraperConfig:
+def _build_config(requests_per_sec: float) -> ScraperConfig:
     return ScraperConfig(
         exits=_exits(),
         browser=_browser_solver(),
+        pacing=pacing_for(requests_per_sec),
         data_dir=ctx.config.app.app_dir / "scraper",
         # Sources read `response.status_code` and branch on it themselves, the way
         # they did when the scraper never raised for one. Leaving this on would
@@ -145,43 +200,100 @@ def _build_config() -> ScraperConfig:
     )
 
 
-def scraper_config() -> ScraperConfig:
-    """The process-wide scraper configuration."""
-    global _config
+def _rate_key(requests_per_sec: Optional[float]) -> float:
+    """Normalise a rate into a cache key. ``None`` means the configured default."""
+    if requests_per_sec is None:
+        requests_per_sec = ctx.config.crawler.requests_per_sec
+    return max(0.0, round(float(requests_per_sec), 4))
+
+
+def memory() -> Memory:
+    """The one store of what we know about each site, for the whole process."""
+    global _memory
     with _lock:
-        if _config is None:
-            _config = _build_config()
-            logger.debug(f"Scraper configured with {len(_config.exits)} exit(s)")
-        return _config
+        if _memory is None:
+            _memory = Memory(_build_config(0.0).memory_path)
+        return _memory
 
 
-def shared_state() -> SharedState:
-    """The one ``SharedState`` every scraper in this process must be built with."""
-    global _state
+def scraper_config(requests_per_sec: Optional[float] = None) -> ScraperConfig:
+    """The scraper configuration for a request rate."""
+    rate = _rate_key(requests_per_sec)
     with _lock:
-        if _state is None:
-            _state = SharedState.create(scraper_config())
-        return _state
+        config = _configs.get(rate)
+        if config is None:
+            config = _build_config(rate)
+            _configs[rate] = config
+            logger.debug(
+                f"Scraper configured for {rate or 'unpaced'} req/s with {len(config.exits)} exit(s)"
+            )
+        return config
 
 
-def new_scraper(origin: str = "", parser: Optional[str] = None) -> Scraper:
-    """A scraper sharing this process's configuration, memory and exit pool."""
-    return Scraper(
+def shared_state(requests_per_sec: Optional[float] = None) -> SharedState:
+    """The state scrapers on this rate share: one memory, one exit pool, one pacer.
+
+    There is a state per distinct rate because the rate lives in the pacer's
+    policy, and that policy is the floor on the interval — the library will slow
+    an origin down from there but never speed it past what was asked for. All of
+    them are built over the single process-wide ``Memory``, which is the part that
+    must not be duplicated: each store holds every origin it knows and a flush
+    writes the whole file, so two over one path do not merge.
+    """
+    rate = _rate_key(requests_per_sec)
+    with _lock:
+        state = _states.get(rate)
+        if state is None:
+            state = SharedState.create(scraper_config(rate), memory=memory())
+            _states[rate] = state
+        return state
+
+
+def new_scraper(
+    origin: str = "",
+    parser: Optional[str] = None,
+    requests_per_sec: Optional[float] = None,
+) -> Scraper:
+    """A scraper sharing this process's memory, exit pool and pacing for its rate."""
+    rate = _rate_key(requests_per_sec)
+    scraper = Scraper(
         origin=origin,
-        config=scraper_config(),
+        config=scraper_config(rate),
         parser=parser,
-        state=shared_state(),
+        state=shared_state(rate),
     )
+    if rate > 0 and origin:
+        _hold_rate(scraper, origin, 1.0 / rate)
+    return scraper
+
+
+def _hold_rate(scraper: Scraper, origin: str, interval: float) -> None:
+    """Make sure this origin's remembered interval is no faster than ``interval``.
+
+    The policy is the floor the library narrows towards, but a fetch re-seeds the
+    pacer from the origin's profile first, and that profile is shared by every
+    rate in the process — so an interval learned while running uncapped would
+    otherwise undercut a run that asked to be slower. Raising it here, and never
+    lowering it, keeps the cap a cap and incidentally remembers it for next run.
+    """
+    profile = scraper.memory.profile(origin)
+    if profile.interval >= interval:
+        return
+    profile.interval = interval
+    scraper.memory.touch()
+    scraper.pacer.learn(scraper.memory.key(origin), interval)
 
 
 def close_shared_state() -> None:
     """Flush learned state to disk. Safe to call more than once."""
-    global _state
+    global _memory
     with _lock:
-        if _state is None:
+        _states.clear()
+        _configs.clear()
+        if _memory is None:
             return
         try:
-            _state.memory.close()
+            _memory.close()
         except Exception:
             logger.debug("Could not flush scraper memory", exc_info=True)
-        _state = None
+        _memory = None

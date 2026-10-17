@@ -213,6 +213,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <p class="hint" style="margin-top:10px">Defaults work for most sites. If a site blocks the run,
         it auto-slows and (when a browser is available) solves the Cloudflare challenge by itself; turn
         on Polite mode or lower Requests/sec to 0.5/0.25 for stubborn ones.</p>
+      <p class="hint">Requests/sec is what sets the speed, and it is a cap: the run never asks faster,
+        and slows itself down further if the site pushes back. Because one request is in flight at a
+        time while a cap is set, a value above 1&ndash;2 is limited by how fast the site answers &mdash;
+        leave it blank (the &ldquo;Fast&rdquo; preset) to download several at once instead.</p>
     </details>
     <div class="row" style="margin-top:14px">
       <button id="export-btn">Download all &rarr; ZIP</button>

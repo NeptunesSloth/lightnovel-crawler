@@ -764,6 +764,25 @@ class CrawlerConfig(_Section):
     def allow_fallback_on_proxy_miss(self, v: bool) -> None:
         self._set("allow_fallback_on_proxy_miss", v)
 
+    @property
+    def requests_per_sec(self) -> float:
+        """Request Rate Limit.
+
+        How fast to send requests to any one site, in requests per second. The
+        scraper spaces requests per host, so this is what actually sets download
+        speed — more download workers cannot send sooner, they only wait.
+
+        `0` (the default) means no deliberate spacing: as fast as the site
+        answers. A site that starts throttling is still backed away from
+        automatically, and a source export can set its own rate for the run.
+        Lower it (1, or 0.25 for somewhere strict) if a site blocks you.
+        """
+        return max(0.0, float(self._get("requests_per_sec", 0.0)))
+
+    @requests_per_sec.setter
+    def requests_per_sec(self, v: float) -> None:
+        self._set("requests_per_sec", max(0.0, float(v)))
+
 
 # ------------------------------------------------------------------ #
 #                           Server Section                           #

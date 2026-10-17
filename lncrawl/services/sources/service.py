@@ -253,6 +253,7 @@ class Sources:
         url: str,
         workers: Optional[int] = None,
         parser: Optional[str] = None,
+        requests_per_sec: Optional[float] = None,
     ) -> Crawler:
         domain = self.get_domain(url)
         try:
@@ -272,6 +273,7 @@ class Sources:
                 origin=f"https://{domain}",
                 workers=workers,
                 parser=parser,
+                requests_per_sec=requests_per_sec,
             )
             crawler.initialize()
             return crawler
@@ -285,6 +287,7 @@ class Sources:
             origin=source.url,
             workers=workers,
             parser=parser,
+            requests_per_sec=requests_per_sec,
         )
         crawler.initialize()
         return crawler

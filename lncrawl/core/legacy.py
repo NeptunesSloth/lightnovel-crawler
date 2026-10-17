@@ -12,6 +12,7 @@ class LegacyCrawler(BrowserTemplate):
         workers: Optional[int] = None,
         parser: Optional[str] = None,
         origin: Optional[str] = None,
+        requests_per_sec: Optional[float] = None,
     ) -> None:
         if isinstance(self.base_url, str):
             self.base_url = [self.base_url]
@@ -22,6 +23,7 @@ class LegacyCrawler(BrowserTemplate):
             origin=origin,
             workers=workers,
             parser=parser,
+            requests_per_sec=requests_per_sec,
         )
 
         self._lock = EventLock()

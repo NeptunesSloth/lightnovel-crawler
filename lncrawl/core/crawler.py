@@ -42,6 +42,7 @@ class Crawler(ABC):
         workers: Optional[int] = None,
         parser: Optional[str] = None,
         origin: Optional[str] = None,
+        requests_per_sec: Optional[float] = None,
     ) -> None:
         """
         Creates a standalone Crawler instance.
@@ -51,6 +52,10 @@ class Crawler(ABC):
         - workers (int, optional): Number of concurrent workers to expect.
         - parser (Optional[str], optional): Desirable features of the parser. This can be the name of a specific parser
             ("lxml", "lxml-xml", "html.parser", or "html5lib") or it may be the type of markup to be used ("html", "html5", "xml").
+        - requests_per_sec (float, optional): Cap on requests per second to any one
+            host. 0 means uncapped; None takes the configured default. This, not the
+            worker count, is what sets download speed — the scraper spaces requests
+            per host, so an extra worker cannot send sooner.
         """
         if isinstance(self.base_url, str):
             self.base_url = [self.base_url]
@@ -69,7 +74,11 @@ class Crawler(ABC):
         # memory with every other scraper here. A previously solved challenge
         # clearance for this host comes back through that memory, which is why a
         # restarted export no longer re-solves it — see core/scraping.py.
-        self.scraper = new_scraper(origin=origin, parser=parser)
+        self.scraper = new_scraper(
+            origin=origin,
+            parser=parser,
+            requests_per_sec=requests_per_sec,
+        )
 
     def close(self) -> None:
         self.scraper.close()
