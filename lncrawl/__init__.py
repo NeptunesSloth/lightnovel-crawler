@@ -42,6 +42,15 @@ def main():
 
             ctypes.windll.kernel32.FreeConsole()
 
+            # FreeConsole invalidates the handles behind stdout/stderr. Repair
+            # them before anything can write: from here on a stray print, a
+            # logging fallback or a tqdm bar would raise
+            # "OSError: [WinError 6] The handle is invalid" and take the app
+            # down before the window ever appears.
+            from .services.logger import repair_std_streams
+
+            repair_std_streams()
+
         from .server.webview import start
 
         start()
