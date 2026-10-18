@@ -532,7 +532,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
             extra.failed ? "log-info" : "log-ok");
           if (extra.discovery_capped) {
             log("  ⚠ Discovery stopped at its time cap, so this is only part of the source's " +
-              "catalogue. Raise \"Max discovery (min)\" in Advanced options and run it again — " +
+              "catalogue. Raise “Max discovery (min)” in Advanced options and run it again — " +
               "finished novels are reused.", "log-info");
           }
           (extra.fail_reasons || []).forEach(function (fr) {
