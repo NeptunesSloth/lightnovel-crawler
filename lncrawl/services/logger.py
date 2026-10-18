@@ -1,8 +1,12 @@
 import inspect
 import logging
+from logging.handlers import RotatingFileHandler
 import os
+from pathlib import Path
 import sys
-from typing import Union
+from typing import Any, Optional, Union
+
+_FILE_HANDLER_NAME = "lncrawl-file"
 
 
 def _stderr_is_interactive() -> bool:
@@ -20,10 +24,43 @@ def _stderr_is_interactive() -> bool:
         return False
 
 
+def _stream_is_usable(stream: Any) -> bool:
+    """Whether writes to ``stream`` can reach somewhere without raising.
+
+    Flushing alone does not answer this. A freshly detached stream still has an
+    empty buffer, and flushing an empty buffer returns without ever touching the
+    OS handle — so the check passes and the next real write raises anyway. Ask
+    the file descriptor instead: after ``FreeConsole`` the handle behind fd 1/2
+    is gone and ``os.fstat`` fails on it, which is exactly the state we need to
+    catch.
+    """
+    if stream is None:
+        return False
+    try:
+        fileno = stream.fileno()
+    except Exception:
+        # Streams without a descriptor (``pythonw``, an already-wrapped object,
+        # a captured buffer) cannot be probed this way; a flush is all we have.
+        fileno = None
+    if fileno is not None:
+        if fileno < 0:
+            return False
+        try:
+            os.fstat(fileno)
+        except Exception:
+            return False
+    try:
+        stream.flush()
+        return True
+    except Exception:
+        return False
+
+
 def repair_std_streams() -> None:
     """Replace missing/broken std streams so writes can't raise WinError 6.
 
-    A windowed/frozen build (the desktop ``.exe``) has no console, so
+    A windowed/frozen build (the desktop ``.exe``) has no console — it is built
+    for the console subsystem and then calls ``FreeConsole`` — so
     ``sys.stdout``/``sys.stderr`` are ``None`` or backed by an invalid OS handle.
     Anything that writes to them — ``tqdm.write`` (which ignores the bar's
     ``disable`` flag), the logging fallback handler, stray ``print`` — then
@@ -32,18 +69,56 @@ def repair_std_streams() -> None:
     """
     devnull = None
     for name in ("stdout", "stderr"):
-        stream = getattr(sys, name, None)
-        usable = False
-        if stream is not None:
-            try:
-                stream.flush()
-                usable = True
-            except Exception:
-                usable = False
-        if not usable:
-            if devnull is None:
-                devnull = open(os.devnull, "w")
-            setattr(sys, name, devnull)
+        if _stream_is_usable(getattr(sys, name, None)):
+            continue
+        if devnull is None:
+            devnull = open(os.devnull, "w")
+        setattr(sys, name, devnull)
+
+
+def log_to_file(path: Path, level: int = logging.INFO) -> Optional[Path]:
+    """Also write logs to ``path``, independently of the console log level.
+
+    The desktop app frees its console and runs at level 0, so without this a
+    failed launch leaves nothing behind at all: the window closes and there is
+    no record of what went wrong. The file handler is attached to the root
+    logger directly rather than through ``basicConfig`` so it survives the
+    ``force=True`` reconfiguration in :meth:`Logger.setup`, and the root level is
+    only ever lowered — never raised — so attaching it cannot silence a console
+    handler that wanted more.
+
+    Returns the path being written to, or ``None`` if it could not be opened
+    (a read-only data dir must not take the app down with it).
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            path,
+            maxBytes=2 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
+            delay=True,
+        )
+    except Exception:
+        return None
+
+    handler.setLevel(level)
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    handler.set_name(_FILE_HANDLER_NAME)
+
+    root = logging.getLogger()
+    for existing in root.handlers:
+        if existing.get_name() == _FILE_HANDLER_NAME:
+            return path
+    root.addHandler(handler)
+    if root.level == logging.NOTSET or root.level > level:
+        root.setLevel(level)
+    return path
 
 
 class Logger:
