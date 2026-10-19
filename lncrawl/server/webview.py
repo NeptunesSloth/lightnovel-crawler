@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 CDP_TIMEOUT = 30.0
 SERVER_TIMEOUT = 600.0
 
+# Bind on all interfaces so phones/tablets on the same Wi-Fi can open the
+# Reader; the app window itself still connects over loopback. The whole API
+# stays behind sign-in, so LAN exposure is auth-gated. The port must be chosen
+# against this same address — see free_port.
+SERVER_HOST = "0.0.0.0"
+
 # Set when the server thread dies, so the waits below can fail immediately with
 # the real cause instead of sitting out the full timeout on a server that is
 # never going to bind.
@@ -43,19 +49,66 @@ class FallbackException(Exception):
         super().__init__(*args)
 
 
+def _listening_socket(host: str, port: int) -> socket.socket:
+    """Open the listening socket here rather than leaving it to uvicorn.
+
+    uvicorn answers a failed bind with `logger.error(exc)` and then `sys.exit(1)`
+    (server.py and Config.bind_socket both). Its loggers are configured with
+    propagate=False onto a stderr the desktop app has already pointed at the null
+    device, so the reason is written nowhere and the thread dies with a bare
+    SystemExit(1). Binding here keeps the OSError and its message, and handing
+    the open socket to uvicorn also closes the window between choosing a port
+    and using it.
+
+    SO_REUSEADDR is deliberately not set: on Windows it lets a second process
+    bind a port another one is already serving and silently take its traffic.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+        sock.listen(2048)
+    except OSError as e:
+        sock.close()
+        raise RuntimeError(f"Could not listen on {host}:{port} — {e}") from e
+    sock.set_inheritable(True)
+    return sock
+
+
+def _serve(host: str, port: int) -> None:
+    import uvicorn
+
+    from .app import app as server_app
+
+    sock = _listening_socket(host, port)
+    # log_config=None leaves logging alone. uvicorn's default config would
+    # install its own handlers and stop its records propagating, which is what
+    # kept bind failures out of app.log; left alone, uvicorn.error reaches the
+    # root logger and is recorded with everything else.
+    config = uvicorn.Config(
+        server_app,
+        host=host,
+        port=port,
+        log_config=None,
+        access_log=ctx.logger.is_debug,
+        log_level=ctx.logger.level or "error",
+    )
+    uvicorn.Server(config).run(sockets=[sock])
+
+
 def _start_server(host: str, port: int) -> None:
     global _server_error
-    from ..commands.server import server
 
     try:
         ctx.setup(
             log_level=0,
             reset_db_on_failure=True,
         )
-        server(host=host, port=port)
+        _serve(host, port)
     except BaseException as e:  # noqa: BLE001 - the thread is the last handler
         # Nothing joins this thread, so an exception here is otherwise lost
-        # entirely and shows up only as a server that never answers.
+        # entirely and shows up only as a server that never answers. SystemExit
+        # counts: a library that exits the interpreter on failure must not be
+        # allowed to look like a clean shutdown.
         _server_error = e
         logger.exception("Server thread stopped")
 
@@ -114,6 +167,34 @@ def _page_target(host: str, cdp_port: int) -> str:
     raise FallbackException("The browser exposed no page target to navigate")
 
 
+def _close_app_window(proc: "subprocess.Popen", ws_url: Optional[str]) -> None:
+    """Shut the app window, whoever ends up owning it.
+
+    Killing `proc` is not always enough. When a browser is already running with
+    this user-data-dir, the process we launch hands the window over to that
+    instance and exits immediately — so there is nothing left for us to kill and
+    the loading window stays on screen for good. While the debugger socket is
+    still reachable, ask the page to close itself instead.
+    """
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(2)
+        except BaseException:
+            proc.kill()
+        return
+
+    if not ws_url:
+        return
+    try:
+        from websockets.sync.client import connect as ws_connect
+
+        with ws_connect(ws_url, open_timeout=5) as ws:
+            ws.send(json.dumps({"id": 2, "method": "Page.close"}))
+    except Exception as e:
+        logger.info(f"Could not close the app window over CDP: {e}")
+
+
 def _start_app_in_browser(
     host: str,
     port: int,
@@ -148,6 +229,7 @@ def _start_app_in_browser(
     proc = subprocess.Popen(args)
     logger.info(f"Started app (pid={proc.pid})")
 
+    ws_url: Optional[str] = None
     try:
         #  wait for CDP to be ready
         if not _wait_to_connect(host, cdp_port, CDP_TIMEOUT):
@@ -177,13 +259,7 @@ def _start_app_in_browser(
         # wait for exit
         proc.wait()
     finally:
-        # terminate forcefully
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(2)
-            except BaseException:
-                proc.kill()
+        _close_app_window(proc, ws_url)
         logger.info(f"Closed app (pid={proc.pid}): {proc.poll()}")
 
 
@@ -258,7 +334,10 @@ def _report_failure(error: BaseException, log_path: Optional[Path]) -> None:
 
 def start() -> None:
     host = "localhost"
-    port = free_port(host, 31580)
+    # The server listens on SERVER_HOST, so the port has to be claimed there.
+    # The browser's debugging port is loopback-only, so that one is probed as
+    # loopback.
+    port = free_port(SERVER_HOST, 31580)
     cdp_port = free_port(host, 31590)
 
     # Record to a file before anything else can fail. The desktop app has no
