@@ -28,6 +28,10 @@ class LNException(Exception):
     pass
 
 
+class EmptyChapterError(LNException):
+    """The source returned no usable chapter content."""
+
+
 class FallbackToBrowser(Exception):
     pass
 

@@ -1,8 +1,27 @@
-from typing import Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from ...dao import Chapter, Job, Novel
+
+
+class ChapterGap(BaseModel):
+    id: str
+    serial: int
+    title: str
+    status: Literal["missing", "failed", "empty"]
+    error: Optional[str] = None
+
+
+class NovelCompleteness(BaseModel):
+    novel_id: str
+    total: int
+    downloaded: int
+    missing: int
+    failed: int
+    empty: int
+    complete: bool
+    gaps: List[ChapterGap]
 
 
 class ReadChapterResponse(BaseModel):

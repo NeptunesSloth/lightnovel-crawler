@@ -1,7 +1,8 @@
+from functools import lru_cache
 import itertools
 import re
 import sys
-from typing import Any, Dict, List, Set, TypeVar, Union
+from typing import Any, Dict, List, Set, Tuple, TypeVar, Union
 import unicodedata
 
 from bs4 import Comment, Tag
@@ -10,14 +11,20 @@ from scraper import PageSoup
 T = TypeVar("T")
 
 
+@lru_cache(maxsize=1)
+def _invisible_characters() -> Tuple[int, ...]:
+    """Unicode categories are fixed for the lifetime of the interpreter."""
+    return tuple(
+        code for code in range(sys.maxunicode) if unicodedata.category(chr(code)) in {"Cf", "Cc"}
+    )
+
+
 class TextCleaner:
     def __init__(self) -> None:
         self.line_separator = "<br>"
-        self.invisible_chars = [
-            code
-            for code in range(sys.maxunicode)
-            if unicodedata.category(chr(code)) in {"Cf", "Cc"}
-        ]
+        # Copy the cached immutable result so source-specific customization
+        # remains isolated between crawlers.
+        self.invisible_chars = list(_invisible_characters())
         self.unprintable_chars = itertools.chain(
             range(0x00, 0x20),
             range(0x7F, 0xA0),

@@ -881,21 +881,23 @@ def _download_novel(
 
     # download the chapters (fetch_chapter skips ones already fetched), reporting
     # progress as each one completes
+    pending_chapters = ctx.crawler.pending_chapter_ids(chapter_ids, crawler.version)
     chapter_futures = [
         crawler.taskman.submit_task(ctx.crawler.fetch_chapter, user_id, cid, custom=crawler)
-        for cid in sorted(set(chapter_ids))
+        for cid in pending_chapters
     ]
-    c_total = len(chapter_futures)
+    c_total = len(chapter_ids)
+    c_cached = c_total - len(chapter_futures)
     if on_novel:
-        on_novel(novel.title, 0, c_total)
+        on_novel(novel.title, c_cached, c_total)
     last_emit = [monotonic()]
 
     def _tick(done: int) -> None:
         # report at least every ~2s (and at the end) so the UI reflects real
         # movement instead of looking frozen on a big, slow novel
-        if on_novel and (done == c_total or monotonic() - last_emit[0] >= 2.0):
+        if on_novel and (done + c_cached == c_total or monotonic() - last_emit[0] >= 2.0):
             last_emit[0] = monotonic()
-            on_novel(novel.title, done, c_total)
+            on_novel(novel.title, done + c_cached, c_total)
 
     # drain with the stall watchdog so one hung request can't freeze the run
     _drain(crawler, chapter_futures, _tick, signal)
@@ -911,8 +913,10 @@ def _download_novel(
         _drain(crawler, image_futures, None, signal)
 
     # how many of the targeted chapters are still not downloaded (drives retries)
-    done_ids = set(ctx.chapters.list_ids(novel_id=novel.id, is_crawled=True))
-    missing = len([c for c in chapter_ids if c not in done_ids])
+    # Old completion flags can outlive blank or missing content files. Inspect
+    # the targeted files so those gaps stay eligible for the next retry pass.
+    downloaded = ctx.chapters.get_many(chapter_ids)
+    missing = len(chapter_ids) - sum(chapter.is_available for chapter in downloaded)
 
     # build the ebook. Formats derived from epub need an epub built first.
     epub_artifact = None

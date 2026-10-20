@@ -9,10 +9,25 @@ from ...dao import ActivityType, Artifact, Chapter, Job, LanguageCode, Novel, Us
 from ...exceptions import ServerErrors
 from ...utils.file_tools import dir_size
 from ..models import Paginated
+from ..models.novel import NovelCompleteness
 from ..security import ensure_admin, ensure_user
 
 # The root router
 router = APIRouter()
+
+
+@router.get("/{novel_id}/completeness", summary="Downloaded, missing, failed and empty chapters")
+def novel_completeness(novel_id: str = Path()) -> NovelCompleteness:
+    ctx.novels.get(novel_id)
+    return ctx.chapters.completeness(novel_id)
+
+
+@router.post("/{novel_id}/repair", summary="Retry chapter gaps and rebuild a complete EPUB")
+def repair_novel(
+    novel_id: str = Path(),
+    user: User = Security(ensure_user),
+) -> Job:
+    return ctx.jobs.fetch_missing_chapters(user, novel_id, rebuild_epub=True)
 
 
 @router.get("/{novel_id}/cover", summary="Serve the novel cover image (for the reader)")

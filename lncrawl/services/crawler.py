@@ -10,7 +10,8 @@ from pydantic import HttpUrl
 from ..context import ctx
 from ..core import Chapter as CrawlerChapter, Crawler, Novel as CrawlerNovel, SearchResult
 from ..dao import Chapter, ChapterImage, Novel
-from ..exceptions import ServerErrors
+from ..exceptions import AbortedException, EmptyChapterError, ServerErrors
+from ..utils.chapter_content import has_chapter_content
 from ..utils.sitemap import collect_sitemap_urls, learn_shapes, title_from_url
 from ..utils.url_tools import extract_host
 
@@ -20,6 +21,33 @@ logger = logging.getLogger(__name__)
 class CrawlerService:
     def __init__(self) -> None:
         pass
+
+    def _record_chapter_failure(self, chapter: Chapter, error: Exception) -> None:
+        chapter.extra = {
+            **chapter.extra,
+            "download_status": "empty" if isinstance(error, EmptyChapterError) else "failed",
+            "download_error": str(error)[:1000],
+        }
+        with ctx.db.session() as sess:
+            sess.merge(chapter)
+            sess.commit()
+
+    def pending_chapter_ids(self, chapter_ids: List[str], crawler_version: int) -> List[str]:
+        """Keep cache hits out of the rate-limited download queue."""
+        selected = list(dict.fromkeys(chapter_ids))
+        pending: List[str] = []
+        for offset in range(0, len(selected), 500):
+            batch = selected[offset : offset + 500]
+            chapters = {chapter.id: chapter for chapter in ctx.chapters.get_many(batch)}
+            for chapter_id in batch:
+                chapter = chapters.get(chapter_id)
+                if (
+                    chapter is None
+                    or chapter.extra.get("crawler_version") != crawler_version
+                    or not chapter.is_available
+                ):
+                    pending.append(chapter_id)
+        return pending
 
     @contextmanager
     def prepare_crawler(
@@ -158,24 +186,56 @@ class CrawlerService:
 
         with self.prepare_crawler(user_id, novel.url, signal, custom) as crawler:
             # check if download is necessary
+            available = chapter.is_available
             if (
                 not refresh
-                and chapter.is_available
+                and available
                 and chapter.extra.get("crawler_version") == crawler.version
             ):
                 logger.debug(f"Skipped: {novel.title}] - Chapter {chapter.serial}")
                 return chapter
 
+            # Old versions marked empty cached chapters complete. Clear that
+            # status so a failed repair is still counted as missing by exports.
+            if chapter.is_done and not available:
+                chapter.is_done = False
+                with ctx.db.session() as sess:
+                    sess.merge(chapter)
+                    sess.commit()
+
             # get chapter content
-            model = CrawlerChapter(
-                url=str(url),
-                id=chapter.serial,
-                title=chapter.title,
-            )
-            model.update(chapter.extra)
-            crawler.download_chapter(model)
-            crawler.format_chapter(model)
-            assert model.body is not None
+            model: Optional[CrawlerChapter] = None
+            for attempt in range(3):
+                if crawler.scraper.signal.is_set():
+                    raise AbortedException()
+                model = CrawlerChapter(
+                    url=str(url),
+                    id=chapter.serial,
+                    title=chapter.title,
+                )
+                model.update(chapter.extra)
+                try:
+                    crawler.download_chapter(model)
+                    crawler.format_chapter(model)
+                    # Source plugins may override format_chapter, so enforce
+                    # the same invariant at the persistence boundary too.
+                    if not model.body or not has_chapter_content(model.body):
+                        raise EmptyChapterError(f"No chapter content: {model.url}")
+                    break
+                except EmptyChapterError as error:
+                    if attempt == 2:
+                        self._record_chapter_failure(chapter, error)
+                        raise
+                    logger.warning(f"Empty chapter response; retrying {chapter.url}")
+                    if crawler.scraper.signal.wait(attempt + 1):
+                        raise AbortedException()
+                except AbortedException:
+                    raise
+                except Exception as error:
+                    self._record_chapter_failure(chapter, error)
+                    raise
+
+            assert model is not None and model.body is not None
 
             # save chapter content
             ctx.files.save_text(chapter.content_file, model.body)
@@ -186,6 +246,8 @@ class CrawlerService:
             # set extras
             extra = dict(**chapter.extra)
             extra.update(model.get_extras())
+            extra.pop("download_status", None)
+            extra.pop("download_error", None)
             extra["crawler_version"] = crawler.version
             chapter.extra = extra
 

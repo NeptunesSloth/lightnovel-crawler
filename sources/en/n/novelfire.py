@@ -17,7 +17,7 @@ class NovelFireCrawler(LegacyCrawler):
     can_search = True
 
     def initialize(self) -> None:
-        self.init_executor(ratelimit=3)
+        self.init_executor(workers=self.workers, ratelimit=3)
 
     def read_novel_info(self) -> None:
         soup = self.get_soup(self.novel_url)
@@ -62,24 +62,31 @@ class NovelFireCrawler(LegacyCrawler):
                 vol_url = False
                 break
 
-    def download_chapter_body(self, chapter) -> str:
+    def download_chapter_body(self, chapter: Chapter) -> str:
         soup = self.get_soup(chapter["url"])
         contents = soup.select_one("div#content")
         if not contents:
             return ""
 
-        # 1. Look through the very top elements inside the content container
-        # We use a standard slice of the first 5 elements to completely isolate the headers
-        elements_to_check = contents.find_all(True)[:5]
-
+        # Only remove standalone titles. A wrapper's combined text can start
+        # with "Chapter N" while containing the entire chapter underneath it.
+        heading_tags = ["h1", "h2", "h3", "h4", "h5", "h6"]
+        elements_to_check = contents.find_all([*heading_tags, "p"], limit=5)
+        chapter_title = re.sub(r"\W+", " ", chapter.title).strip().casefold()
         for element in elements_to_check:
+            if element.find(["div", "p", *heading_tags]):
+                continue
             element_text = element.get_text(" ", strip=True)
             if not element_text:
                 continue
-
-            # 2. checking for ANY title layout starting with "Chapter X"
-            # This matches "Chapter 1:", "Chapter 1 –", "Chapter 1: Chapter 1:" etc.
-            if re.match(r"(?i)^\s*chapter\s+\d+", element_text):
+            is_title_heading = element.name in heading_tags and re.match(
+                r"(?i)^\s*chapter\s+\d+\b", element_text
+            )
+            is_exact_title = (
+                chapter_title
+                and re.sub(r"\W+", " ", element_text).strip().casefold() == chapter_title
+            )
+            if is_title_heading or is_exact_title:
                 element.decompose()
 
         return self.cleaner.extract_contents(contents)

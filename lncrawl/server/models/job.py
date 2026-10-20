@@ -46,6 +46,9 @@ class TranslateChaptersRequest(BaseModel):
 
 class FetchMissingChaptersRequest(BaseModel):
     novel_id: str = Field(description="The novel id")
+    rebuild_epub: bool = Field(
+        default=True, description="Rebuild EPUB after repairing all chapter gaps"
+    )
 
 
 class FetchLatestRequest(BaseModel):
