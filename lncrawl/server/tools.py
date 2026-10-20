@@ -351,13 +351,33 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (reader && tok) reader.href = "/reader?authToken=" + encodeURIComponent(tok);
   })();
 
+  var lastLine = null;
+  var lastMsg = null;
+  var lastCount = 1;
+
   function log(msg, cls) {
     if (firstLog) { logEl.innerHTML = ""; firstLog = false; }
+    var ts = new Date().toLocaleTimeString();
+
+    // The job pollers report on a timer, not on change, so a long download
+    // says the same thing every few seconds. Appending each one buries the
+    // history and — worse — makes slow-but-working look identical to stuck.
+    // Repeats fold into the line already there, counting up with a clock that
+    // keeps ticking: still moving, still the same place.
+    if (lastLine && msg === lastMsg) {
+      lastCount += 1;
+      lastLine.textContent = "[" + ts + "] " + msg + " (×" + lastCount + ")";
+      logEl.scrollTop = logEl.scrollHeight;
+      return;
+    }
+
     var line = document.createElement("div");
     if (cls) line.className = cls;
-    var ts = new Date().toLocaleTimeString();
     line.textContent = "[" + ts + "] " + msg;
     logEl.appendChild(line);
+    lastLine = line;
+    lastMsg = msg;
+    lastCount = 1;
     logEl.scrollTop = logEl.scrollHeight;
   }
 
