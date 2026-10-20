@@ -149,6 +149,7 @@ def crawl(
             formats = prompt_format_selection()
 
     # download chapters
+    pending_chapters = ctx.crawler.pending_chapter_ids(chapters, crawler.version)
     chapter_futures = [
         crawler.taskman.submit_task(
             ctx.crawler.fetch_chapter,
@@ -156,13 +157,15 @@ def crawl(
             chapter_id,
             custom=crawler,
         )
-        for chapter_id in sorted(set(chapters))
+        for chapter_id in pending_chapters
     ]
-    chapter_image_ids = []
+    downloaded_chapter_ids = list(set(chapters) - set(pending_chapters))
     for chapter in crawler.taskman.resolve(chapter_futures, desc="Chapters", unit=" c"):
         if not chapter:
             continue
-        chapter_image_ids += ctx.images.list_ids(chapter_id=chapter.id)
+        downloaded_chapter_ids.append(chapter.id)
+
+    chapter_image_ids = ctx.images.list_ids(novel_id=novel.id, chapter_ids=downloaded_chapter_ids)
 
     # download chapter images
     image_futures = [

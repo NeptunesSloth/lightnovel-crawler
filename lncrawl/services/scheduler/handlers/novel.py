@@ -57,4 +57,5 @@ class NovelHandler(BatchHandler):
                 parent_id=self.job.id,
                 novel_title=novel.title,
                 depends_on=added_types[JobType.VOLUME_BATCH],
+                require_complete=True,
             )

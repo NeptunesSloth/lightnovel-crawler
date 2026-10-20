@@ -23,8 +23,8 @@ class ChapterImageService:
                 stmt = stmt.where(ChapterImage.novel_id == novel_id)
             if chapter_id:
                 stmt = stmt.where(ChapterImage.chapter_id == chapter_id)
-            if is_crawled:
-                stmt = stmt.where(sq.col(ChapterImage.is_done).is_(True))
+            if is_crawled is not None:
+                stmt = stmt.where(sq.col(ChapterImage.is_done).is_(is_crawled))
             items = sess.exec(stmt).all()
             return list(items)
 
@@ -32,15 +32,28 @@ class ChapterImageService:
         self,
         novel_id: Optional[str] = None,
         chapter_id: Optional[str] = None,
+        chapter_ids: Optional[List[str]] = None,
     ) -> List[str]:
+        if chapter_ids is not None and not chapter_ids:
+            return []
         with ctx.db.session() as sess:
             stmt = sq.select(ChapterImage.id)
             if novel_id:
                 stmt = stmt.where(ChapterImage.novel_id == novel_id)
             if chapter_id:
                 stmt = stmt.where(ChapterImage.chapter_id == chapter_id)
-            items = sess.exec(stmt).all()
-            return list(items)
+            if chapter_ids is None:
+                return list(sess.exec(stmt).all())
+
+            # Stay below SQLite's variable limit, even for very long novels.
+            selected = list(dict.fromkeys(chapter_ids))
+            items: List[str] = []
+            for offset in range(0, len(selected), 500):
+                batch = stmt.where(
+                    sq.col(ChapterImage.chapter_id).in_(selected[offset : offset + 500])
+                )
+                items.extend(sess.exec(batch).all())
+            return items
 
     def get(self, image_id: str) -> ChapterImage:
         with ctx.db.session() as sess:

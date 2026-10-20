@@ -261,6 +261,10 @@ _READER_HTML = """<!DOCTYPE html>
     <img id="novel-cover" class="hidden" alt="" />
     <h2 id="novel-title"></h2>
     <p class="meta muted" id="novel-meta"></p>
+    <p class="meta muted" id="novel-completeness" aria-live="polite"></p>
+    <button id="repair-btn" style="margin-bottom:12px">Retry missing chapters and rebuild EPUB</button>
+    <button id="repair-download" class="hidden" style="margin-bottom:12px">Download repaired EPUB</button>
+    <p id="repair-status" class="muted" aria-live="polite"></p>
     <div id="novel-tags" class="tags"></div>
     <p id="novel-synopsis"></p>
     <div style="clear:both"></div>
@@ -378,7 +382,8 @@ _READER_HTML = """<!DOCTYPE html>
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
    "font-dn","auth","email","password","login","auth-msg","search-wrap","aa-btn","aa-panel",
    "aa-theme","aa-font","aa-width","aa-trans","fit-btn","fav-btn","bmk-btn","bmk-list",
-   "trans-pop","lib-select","lib-del","merge-btn","del-btn","deep-btn"].forEach(function (id) {
+   "trans-pop","lib-select","lib-del","merge-btn","del-btn","deep-btn",
+   "novel-completeness","repair-btn","repair-status","repair-download"].forEach(function (id) {
     els[id] = document.getElementById(id);
   });
 
@@ -640,6 +645,90 @@ _READER_HTML = """<!DOCTYPE html>
 
   // ---- Novel ----
   var current = { novel: null, chapters: [], offset: 0 };
+  var repairJobs = {};
+  var repairedArtifacts = {};
+  function refreshCompleteness(novelId) {
+    return api("/novel/" + novelId + "/completeness").then(function (report) {
+      if (!current.novel || current.novel.id !== novelId) return;
+      els["novel-completeness"].textContent =
+        (report.complete ? "Complete" : "Incomplete") + " · " + report.downloaded + "/" + report.total +
+        " downloaded · " + report.missing + " missing · " + report.failed + " failed · " + report.empty + " empty";
+      els["novel-completeness"].title = (report.gaps || []).slice(0, 20).map(function (gap) {
+        return "#" + gap.serial + " " + gap.title + ": " + gap.status + (gap.error ? " — " + gap.error : "");
+      }).join("\\n");
+    }).catch(function (error) {
+      if (current.novel && current.novel.id === novelId) {
+        els["novel-completeness"].textContent = "Couldn't check completeness: " + error.message;
+      }
+    });
+  }
+  function pollRepair(novelId, jobId) {
+    api("/job/" + jobId).then(function (job) {
+      var active = job.status === 0 || job.status === 1 || job.status === 5 ||
+        job.status === "PENDING" || job.status === "RUNNING" || job.status === "PAUSED";
+      var visible = current.novel && current.novel.id === novelId;
+      if (active) {
+        if (visible) els["repair-status"].textContent = "Repairing chapters and rebuilding EPUB… " + job.done + "/" + job.total;
+        setTimeout(function () { pollRepair(novelId, jobId); }, 3000);
+        return;
+      }
+      delete repairJobs[novelId];
+      var extra = job.extra || {};
+      var success = job.status === 2 || job.status === "SUCCESS";
+      if (success && extra.artifact_id) repairedArtifacts[novelId] = extra.artifact_id;
+      if (!visible) return;
+      els["repair-btn"].disabled = false;
+      els["repair-status"].textContent = success && extra.artifact_id
+        ? "Repair complete. The rebuilt EPUB is ready to download."
+        : "Repair did not finish: " + (job.error || "Some downloads failed. Retry to continue.");
+      els["repair-download"].classList.toggle("hidden", !repairedArtifacts[novelId]);
+      refreshCompleteness(novelId);
+      current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
+      loadChapters();
+    }).catch(function () {
+      setTimeout(function () { pollRepair(novelId, jobId); }, 5000);
+    });
+  }
+  els["repair-btn"].addEventListener("click", function () {
+    if (!current.novel) return;
+    var novelId = current.novel.id;
+    this.disabled = true;
+    els["repair-status"].textContent = "Queuing missing-chapter repair…";
+    delete repairedArtifacts[novelId];
+    els["repair-download"].classList.add("hidden");
+    api("/novel/" + novelId + "/repair", { method: "POST" }).then(function (job) {
+      repairJobs[novelId] = job.id;
+      pollRepair(novelId, job.id);
+    }).catch(function (error) {
+      if (!current.novel || current.novel.id !== novelId) return;
+      els["repair-btn"].disabled = false;
+      els["repair-status"].textContent = "Couldn't start repair: " + error.message;
+    });
+  });
+  els["repair-download"].addEventListener("click", function () {
+    if (!current.novel) return;
+    var novelId = current.novel.id;
+    var artifactId = repairedArtifacts[novelId];
+    if (!artifactId) return;
+    var btn = this; btn.disabled = true;
+    api("/artifact/" + artifactId).then(function (artifact) {
+      return fetch("/static/" + artifact.output_file.split("/").map(encodeURIComponent).join("/") +
+        "?token=" + encodeURIComponent(token()), {
+        headers: { "Authorization": "Bearer " + token() }
+      }).then(function (response) {
+        if (!response.ok) throw new Error("Download failed: HTTP " + response.status);
+        return response.blob();
+      }).then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement("a");
+        link.href = url; link.download = artifact.file_name;
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+      });
+    }).catch(function (error) {
+      if (current.novel && current.novel.id === novelId) els["repair-status"].textContent = error.message;
+    }).finally(function () { btn.disabled = false; });
+  });
   function renderNovelHeader(novel) {
     els["novel-title"].textContent = novel.title || "Untitled";
     els["novel-meta"].textContent = [novel.authors || "", (novel.chapter_count || 0) + " chapters", novel.domain || ""]
@@ -685,6 +774,11 @@ _READER_HTML = """<!DOCTYPE html>
 
   function openNovel(novel) {
     current = { novel: novel, chapters: [], offset: 0, chapterId: null };
+    els["novel-completeness"].textContent = "Checking chapter completeness…";
+    els["repair-btn"].disabled = !!repairJobs[novel.id];
+    els["repair-status"].textContent = repairJobs[novel.id] ? "Repair in progress…" : "";
+    els["repair-download"].classList.toggle("hidden", !repairedArtifacts[novel.id]);
+    refreshCompleteness(novel.id);
     renderNovelHeader(novel);
     maybeRefreshInfo(novel);
 

@@ -40,6 +40,16 @@ class ArtifactHandler(BaseHandler):
         if self.signal.is_set():
             raise AbortedException()
 
+        report = ctx.chapters.completeness(novel_id)
+        self._set_extra(completeness=report.model_dump())
+        if self.job.parent_job_id and self.job.extra.get("require_complete"):
+            ctx.jobs.update_extra(self.job.parent_job_id, {"completeness": report.model_dump()})
+        if self.job.extra.get("require_complete") and not report.complete:
+            raise HandlerException(
+                f"EPUB was not rebuilt: only {report.downloaded}/{report.total} chapters have content. "
+                "Retry the remaining chapter gaps."
+            )
+
         artifact = ctx.binder.make_artifact(
             format=format,
             novel_id=novel_id,
@@ -54,3 +64,5 @@ class ArtifactHandler(BaseHandler):
             raise HandlerException("Failed to make artifact")
 
         self._set_extra(artifact_id=artifact.id, novel_title=novel_title)
+        if self.job.parent_job_id and self.job.extra.get("require_complete"):
+            ctx.jobs.update_extra(self.job.parent_job_id, {"artifact_id": artifact.id})

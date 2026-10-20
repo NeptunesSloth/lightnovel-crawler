@@ -301,12 +301,13 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
   <div class="card">
     <details class="card-fold">
-    <summary>Retry missing / failed chapters</summary>
-    <p class="hint">Re-fetches only the chapters that aren't downloaded yet for a novel —
-      successfully downloaded chapters are skipped.</p>
+    <summary>Check completeness and repair EPUB</summary>
+    <p class="hint">Check downloaded, missing, failed and empty chapters. Repair retries only
+      chapter gaps and rebuilds the EPUB once all chapter text is available.</p>
     <label for="novel-id">Novel ID</label>
     <input id="novel-id" type="text" placeholder="e.g. 0c3b…" />
-    <button id="retry-btn">Retry missing</button>
+    <button id="completeness-btn">Check completeness</button>
+    <button id="retry-btn">Retry missing and rebuild EPUB</button>
     </details>
   </div>
 
@@ -473,6 +474,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
       .then(function (job) {
         var status = statusName(job.status);
         log(label + " · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        if (job.extra && job.extra.completeness) {
+          var c = job.extra.completeness;
+          log((c.complete ? "Complete" : "Incomplete") + " — " + c.downloaded + "/" + c.total +
+            " downloaded, " + c.missing + " missing, " + c.failed + " failed, " + c.empty + " empty.", "log-info");
+        }
         if (isActive(status)) {
           setTimeout(function () { pollJob(id, label); }, 3000);
         } else if (status === "FAILED" && job.error) {
@@ -989,6 +995,18 @@ _TOOLS_HTML = """<!DOCTYPE html>
       .finally(function () { busy(btn, false); });
   });
 
+  document.getElementById("completeness-btn").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var novelId = document.getElementById("novel-id").value.trim();
+    if (!novelId) { log("Enter a novel ID.", "log-err"); return; }
+    api("/novel/" + encodeURIComponent(novelId) + "/completeness").then(function (c) {
+      log((c.complete ? "Complete" : "Incomplete") + " — " + c.downloaded + "/" + c.total +
+        " downloaded, " + c.missing + " missing, " + c.failed + " failed, " + c.empty + " empty.", "log-info");
+      (c.gaps || []).slice(0, 20).forEach(function (gap) {
+        log("#" + gap.serial + " " + gap.title + ": " + gap.status + (gap.error ? " — " + gap.error : ""), "log-info");
+      });
+    }).catch(function (error) { log("Completeness check failed: " + error.message, "log-err"); });
+  });
   document.getElementById("retry-btn").addEventListener("click", function () {
     if (!requireAuth()) return;
     var btn = this;

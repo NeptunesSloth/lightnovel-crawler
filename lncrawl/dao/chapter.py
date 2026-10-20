@@ -40,8 +40,8 @@ class Chapter(BaseTable, table=True):
     @computed_field  # type: ignore[misc]
     @property
     def is_available(self) -> bool:
-        """Content file is available"""
-        return ctx.files.exists(self.content_file)
+        """A cached file contains usable content, including image-only chapters."""
+        return ctx.files.has_chapter_content(self.content_file)
 
 
 class ChapterTranslation(BaseTable, table=True):

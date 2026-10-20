@@ -8,11 +8,47 @@ from ..dao import Chapter, Job, LanguageCode, User, Volume
 from ..dao.chapter import ChapterTranslation
 from ..exceptions import ServerErrors
 from ..server.models import Paginated, ReadChapterResponse
+from ..server.models.novel import ChapterGap, NovelCompleteness
 
 
 class ChapterService:
     def __init__(self) -> None:
         pass
+
+    def completeness(self, novel_id: str) -> NovelCompleteness:
+        """Inspect actual cached content in one chapter query, not completion flags."""
+        chapters = self.list(novel_id=novel_id)
+        gaps: List[ChapterGap] = []
+        for chapter in chapters:
+            if chapter.is_available:
+                continue
+            status = "missing"
+            if (
+                ctx.files.exists(chapter.content_file)
+                or chapter.extra.get("download_status") == "empty"
+            ):
+                status = "empty"
+            elif chapter.extra.get("download_status") == "failed":
+                status = "failed"
+            gaps.append(
+                ChapterGap(
+                    id=chapter.id,
+                    serial=chapter.serial,
+                    title=chapter.title,
+                    status=status,
+                    error=chapter.extra.get("download_error"),
+                )
+            )
+        return NovelCompleteness(
+            novel_id=novel_id,
+            total=len(chapters),
+            downloaded=len(chapters) - len(gaps),
+            missing=sum(gap.status == "missing" for gap in gaps),
+            failed=sum(gap.status == "failed" for gap in gaps),
+            empty=sum(gap.status == "empty" for gap in gaps),
+            complete=bool(chapters) and not gaps,
+            gaps=gaps,
+        )
 
     def list(
         self,

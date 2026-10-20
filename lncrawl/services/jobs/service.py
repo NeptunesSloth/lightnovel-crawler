@@ -278,6 +278,7 @@ class JobService:
         **data: Any,
     ) -> Job:
         chapter = ctx.chapters.get(chapter_id)
+        data.setdefault("novel_id", chapter.novel_id)
         data.update(
             {
                 "chapter_id": chapter_id,
@@ -1064,7 +1065,7 @@ class JobService:
         sa_is_done = sa_done == sa_total
 
         sa_status = sq.case(
-            (sa_is_done, job_success_literal),
+            (sa_is_done, sq.case((sa_failed > 0, job_failed_literal), else_=job_success_literal)),
             else_=Job.status,
         )
         sa_started_at = sq.case(

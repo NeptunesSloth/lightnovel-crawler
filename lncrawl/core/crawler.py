@@ -10,7 +10,8 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 from pydantic.networks import HttpUrl
 
 from ..context import ctx
-from ..exceptions import LNException
+from ..exceptions import EmptyChapterError, LNException
+from ..utils.chapter_content import has_chapter_content
 from ..utils.file_tools import atomic_write
 from ..utils.text_tools import format_title, normalize
 from ..utils.url_tools import extract_base
@@ -263,7 +264,9 @@ class Crawler(ABC):
 
         chapter.title = format_title(chapter.title)
         chapter.body = (chapter.body or "").strip()
-        chapter.success = bool(chapter.body)
+        chapter.success = has_chapter_content(chapter.body)
+        if not chapter.success:
+            raise EmptyChapterError(f"No chapter content: {chapter.url}")
         self._extract_images(chapter)
 
     def _extract_images(self, chapter: Chapter) -> None:

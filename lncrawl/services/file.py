@@ -1,15 +1,28 @@
+from functools import lru_cache
 import logging
 import os
 from pathlib import Path
-from typing import Union
+import stat
+from typing import Tuple, Union
 
 from ..context import ctx
 from ..exceptions import ServerErrors
+from ..utils.chapter_content import has_chapter_content
 from ..utils.text_tools import is_compressed, text_compress, text_decompress
 
 logger = logging.getLogger(__name__)
 
 StrPath = Union[str, Path]
+
+
+@lru_cache(maxsize=4096)
+def _chapter_content_available(file: Path, signature: Tuple[int, ...]) -> bool:
+    # Cache only the verdict, not chapter text. The stat signature changes on
+    # writes/replacements, including edits made outside this process.
+    data = file.read_bytes()
+    if is_compressed(data):
+        data = text_decompress(data)
+    return has_chapter_content(data.decode("utf-8"))
 
 
 class FileService:
@@ -29,6 +42,19 @@ class FileService:
 
     def exists(self, file_path: StrPath):
         return self.resolve(file_path).is_file()
+
+    def has_chapter_content(self, file_path: StrPath) -> bool:
+        file = self.resolve(file_path)
+        try:
+            info = file.stat()
+            if not stat.S_ISREG(info.st_mode):
+                return False
+            return _chapter_content_available(
+                file,
+                (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns),
+            )
+        except FileNotFoundError:
+            return False
 
     def load(self, file_path: StrPath) -> bytes:
         file = self.resolve(file_path)

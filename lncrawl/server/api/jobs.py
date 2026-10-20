@@ -258,7 +258,7 @@ def fetch_missing_chapters(
     user: User = Security(ensure_user),
     body: FetchMissingChaptersRequest = Body(),
 ) -> Job:
-    return ctx.jobs.fetch_missing_chapters(user, body.novel_id)
+    return ctx.jobs.fetch_missing_chapters(user, body.novel_id, rebuild_epub=body.rebuild_epub)
 
 
 @router.post(
