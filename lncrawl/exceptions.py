@@ -154,6 +154,12 @@ class ServerErrors:
 
     invalid_url = ServerError(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid URL")
     invalid_input = ServerError(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid input")
+    no_archive_uploaded = ServerError(
+        status.HTTP_422_UNPROCESSABLE_CONTENT, "No archive was uploaded"
+    )
+    archive_too_large = ServerError(
+        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "The uploaded archive is too large"
+    )
     no_chapters_to_download = ServerError(
         status.HTTP_422_UNPROCESSABLE_CONTENT, "No chapters to download"
     )

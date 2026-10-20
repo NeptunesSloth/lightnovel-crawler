@@ -8,6 +8,7 @@ from .auth import router as auth
 from .chapters import router as chapter
 from .feedback import router as feedback
 from .history import router as history
+from .imports import router as imports
 from .jobs import router as job
 from .libraries import router as library
 from .lsp import router as lsp
@@ -49,6 +50,13 @@ router.include_router(
     job,
     prefix="/job",
     tags=["Jobs"],
+    dependencies=[Security(ensure_user)],
+)
+
+router.include_router(
+    imports,
+    prefix="/import",
+    tags=["Import"],
     dependencies=[Security(ensure_user)],
 )
 

@@ -43,6 +43,7 @@ class JobType(IntEnum):
     FETCH_MISSING = 60
     FETCH_LATEST = 61
     HEAL_NOVEL = 62
+    IMPORT_ARCHIVE = 70
 
 
 class JobStatus(IntEnum):
