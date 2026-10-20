@@ -68,6 +68,14 @@ _TOOLS_HTML = """<!DOCTYPE html>
   button.preset { margin-top: 0; padding: 7px 12px; font-size: 13px; }
   button.preset.active { background: #3b82f6; color: #fff; }
   #library-list { font-size: 13px; }
+  #drop-zone {
+    border: 2px dashed #39404e; border-radius: 10px; padding: 26px 16px;
+    text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  #drop-zone:hover { border-color: #4b5563; }
+  #drop-zone.dragging { border-color: #3b82f6; background: #1b2436; }
+  #drop-zone strong { display: block; margin-bottom: 4px; color: #e6e6e6; }
+  #import-status { margin-top: 10px; font-size: 13px; min-height: 18px; }
   .libitem {
     display: flex; justify-content: space-between; gap: 10px; align-items: center;
     padding: 8px 2px; border-bottom: 1px solid #20242d;
@@ -224,6 +232,25 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <button id="export-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop</button>
       <button id="export-resume" class="secondary hidden" style="margin-top:14px">&#9654; Resume last</button>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Import novels from a ZIP</h2>
+    <p class="hint">
+      Carried this app and your downloads to a machine with no internet? Drop the
+      export <code>.zip</code> here and every novel inside it goes back into your
+      library — chapters, covers and all — ready to read offline. Single ebooks
+      work too, and re-importing an archive updates what you already have instead
+      of duplicating it.
+    </p>
+    <div id="drop-zone">
+      <strong>Drop ZIPs or ebooks here</strong>
+      <span class="muted">or click to choose files</span>
+    </div>
+    <input id="import-files" type="file" multiple
+           accept=".zip,.epub,.cbz,.pdf,.docx,.mobi,.azw3,.fb2,.rtf,.txt"
+           style="display:none" />
+    <div id="import-status" class="muted"></div>
   </div>
 
   <div class="card">
@@ -702,6 +729,128 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var mb = bytes / (1024 * 1024);
     return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : mb.toFixed(1) + " MB";
   }
+  // ---- Import novels from an archive ----
+  var dropZone = document.getElementById("drop-zone");
+  var importInput = document.getElementById("import-files");
+  var importStatus = document.getElementById("import-status");
+
+  function dragHasFiles(e) {
+    var types = (e.dataTransfer && e.dataTransfer.types) || [];
+    for (var i = 0; i < types.length; i++) {
+      if (types[i] === "Files") return true;
+    }
+    return false;
+  }
+
+  function setDragging(on) {
+    if (dropZone) dropZone.classList.toggle("dragging", on);
+  }
+
+  // Dropping a file anywhere else would make the browser navigate to it and
+  // throw the page away mid-upload, so the whole window swallows the event.
+  ["dragenter", "dragover"].forEach(function (name) {
+    window.addEventListener(name, function (e) {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      setDragging(true);
+    });
+  });
+  window.addEventListener("dragleave", function (e) {
+    if (!e.relatedTarget) setDragging(false);
+  });
+  window.addEventListener("drop", function (e) {
+    e.preventDefault();
+    setDragging(false);
+  });
+
+  dropZone.addEventListener("drop", function (e) {
+    e.preventDefault();
+    setDragging(false);
+    uploadArchives(e.dataTransfer && e.dataTransfer.files);
+  });
+  dropZone.addEventListener("click", function () { importInput.click(); });
+  importInput.addEventListener("change", function () {
+    uploadArchives(importInput.files);
+    importInput.value = "";
+  });
+
+  function pollImport(id, name, fails) {
+    api("/job/" + id, { method: "GET" })
+      .then(function (job) {
+        var ex = job.extra || {};
+        if (isActive(job.status)) {
+          var seen = (ex.imported || 0) + (ex.updated || 0);
+          importStatus.textContent = name + ": " +
+            (ex.current ? "reading " + ex.current : "starting") +
+            " — " + seen + " novel(s), " + (ex.chapters || 0) + " chapters so far";
+          setTimeout(function () { pollImport(id, name, 0); }, 2000);
+          return;
+        }
+        importStatus.textContent = "";
+        if (job.status === 2) {
+          log("Imported " + name + ": " + (ex.imported || 0) + " new, " +
+            (ex.updated || 0) + " updated, " + (ex.chapters || 0) + " chapters.", "log-ok");
+          if (ex.failed) {
+            log("  " + ex.failed + " file(s) in the archive could not be read.", "log-info");
+          }
+          log("  Open the Reader to read them offline.", "log-info");
+        } else {
+          log("Import failed for " + name + (job.error ? " — " + job.error : "") + ".", "log-err");
+        }
+        loadLibrary(window._lncrawlUserId);
+      })
+      .catch(function (e) {
+        // the import keeps running server-side, so a hiccup is not the end
+        var n = (fails || 0) + 1;
+        if (n === 1) log("Status check hiccup — still watching the import…", "log-err");
+        setTimeout(function () { pollImport(id, name, n); }, n < 10 ? 4000 : 10000);
+      });
+  }
+
+  function uploadArchives(list) {
+    if (!requireAuth()) return;
+    var files = Array.prototype.slice.call(list || []);
+    if (!files.length) return;
+
+    var form = new FormData();
+    var names = [];
+    files.forEach(function (f) {
+      form.append("files", f, f.name);
+      names.push(f.name);
+    });
+
+    log("Uploading " + files.length + " file(s)…", "log-info");
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/import");
+    xhr.setRequestHeader("Authorization", "Bearer " + token());
+    // Let the browser set the multipart content type: it has to carry the
+    // boundary, and naming it here without one makes the body unparseable.
+    xhr.upload.onprogress = function (e) {
+      if (!e.lengthComputable) return;
+      importStatus.textContent = "Uploading… " + Math.round((e.loaded / e.total) * 100) + "%";
+    };
+    xhr.onload = function () {
+      importStatus.textContent = "";
+      var res = null;
+      try { res = JSON.parse(xhr.responseText || "null"); } catch (err) { res = null; }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        var msg = (res && (res.error || res.detail || res.message)) || ("HTTP " + xhr.status);
+        log("Upload failed: " + msg, "log-err");
+        return;
+      }
+      (res || []).forEach(function (job, i) {
+        var name = names[i] || "archive";
+        log("Importing " + name + "…", "log-info");
+        pollImport(job.id, name, 0);
+      });
+    };
+    xhr.onerror = function () {
+      importStatus.textContent = "";
+      log("Upload failed — the connection dropped.", "log-err");
+    };
+    xhr.send(form);
+  }
+
   function loadLibrary(userId) {
     var box = document.getElementById("library-list");
     var q = "/jobs?type=53&status=2&limit=25" + (userId ? "&user_id=" + encodeURIComponent(userId) : "");

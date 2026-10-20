@@ -16,6 +16,7 @@ from .fetch_missing import FetchMissingHandler
 from .heal_novel import HealNovelHandler
 from .image import ImageHandler
 from .image_batch import ImageBatchHandler
+from .import_archive import ImportArchiveHandler
 from .list_source import ListSourceHandler
 from .novel import NovelHandler
 from .novel_batch import NovelBatchHandler
@@ -54,6 +55,7 @@ _HANDLER_REGISTRY: List[Type[BaseHandler]] = [
     DiscoverSourceHandler,
     ExportSourceHandler,
     ListSourceHandler,
+    ImportArchiveHandler,
     FallbackHandler,
 ]
 

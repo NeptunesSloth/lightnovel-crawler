@@ -790,6 +790,26 @@ class JobService:
             type=JobType.EXPORT_SOURCE,
         )
 
+    def import_archive(
+        self,
+        user: User,
+        archive_file: str,
+        archive_name: str,
+        *,
+        parent_id: Optional[str] = None,
+        depends_on: Optional[str] = None,
+        **data: Any,
+    ) -> Job:
+        data["archive_file"] = archive_file
+        data["archive_name"] = archive_name
+        return self._create(
+            user=user,
+            data=data,
+            parent_id=parent_id,
+            depends_on=depends_on,
+            type=JobType.IMPORT_ARCHIVE,
+        )
+
     def list_source(
         self,
         user: User,
