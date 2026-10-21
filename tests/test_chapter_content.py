@@ -194,6 +194,32 @@ class ChapterDownloadTests(unittest.TestCase):
         self.fetch()
         self.crawler.download_chapter.assert_not_called()
 
+    def test_crawler_update_does_not_download_valid_cached_text_again(self) -> None:
+        self.files.save_text(self.chapter.content_file, "<p>Previously downloaded text.</p>")
+        self.chapter.extra = {"crawler_version": 0}
+        self.fetch()
+        self.crawler.download_chapter.assert_not_called()
+
+    def test_crawler_update_does_not_download_cached_images_again(self) -> None:
+        image = SimpleNamespace(
+            id="image",
+            novel_id="novel",
+            url="https://example.com/image.jpg",
+            is_available=True,
+            extra={"crawler_version": 0},
+        )
+        self.ctx.images.get = MagicMock(return_value=image)
+        self.assertIs(self.service.fetch_image("user", "image", custom=self.crawler), image)
+
+    def test_explicit_refresh_can_replace_valid_cached_text(self) -> None:
+        self.files.save_text(self.chapter.content_file, "<p>Old chapter text.</p>")
+        self.responses("<p>Updated chapter text.</p>")
+        self.fetch(refresh=True)
+        self.crawler.download_chapter.assert_called_once()
+        self.assertEqual(
+            self.files.load_text(self.chapter.content_file), "<p>Updated chapter text.</p>"
+        )
+
     def test_failed_refresh_preserves_existing_text(self) -> None:
         self.files.save_text(self.chapter.content_file, "<p>Existing text.</p>")
         self.chapter.is_done = True

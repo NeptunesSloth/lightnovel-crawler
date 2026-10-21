@@ -881,7 +881,7 @@ def _download_novel(
 
     # download the chapters (fetch_chapter skips ones already fetched), reporting
     # progress as each one completes
-    pending_chapters = ctx.crawler.pending_chapter_ids(chapter_ids, crawler.version)
+    pending_chapters = ctx.crawler.pending_chapter_ids(chapter_ids)
     chapter_futures = [
         crawler.taskman.submit_task(ctx.crawler.fetch_chapter, user_id, cid, custom=crawler)
         for cid in pending_chapters

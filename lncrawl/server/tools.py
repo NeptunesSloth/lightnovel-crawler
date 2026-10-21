@@ -601,12 +601,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
         }
       })
       .catch(function (e) {
-        // a transient blip (busy server / connection hiccup) shouldn't freeze the
-        // progress view — the export keeps running server-side, so NEVER give up:
-        // keep retrying forever, just more slowly after repeated failures
+        // A failed poll cannot establish whether the server or export is still
+        // running. Keep reconnecting without claiming the job is healthy.
         var n = fails + 1;
         if (n === 1) log("Status check hiccup — still retrying… (" + e.message + ")", "log-err");
-        else if (n === 15) log("Still can't reach the server — the export keeps running; retrying every 15s…", "log-err");
+        else if (n === 15) log("Still can't reach the server — export status is unknown; retrying every 15s. Check that the app is still running before starting another export.", "log-err");
         setTimeout(function () { pollExport(id, n); }, n < 15 ? 8000 : 15000);
       });
   }

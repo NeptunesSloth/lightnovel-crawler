@@ -77,7 +77,7 @@ class PendingChapterTests(unittest.TestCase):
     def test_cached_bulk_export_uses_no_rate_limited_download_slots(self) -> None:
         ids = [f"chapter-{i}" for i in range(516)]
         chapters = [
-            SimpleNamespace(id=chapter_id, extra={"crawler_version": 2}, is_available=True)
+            SimpleNamespace(id=chapter_id, extra={"crawler_version": 1}, is_available=True)
             for chapter_id in ids
         ]
         crawler = SimpleNamespace(version=2, taskman=SimpleNamespace(submit_task=MagicMock()))
@@ -127,7 +127,7 @@ class PendingChapterTests(unittest.TestCase):
         crawler.taskman.submit_task.assert_not_called()
         progress.assert_called_once_with("Novel", 516, 516)
 
-    def test_only_missing_empty_or_outdated_chapters_are_queued(self) -> None:
+    def test_only_missing_or_empty_chapters_are_queued(self) -> None:
         chapters = [
             SimpleNamespace(id="cached", extra={"crawler_version": 2}, is_available=True),
             SimpleNamespace(id="empty", extra={"crawler_version": 2}, is_available=False),
@@ -140,9 +140,8 @@ class PendingChapterTests(unittest.TestCase):
         ):
             pending = CrawlerService().pending_chapter_ids(
                 ["cached", "empty", "outdated", "unknown", "cached"],
-                2,
             )
-        self.assertEqual(pending, ["empty", "outdated", "unknown"])
+        self.assertEqual(pending, ["empty", "unknown"])
         get_many.assert_called_once_with(["cached", "empty", "outdated", "unknown"])
 
     def test_large_selection_uses_bounded_queries(self) -> None:
@@ -152,7 +151,7 @@ class PendingChapterTests(unittest.TestCase):
             "lncrawl.services.crawler.ctx",
             SimpleNamespace(chapters=SimpleNamespace(get_many=get_many)),
         ):
-            self.assertEqual(CrawlerService().pending_chapter_ids(ids, 1), ids)
+            self.assertEqual(CrawlerService().pending_chapter_ids(ids), ids)
         self.assertEqual([len(call.args[0]) for call in get_many.call_args_list], [500, 500, 201])
 
 
