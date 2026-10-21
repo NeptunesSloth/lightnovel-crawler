@@ -27,9 +27,23 @@ from lncrawl.services.jobs.service import JobService
 from lncrawl.services.novels import NovelService
 from lncrawl.services.scheduler.handlers import run_job
 from lncrawl.services.volumes import VolumeService
+from lncrawl.utils.chapter_content import NOVELFIRE_LOGIN_NOTICE
 
 
 class NovelRepairTests(unittest.TestCase):
+    def test_cached_login_notice_is_reported_as_gap_and_repaired(self) -> None:
+        self.ctx.files.save_text(
+            "novels/novel/chapters/000002.zst", f"<p>{NOVELFIRE_LOGIN_NOTICE}</p>"
+        )
+        report = self.client.get("/api/novel/novel/completeness").json()
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["downloaded"], 1)
+        self.assertEqual(report["empty"], 1)
+        job = self.repair()
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertIn(2, self.downloads)
+        self.assertTrue(job.extra["completeness"]["complete"])
+
     def setUp(self) -> None:
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
