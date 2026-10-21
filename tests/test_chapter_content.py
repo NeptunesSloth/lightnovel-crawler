@@ -12,10 +12,25 @@ from lncrawl.exceptions import AbortedException, EmptyChapterError
 from lncrawl.services.binder.epub import make_epub
 from lncrawl.services.crawler import CrawlerService
 from lncrawl.services.file import FileService
-from lncrawl.utils.chapter_content import has_chapter_content
+from lncrawl.utils.chapter_content import NOVELFIRE_LOGIN_NOTICE, has_chapter_content
 
 
 class ChapterContentTests(unittest.TestCase):
+    def test_novelfire_login_notice_is_not_story_content(self) -> None:
+        for body in (
+            f"<p>{NOVELFIRE_LOGIN_NOTICE}</p>",
+            f"<h2>Chapter 8 - 8: Facing The Golden Duke</h2><p>{NOVELFIRE_LOGIN_NOTICE}</p>",
+            "<p>Please login to use features: save the novel you are reading,<br>"
+            "save the reading position and note your favorite content.</p>",
+        ):
+            with self.subTest(body=body):
+                self.assertFalse(has_chapter_content(body))
+
+    def test_login_notice_does_not_invalidate_real_story_text(self) -> None:
+        self.assertTrue(
+            has_chapter_content(f"<p>The duke entered the room.</p><p>{NOVELFIRE_LOGIN_NOTICE}</p>")
+        )
+
     def test_empty_markup_is_not_content(self) -> None:
         for body in (
             "",
@@ -42,6 +57,14 @@ class ChapterContentTests(unittest.TestCase):
 
 
 class ChapterDownloadTests(unittest.TestCase):
+    def test_login_notice_response_is_retried(self) -> None:
+        self.responses(f"<p>{NOVELFIRE_LOGIN_NOTICE}</p>", "<p>The actual chapter text.</p>")
+        self.fetch()
+        self.assertEqual(self.crawler.download_chapter.call_count, 2)
+        self.assertEqual(
+            self.files.load_text(self.chapter.content_file), "<p>The actual chapter text.</p>"
+        )
+
     def setUp(self) -> None:
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
