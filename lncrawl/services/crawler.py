@@ -32,7 +32,7 @@ class CrawlerService:
             sess.merge(chapter)
             sess.commit()
 
-    def pending_chapter_ids(self, chapter_ids: List[str], crawler_version: int) -> List[str]:
+    def pending_chapter_ids(self, chapter_ids: List[str]) -> List[str]:
         """Keep cache hits out of the rate-limited download queue."""
         selected = list(dict.fromkeys(chapter_ids))
         pending: List[str] = []
@@ -41,11 +41,7 @@ class CrawlerService:
             chapters = {chapter.id: chapter for chapter in ctx.chapters.get_many(batch)}
             for chapter_id in batch:
                 chapter = chapters.get(chapter_id)
-                if (
-                    chapter is None
-                    or chapter.extra.get("crawler_version") != crawler_version
-                    or not chapter.is_available
-                ):
+                if chapter is None or not chapter.is_available:
                     pending.append(chapter_id)
         return pending
 
@@ -187,11 +183,7 @@ class CrawlerService:
         with self.prepare_crawler(user_id, novel.url, signal, custom) as crawler:
             # check if download is necessary
             available = chapter.is_available
-            if (
-                not refresh
-                and available
-                and chapter.extra.get("crawler_version") == crawler.version
-            ):
+            if not refresh and available:
                 logger.debug(f"Skipped: {novel.title}] - Chapter {chapter.serial}")
                 return chapter
 
@@ -282,11 +274,7 @@ class CrawlerService:
 
         with self.prepare_crawler(user_id, novel.url, signal, custom) as crawler:
             # check if download is necessary
-            if (
-                not refresh
-                and image.is_available
-                and image.extra.get("crawler_version") == crawler.version
-            ):
+            if not refresh and image.is_available:
                 logger.debug(f"Skipped: {novel.title}] - Image {image.id}")
                 return image
 

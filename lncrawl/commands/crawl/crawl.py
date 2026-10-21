@@ -149,7 +149,7 @@ def crawl(
             formats = prompt_format_selection()
 
     # download chapters
-    pending_chapters = ctx.crawler.pending_chapter_ids(chapters, crawler.version)
+    pending_chapters = ctx.crawler.pending_chapter_ids(chapters)
     chapter_futures = [
         crawler.taskman.submit_task(
             ctx.crawler.fetch_chapter,
