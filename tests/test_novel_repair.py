@@ -1,4 +1,6 @@
+from concurrent.futures import Future
 from contextlib import ExitStack
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
@@ -14,7 +16,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from lncrawl.core import Crawler
 from lncrawl.dao import Chapter, Job, Novel, User, Volume
-from lncrawl.enums import JobPriority, JobStatus
+from lncrawl.enums import JobPriority, JobStatus, JobType
 from lncrawl.server.api.novels import router
 from lncrawl.server.security import ensure_user
 from lncrawl.services.artifacts import ArtifactService
@@ -26,11 +28,101 @@ from lncrawl.services.images import ChapterImageService
 from lncrawl.services.jobs.service import JobService
 from lncrawl.services.novels import NovelService
 from lncrawl.services.scheduler.handlers import run_job
+from lncrawl.services.scheduler.handlers.export_source import ExportStalledError
 from lncrawl.services.volumes import VolumeService
 from lncrawl.utils.chapter_content import NOVELFIRE_LOGIN_NOTICE
 
 
 class NovelRepairTests(unittest.TestCase):
+    def test_export_stall_is_reported_as_failure_not_retried_in_fresh_pools(self) -> None:
+        with patch(
+            "lncrawl.services.scheduler.handlers.export_source._download_novel",
+            side_effect=ExportStalledError("No downloads completed; resume checkpoint retained"),
+        ):
+            job = self.export_novel()
+        self.assertEqual(job.status, JobStatus.FAILED)
+        self.assertIn("resume checkpoint retained", job.error)
+        self.assertEqual(job.extra["urls"], ["https://novelfire.net/book/example"])
+        self.source.taskman.init_executor.assert_called_once()
+
+    def export_novel(self, discover: bool = False) -> Job:
+        with self.ctx.db.session() as session:
+            novel = session.get(Novel, "novel")
+            novel.synopsis = "A known novel."
+            session.add(novel)
+            session.commit()
+
+        def submit(function, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(function(*args, **kwargs))
+            except Exception as error:
+                future.set_exception(error)
+            return future
+
+        self.source.taskman = SimpleNamespace(init_executor=MagicMock(), submit_task=submit)
+        self.ctx.sources.get_source = MagicMock(
+            return_value=SimpleNamespace(url="https://novelfire.net/")
+        )
+        url = "https://novelfire.net/book/example"
+        data = {"domain": "novelfire.net", "retries": 0, "dedupe": False, "auto_tune": False}
+        if not discover:
+            data["urls"] = [url]
+        job = self.ctx.jobs._create(self.user, JobType.EXPORT_SOURCE, data)
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        with (
+            patch(f"{module}.ctx", self.ctx),
+            patch(f"{module}._copy_to_desktop", return_value=None),
+            patch(f"{module}.ExportSourceHandler._notify_finish"),
+            patch.object(self.ctx.crawler, "discover_novels", return_value=[url]) as discovery,
+        ):
+            run_job(job, Event())
+            self.assertEqual(discovery.call_count, int(discover))
+        return self.ctx.jobs.get(job.id)
+
+    def test_export_reuses_zip_after_individual_ebook_and_chapters_are_removed(self) -> None:
+        first = self.export_novel(discover=True)
+        self.assertEqual(first.status, JobStatus.SUCCESS, first.error)
+        self.assertEqual(first.extra["urls"], ["https://novelfire.net/book/example"])
+        self.assertTrue(self.ctx.files.exists(first.extra["export_file"]))
+        artifact = self.ctx.artifacts.get_latest("novel", "epub")
+        self.ctx.files.resolve(artifact.output_file).unlink()
+        for chapter in self.ctx.chapters.list(novel_id="novel"):
+            self.ctx.files.resolve(chapter.content_file).unlink()
+        self.downloads.clear()
+        resumed = self.export_novel()
+        self.assertEqual(resumed.status, JobStatus.SUCCESS, resumed.error)
+        self.assertEqual(resumed.extra["resumed"], 1)
+        self.assertEqual(self.downloads, [])
+        with ZipFile(self.ctx.files.resolve(resumed.extra["export_file"])) as archive:
+            self.assertIn("Test Novel.epub", archive.namelist())
+
+    def test_partial_export_is_checkpointed_and_resumed_without_redownloading_good_chapters(
+        self,
+    ) -> None:
+        download = self.source.download_chapter
+
+        def fail_one(chapter):
+            if chapter.id == 2:
+                raise ValueError("Chapter temporarily unavailable")
+            download(chapter)
+
+        self.source.download_chapter = fail_one
+        first = self.export_novel()
+        self.assertEqual(first.status, JobStatus.SUCCESS, first.error)
+        self.assertEqual(first.extra["incomplete"], 1)
+
+        manifest = json.loads(
+            self.ctx.files.resolve("exports/manifest/novelfire.net.json").read_text()
+        )
+        self.assertEqual(manifest["novels"]["https://novelfire.net/book/example"]["missing"], 1)
+        self.source.download_chapter = download
+        self.downloads.clear()
+        second = self.export_novel()
+        self.assertEqual(second.status, JobStatus.SUCCESS, second.error)
+        self.assertEqual(second.extra["complete"], 1)
+        self.assertEqual(self.downloads, [2])
+
     def test_cached_login_notice_is_reported_as_gap_and_repaired(self) -> None:
         self.ctx.files.save_text(
             "novels/novel/chapters/000002.zst", f"<p>{NOVELFIRE_LOGIN_NOTICE}</p>"
