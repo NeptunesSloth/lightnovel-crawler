@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
+import threading
 from time import monotonic
 import traceback
 from typing import Callable, Dict, List, Optional, Set, Tuple, TypedDict
@@ -86,6 +88,22 @@ MAX_CONSECUTIVE_FAILS = 10  # back-to-back request failures before abandoning a 
 
 class ExportStalledError(HandlerException):
     """Stop an export whose requests stopped completing, retaining checkpoints."""
+
+
+def _save_stall_diagnostics(job_id: str) -> str:
+    """Capture stack locations without locals, response bodies or credentials."""
+    relative = f"logs/export-stall-{safe_filename(job_id)}.log"
+    lines = ["Export stalled: download worker stacks (no local variable values).\n"]
+    frames = sys._current_frames()
+    for worker in threading.enumerate():
+        if not worker.name.startswith(("lncrawl_scraper", "nodriver-loop")):
+            continue
+        frame = frames.get(worker.ident) if worker.ident is not None else None
+        if frame is not None:
+            lines.append(f"\nThread: {worker.name}\n")
+            lines.extend(traceback.format_list(traceback.extract_stack(frame)))
+    ctx.files.save_text(relative, "".join(lines), compress=False)
+    return relative
 
 
 # Substrings in a failure reason that suggest the source is rate-limiting/blocking
@@ -399,6 +417,13 @@ class ExportSourceHandler(BaseHandler):
     result path is stored in ``job.extra["export_file"]``.
     """
 
+    def _set_failure(self, error: str = "", err_source: Optional[Exception] = None) -> bool:
+        # Expected watchdog stops get a short message; worker stacks are saved
+        # separately for diagnosis without filling the Activity view.
+        if isinstance(err_source, ExportStalledError):
+            err_source = None
+        return super()._set_failure(error, err_source)
+
     @staticmethod
     def can_activate(job) -> bool:
         return job.type == JobType.EXPORT_SOURCE
@@ -663,7 +688,18 @@ class ExportSourceHandler(BaseHandler):
                             max_chapters,
                             _on_novel,
                         )
-                    except (AbortedException, ExportStalledError):
+                    except ExportStalledError:
+                        try:
+                            diagnostic = _save_stall_diagnostics(self.job.id)
+                            self._set_extra(
+                                stall_diagnostics=diagnostic, stalled_title=cur_title[0]
+                            )
+                        except Exception as diagnostic_error:
+                            ctx.logger.debug(
+                                f"Could not save stall diagnostics: {diagnostic_error}"
+                            )
+                        raise
+                    except AbortedException:
                         raise
                     except Exception as e:
                         # Append where it was raised (file:line) so the live UI

@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from ...context import ctx
 from ...dao import Job, JobPriority, JobStatus, JobType, User
 from ...exceptions import ServerErrors
+from ...utils.file_tools import safe_filename
 from ..models import (
     DiscoverSourceRequest,
     ExportSourceRequest,
@@ -145,6 +146,20 @@ def get_job(
     job_id: str = Path(),
 ) -> Job:
     return ctx.jobs.get(job_id)
+
+
+@router.get(
+    "/{job_id}/stall-diagnostics", summary="Download worker diagnostics for a stalled export"
+)
+def export_stall_diagnostics(
+    job_id: str = Path(),
+    user: User = Security(ensure_user),
+) -> FileResponse:
+    ctx.jobs.verify_access(user, job_id)
+    file = ctx.files.resolve(f"logs/export-stall-{safe_filename(job_id)}.log")
+    if not file.is_file():
+        raise ServerErrors.no_such_file
+    return FileResponse(file, media_type="text/plain", filename=file.name)
 
 
 @router.post("/{job_id}/cancel", summary="Cancel a job")

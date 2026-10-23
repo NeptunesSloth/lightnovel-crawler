@@ -34,6 +34,11 @@ def acquire_queue(timeout: Optional[float] = None) -> None:
         raise TimeoutError("Failed to acquire browser semaphore")
 
 
+def release_failed_queue() -> None:
+    """Return a reserved slot when browser startup did not finish."""
+    __semaphore.release()
+
+
 def release_queue(browser: "Browser") -> None:
     __override_stop(browser)
 
