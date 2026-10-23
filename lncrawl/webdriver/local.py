@@ -8,7 +8,7 @@ from ..exceptions import LNException
 from ..utils.async_loop import run_async
 from ..utils.browser_detect import pick_executable
 from ..utils.platforms import Platform, Screen
-from .job_queue import acquire_queue, release_queue
+from .job_queue import acquire_queue, release_failed_queue, release_queue
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,6 @@ def create_local(
     Acquire a nodriver browser instance. Blocks until a slot is available in the
     semaphore pool. Call browser.stop() to release the slot.
     """
-    acquire_queue(timeout)
-
     executable = pick_executable()
     if not executable:
         raise LNException(
@@ -59,16 +57,23 @@ def create_local(
     # when running as root or in restricted container environments.
     sandbox = not (headless and (Platform.linux or Platform.docker or Platform.ci))
 
-    browser = run_async(
-        nodriver.start(
-            headless=headless,
-            sandbox=sandbox,
-            browser_executable_path=executable,
-            browser_args=browser_args,
-            user_data_dir=user_data_dir,
-        ),
-        timeout=timeout,
-    )
+    # Validate configuration before reserving a slot. A failed launch must
+    # return its reservation, otherwise repeated failures exhaust the pool.
+    acquire_queue(timeout)
+    try:
+        browser = run_async(
+            nodriver.start(
+                headless=headless,
+                sandbox=sandbox,
+                browser_executable_path=executable,
+                browser_args=browser_args,
+                user_data_dir=user_data_dir,
+            ),
+            timeout=timeout,
+        )
+    except BaseException:
+        release_failed_queue()
+        raise
 
     logger.info("Created nodriver browser instance")
     release_queue(browser)

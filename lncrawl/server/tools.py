@@ -231,6 +231,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <button id="export-test" class="secondary" style="margin-top:14px">🩺 Test source</button>
       <button id="export-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop</button>
       <button id="export-resume" class="secondary hidden" style="margin-top:14px">&#9654; Resume last</button>
+      <button id="export-diagnostics" class="secondary hidden" style="margin-top:14px">Download stall diagnostics</button>
     </div>
   </div>
 
@@ -604,6 +605,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
           loadLibrary(window._lncrawlUserId);
         } else {
           setExportControls(null, id);
+          if (ex.stall_diagnostics) {
+            var diagnosticButton = document.getElementById("export-diagnostics");
+            diagnosticButton.dataset.jobId = id;
+            diagnosticButton.classList.remove("hidden");
+          }
           log("Export ended: " + status + (job.error ? " — " + job.error : "") +
             ". Use the Resume last button to pick up where it left off.", "log-err");
         }
@@ -625,6 +631,23 @@ _TOOLS_HTML = """<!DOCTYPE html>
     api("/job/" + id + "/cancel", { method: "POST" })
       .then(function () { setExportControls(null, id); log("Export stopped.", "log-ok"); })
       .catch(function (e) { log("Stop failed: " + e.message, "log-err"); });
+  });
+
+  document.getElementById("export-diagnostics").addEventListener("click", function () {
+    var id = this.dataset.jobId;
+    if (!id || !requireAuth()) return;
+    fetch("/api/job/" + encodeURIComponent(id) + "/stall-diagnostics", {
+      headers: { "Authorization": "Bearer " + token() }
+    }).then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.blob();
+    }).then(function (blob) {
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement("a");
+      link.href = url; link.download = "export-stall-" + id + ".log";
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    }).catch(function (error) { log("Couldn't download diagnostics: " + error.message, "log-err"); });
   });
 
   document.getElementById("export-resume").addEventListener("click", function () {

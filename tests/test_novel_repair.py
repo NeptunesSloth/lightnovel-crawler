@@ -17,6 +17,7 @@ from sqlmodel import Session, SQLModel, create_engine
 from lncrawl.core import Crawler
 from lncrawl.dao import Chapter, Job, Novel, User, Volume
 from lncrawl.enums import JobPriority, JobStatus, JobType
+from lncrawl.server.api.jobs import router as jobs_router
 from lncrawl.server.api.novels import router
 from lncrawl.server.security import ensure_user
 from lncrawl.services.artifacts import ArtifactService
@@ -42,6 +43,16 @@ class NovelRepairTests(unittest.TestCase):
             job = self.export_novel()
         self.assertEqual(job.status, JobStatus.FAILED)
         self.assertIn("resume checkpoint retained", job.error)
+        self.assertNotIn("Traceback", job.error)
+        self.assertIn("stall_diagnostics", job.extra)
+        self.assertTrue(self.ctx.files.exists(job.extra["stall_diagnostics"]))
+        diagnostic = self.client.get(f"/api/job/{job.id}/stall-diagnostics")
+        self.assertEqual(diagnostic.status_code, 200)
+        self.assertIn("no local variable values", diagnostic.text)
+        other_user = User(id="other-user", email="other@example.com", password="test-only")
+        self.client.app.dependency_overrides[ensure_user] = lambda: other_user
+        self.assertEqual(self.client.get(f"/api/job/{job.id}/stall-diagnostics").status_code, 403)
+        self.client.app.dependency_overrides[ensure_user] = lambda: self.user
         self.assertEqual(job.extra["urls"], ["https://novelfire.net/book/example"])
         self.source.taskman.init_executor.assert_called_once()
 
@@ -227,6 +238,7 @@ class NovelRepairTests(unittest.TestCase):
             "services.binder.service",
             "services.binder.epub",
             "server.api.novels",
+            "server.api.jobs",
             "services.scheduler.handlers._base",
             "services.scheduler.handlers.fetch_missing",
             "services.scheduler.handlers.chapter_batch",
@@ -239,6 +251,7 @@ class NovelRepairTests(unittest.TestCase):
         self.ctx.files.save_text("novels/novel/chapters/000002.zst", "<p>&nbsp;</p>")
         app = FastAPI()
         app.include_router(router, prefix="/api/novel", dependencies=[Depends(ensure_user)])
+        app.include_router(jobs_router, prefix="/api/job", dependencies=[Depends(ensure_user)])
         app.dependency_overrides[ensure_user] = lambda: self.user
         self.client = TestClient(app)
         self.addCleanup(self.client.close)

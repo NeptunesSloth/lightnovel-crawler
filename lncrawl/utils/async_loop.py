@@ -1,5 +1,5 @@
 import asyncio
-from concurrent.futures import Future
+from concurrent.futures import Future, TimeoutError
 import logging
 import threading
 from typing import Any, Coroutine, Optional, TypeVar
@@ -18,4 +18,8 @@ _thread.start()
 def run_async(coro: Coroutine[Any, Any, T], timeout: Optional[float] = None) -> T:
     """Submit an async coroutine to the nodriver event loop and block until done."""
     future: Future[T] = asyncio.run_coroutine_threadsafe(coro, _loop)
-    return future.result(timeout=timeout)
+    try:
+        return future.result(timeout=timeout)
+    except (TimeoutError, KeyboardInterrupt):
+        future.cancel()
+        raise
