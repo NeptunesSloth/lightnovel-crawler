@@ -1,4 +1,5 @@
 from concurrent.futures import FIRST_COMPLETED, wait as _wait_futures
+import hashlib
 from html import escape
 import json
 import os
@@ -8,12 +9,14 @@ import shutil
 from time import monotonic
 import traceback
 from typing import Callable, Dict, List, Optional, Set, Tuple, TypedDict
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 import zipfile
+
+from bs4 import BeautifulSoup
 
 from ....context import ctx
 from ....enums import JobType, OutputFormat
-from ....utils.file_tools import safe_filename
+from ....utils.file_tools import atomic_write, safe_filename
 from ....utils.notify import notify_finished
 from ._base import AbortedException, BaseHandler, HandlerException
 
@@ -79,6 +82,11 @@ RPS_RAISE_AFTER = 3  # consecutive clean novels before nudging the rate up
 # abandoned (it stays partial and is retried/resumed later).
 STALL_TIMEOUT = 120.0  # seconds with no completion before giving up on a novel
 MAX_CONSECUTIVE_FAILS = 10  # back-to-back request failures before abandoning a novel
+
+
+class ExportStalledError(HandlerException):
+    """Stop an export whose requests stopped completing, retaining checkpoints."""
+
 
 # Substrings in a failure reason that suggest the source is rate-limiting/blocking
 # us (as opposed to a parse error), so we should back off harder.
@@ -150,13 +158,6 @@ def _classify_error(reason: str) -> str:
     return "error"
 
 
-def _current_rate(crawler) -> float:
-    """The rate the crawler's queue is limited to, or 0 when it is not limited."""
-    limiter = getattr(crawler.taskman, "_limiter", None)
-    period = getattr(limiter, "period", 0) if limiter is not None else 0
-    return 1.0 / period if period and period > 0 else 0.0
-
-
 def _apply_rate(crawler, rps: float) -> None:
     """Set the rate this source is downloaded at. 0 means no cap.
 
@@ -169,22 +170,12 @@ def _apply_rate(crawler, rps: float) -> None:
     )
 
 
-def _refresh_executor(crawler) -> None:
-    """Recreate the download worker pool so a worker stuck on a hung request is
-    abandoned instead of blocking every later novel.
-
-    Carries the rate across: the limiter belongs to the executor, so rebuilding
-    without it would quietly lift the cap for the rest of the run.
-    """
-    _apply_rate(crawler, _current_rate(crawler))
-
-
 def _drain(crawler, futures, on_tick, signal) -> int:
     """Resolve download futures with a stall watchdog.
 
     Returns how many futures were processed. Guards against the two ways a bulk
     run gets stuck on one novel: a hung request (nothing completes within
-    ``STALL_TIMEOUT`` → the pool is refreshed and the rest abandoned) and a source
+    ``STALL_TIMEOUT`` → the export stops with its checkpoints retained) and a source
     refusing request after request (``MAX_CONSECUTIVE_FAILS`` back-to-back
     failures → the rest is abandoned). Remaining work is cancelled; the chapters
     that did download are kept (the novel becomes partial and is retried/resumed).
@@ -192,19 +183,28 @@ def _drain(crawler, futures, on_tick, signal) -> int:
     pending = set(futures)
     done_count = 0
     consecutive_fails = 0
+    deadline = monotonic() + STALL_TIMEOUT
     while pending:
         if signal.is_set():
             for f in pending:
                 f.cancel()
             raise AbortedException()
-        done, pending = _wait_futures(pending, timeout=STALL_TIMEOUT, return_when=FIRST_COMPLETED)
+        done, pending = _wait_futures(
+            pending,
+            timeout=min(1.0, max(0.001, deadline - monotonic())),
+            return_when=FIRST_COMPLETED,
+        )
         if not done:
-            # nothing finished in STALL_TIMEOUT — the single worker is stuck on a
-            # hung request; drop the rest and refresh the pool for the next novel
+            if monotonic() < deadline:
+                continue
             for f in pending:
                 f.cancel()
-            _refresh_executor(crawler)
-            break
+            signal.set()
+            raise ExportStalledError(
+                f"No download completed for {STALL_TIMEOUT:g} seconds. Export stopped; "
+                "downloaded chapters and completed books are retained. Resume to retry the gaps."
+            )
+        deadline = monotonic() + STALL_TIMEOUT
         for f in done:
             done_count += 1
             try:
@@ -262,9 +262,11 @@ def _load_manifest_file(domain: str) -> dict:
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+        if not isinstance(data, dict):
+            raise ValueError("Checkpoint must be a JSON object")
+        return data
+    except (OSError, ValueError) as error:
+        raise HandlerException(f"Could not read export checkpoint {path}: {error}") from error
 
 
 def _load_manifest(domain: str) -> Dict[str, dict]:
@@ -282,7 +284,7 @@ def _load_tuned_rps(domain: str) -> float:
 
 
 def _save_manifest(domain: str, novels: Dict[str, dict], tuned_rps: float = 0) -> None:
-    """Persist the resume manifest (best-effort; never raises into the caller)."""
+    """Persist checkpoints atomically; never silently lose resumability."""
     path = _manifest_path(domain)
     try:
         data = _load_manifest_file(domain)
@@ -290,11 +292,62 @@ def _save_manifest(domain: str, novels: Dict[str, dict], tuned_rps: float = 0) -
         if tuned_rps > 0:
             data["tuned_rps"] = round(tuned_rps, 2)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
+        with atomic_write(path) as temporary:
+            temporary.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
     except Exception as e:
-        ctx.logger.debug(f"Could not save export manifest for {domain}: {e}")
+        raise HandlerException(f"Could not save export checkpoint for {domain}: {e}") from e
+
+
+def _restore_archived_books(domain: str, manifest: Dict[str, dict]) -> None:
+    """Recover completed ebook files from retained export ZIPs without crawling."""
+    wanted: Dict[str, List[str]] = {}
+    for url, record in manifest.items():
+        file = record.get("file")
+        if not file or record.get("missing") or Path(file).is_file():
+            continue
+        name = record.get("archive_name") or Path(file).name
+        wanted.setdefault(name, []).append(url)
+    if not wanted:
+        return
+    exports = ctx.files.resolve("exports")
+    for archive in sorted(
+        exports.glob("*.zip"), key=lambda file: file.stat().st_mtime, reverse=True
+    ):
+        try:
+            with zipfile.ZipFile(archive) as book:
+                members = set(book.namelist())
+                if "index.html" not in members:
+                    continue
+                index = BeautifulSoup(book.read("index.html"), "html.parser")
+                heading = index.find("h1")
+                if not heading or heading.get_text(strip=True) != domain:
+                    continue
+                for row in index.select("li"):
+                    link = row.find("a", href=True)
+                    if not link or row.select_one(".inc"):
+                        continue
+                    name = unquote(str(link["href"]))
+                    urls = wanted.get(name, [])
+                    if len(urls) != 1 or name not in members:
+                        continue
+                    url = urls[0]
+                    destination = (
+                        exports
+                        / "reused"
+                        / hashlib.sha256(url.encode()).hexdigest()
+                        / Path(name).name
+                    )
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with atomic_write(destination) as temporary:
+                        temporary.write(book.read(name))
+                    manifest[url].update(
+                        file=str(destination), archive=str(archive), archive_name=name
+                    )
+                    wanted.pop(name)
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
+            ctx.logger.debug(f"Could not recover books from {archive}: {error}")
+        if not wanted:
+            break
 
 
 def _find_desktop() -> Optional[Path]:
@@ -399,6 +452,8 @@ class ExportSourceHandler(BaseHandler):
         # Cloudflare-protected sources where unthrottled timing gets the IP
         # blocked, so an uncapped run is still the user asking for that risk.
         crawler = ctx.sources.init_crawler(source.url, workers=EXPORT_WORKERS)
+        crawler.scraper.signal = self.signal
+        crawler.taskman.signal = self.signal
         _apply_rate(crawler, requests_per_sec)
         if requests_per_sec > 0:
             ctx.logger.info(
@@ -460,6 +515,11 @@ class ExportSourceHandler(BaseHandler):
                 self._set_extra(exported=0, failed=0, total_novels=0)
                 return
 
+            urls = list(dict.fromkeys(urls))
+            # Replay copies job extras: persist discovery once so Resume does
+            # not enumerate a different catalogue or reset its selection.
+            self._set_extra(urls=urls)
+
             total = len(urls)
             self._set_progress(0, total)
 
@@ -474,16 +534,26 @@ class ExportSourceHandler(BaseHandler):
             # over. Only complete novels are recorded; partial/failed ones are always
             # re-attempted (cheap, since downloaded chapters are skipped).
             manifest = _load_manifest(domain) if resume else {}
+            if resume:
+                _restore_archived_books(domain, manifest)
+                _save_manifest(domain, manifest)
             pending = []
             finished_urls = []
             for novel_url in urls:
                 rec = manifest.get(novel_url) if resume else None
                 done_file = rec.get("file") if isinstance(rec, dict) else None
-                if done_file and not (rec or {}).get("missing") and Path(done_file).is_file():
+                if (
+                    done_file
+                    and not (rec or {}).get("missing")
+                    and Path(done_file).suffix == f".{fmt.value}"
+                    and Path(done_file).is_file()
+                ):
                     complete[novel_url] = Path(done_file)
                     finished_urls.append(novel_url)
                 else:
                     pending.append(novel_url)
+                    if done_file and Path(done_file).is_file() and (rec or {}).get("missing"):
+                        partial[novel_url] = Path(done_file)
 
             # Update-only: re-check each finished novel's source page for newly
             # released chapters; those with something new go back to pending (only
@@ -563,15 +633,19 @@ class ExportSourceHandler(BaseHandler):
 
                     # remember the title for live failure reporting (set once known)
                     cur_title: List[str] = [""]
+                    cached_chapters: List[Optional[int]] = [None]
 
                     # live status so a long run isn't a misleading 0%
                     def _on_novel(title: str, c_done: int, c_total: int) -> None:
+                        if cached_chapters[0] is None:
+                            cached_chapters[0] = c_done
                         cur_title[0] = title
                         self._set_extra(
                             phase="downloading",
                             current_title=title,
                             current_chapters=c_done,
                             current_total_chapters=c_total,
+                            current_reused_chapters=cached_chapters[0],
                             done_novels=len(complete) + len(partial) + len(skipped),
                             total_novels=total,
                         )
@@ -589,7 +663,7 @@ class ExportSourceHandler(BaseHandler):
                             max_chapters,
                             _on_novel,
                         )
-                    except AbortedException:
+                    except (AbortedException, ExportStalledError):
                         raise
                     except Exception as e:
                         # Append where it was raised (file:line) so the live UI
@@ -608,6 +682,13 @@ class ExportSourceHandler(BaseHandler):
                         result = {"file": None, "missing": 1, "duplicate": False}
 
                     file = result["file"]
+                    if file is not None:
+                        manifest[novel_url] = {
+                            "file": str(file),
+                            "missing": result["missing"],
+                            "format": fmt.value,
+                        }
+                        _save_manifest(domain, manifest)
                     if result["duplicate"]:
                         skipped.add(novel_url)  # already have it — don't retry
                         last_error.pop(novel_url, None)
@@ -615,9 +696,6 @@ class ExportSourceHandler(BaseHandler):
                         complete[novel_url] = file
                         partial.pop(novel_url, None)
                         last_error.pop(novel_url, None)
-                        # record in the resume manifest so a re-run skips it
-                        manifest[novel_url] = {"file": str(file), "missing": 0}
-                        _save_manifest(domain, manifest)
                         adaptive_delay = max(floor_delay, adaptive_delay * ADAPTIVE_DECAY)
                         # a clean novel: let auto-tune creep the rate back up
                         if auto_tune and tuned_rps > 0:
@@ -692,7 +770,7 @@ class ExportSourceHandler(BaseHandler):
                     # back. With polite mode off and no failures this is 0 (no wait).
                     if next_pending and adaptive_delay > 0:
                         self._set_extra(
-                            phase="downloading", adaptive_delay=round(adaptive_delay, 1)
+                            phase="waiting-between-novels", adaptive_delay=round(adaptive_delay, 1)
                         )
                         if self.signal.wait(adaptive_delay):
                             raise AbortedException()
@@ -770,10 +848,14 @@ class ExportSourceHandler(BaseHandler):
                         ctx.logger.warn(f"Skipping {file} in export zip: {e}")
                         continue
                     zipped += 1
+                    for record in manifest.values():
+                        if record.get("file") == str(file):
+                            record.update(archive=str(export_path), archive_name=arcname)
                     status = "incomplete" if file in partial_paths else "complete"
                     index_entries.append((arcname, file.stem, status))
                 # a clickable offline index of everything in the archive
                 zf.writestr("index.html", _build_index_html(domain, index_entries))
+            _save_manifest(domain, manifest)
             if not zipped:
                 raise HandlerException("Could not add any novel to the export zip")
 

@@ -560,11 +560,19 @@ _TOOLS_HTML = """<!DOCTYPE html>
         } else if (status === "RUNNING" && ex.phase === "downloading" && ex.current_title) {
           var ch = ex.current_total_chapters ? " — ch " + (ex.current_chapters || 0) + "/" + ex.current_total_chapters : "";
           var resumed = ex.resumed ? " · " + ex.resumed + " reused from last run" : "";
-          log("Downloading " + job.done + "/" + job.total + ": " + ex.current_title + ch + rateNote(ex) + resumed, "log-info");
+          var cached = ex.current_reused_chapters ? " · " + ex.current_reused_chapters + " cached chapters" : "";
+          log("Filling chapter gaps " + job.done + "/" + job.total + ": " + ex.current_title + ch + cached + rateNote(ex) + resumed, "log-info");
           if (ex.last_fail_title && ex.last_fail_reason) {
-            log("  ⚠ last issue: " + ex.last_fail_title + " — " + ex.last_fail_reason +
-              (ex.last_fail_detail ? " (" + ex.last_fail_detail + ")" : ""), "log-err");
+            pollExport._lastFailure = pollExport._lastFailure || {};
+            var failureKey = ex.last_fail_title + ":" + ex.last_fail_reason + ":" + (ex.last_fail_detail || "");
+            if (pollExport._lastFailure[id] !== failureKey) {
+              pollExport._lastFailure[id] = failureKey;
+              log("  ⚠ last issue: " + ex.last_fail_title + " — " + ex.last_fail_reason +
+                (ex.last_fail_detail ? " (" + ex.last_fail_detail + ")" : ""), "log-err");
+            }
           }
+        } else if (status === "RUNNING" && ex.phase === "waiting-between-novels") {
+          log("Waiting " + (ex.adaptive_delay || 0) + " seconds before the next novel after source errors; downloaded chapters are retained.", "log-info");
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
           log("Retry " + (ex.retry || "") + " — waiting for the source to recover…", "log-info");
         } else if (status === "RUNNING" && ex.phase === "checking-updates") {
