@@ -28,4 +28,4 @@ def has_chapter_content(body: str) -> bool:
             heading.decompose()
         text = _normalized_text(soup.get_text(" ", strip=True))
         text = text.replace(notice, "").strip(". \t\r\n\u200b\ufeff")
-    return bool(text or soup.select_one("img[src]"))
+    return bool(text or any(str(image.get("src", "")).strip() for image in soup.select("img[src]")))

@@ -708,8 +708,9 @@ class CrawlerConfig(_Section):
     def runner_reset_interval(self) -> int:
         """Runner Reset Interval.
 
-        How often the crawl scheduler fully restarts itself, in seconds, to stay healthy. Default
-        is four hours (`14400`).
+        Legacy setting, retained for configuration compatibility. Active jobs are no longer
+        periodically cancelled: doing so left exports marked running without a worker.
+        Recovery happens at startup; explicit Stop cancels a job.
         """
         return self._get("runner_reset_interval", 4 * 3600)
 

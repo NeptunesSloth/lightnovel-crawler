@@ -34,6 +34,8 @@ class ChapterContentTests(unittest.TestCase):
     def test_empty_markup_is_not_content(self) -> None:
         for body in (
             "",
+            '<img src="">',
+            '<img src="   ">',
             " \n",
             "<div><p>&nbsp;\u200b</p><br></div>",
             "<!-- text --><script>text</script><style>text</style><template>text</template>",

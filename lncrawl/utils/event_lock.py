@@ -32,8 +32,11 @@ class EventLock(AbstractContextManager):
 
     @contextmanager
     def using(self, signal: Optional[Event] = None):
+        acquired = False
         try:
             self.acquire(signal or self._signal)
+            acquired = True
             yield self
         finally:
-            self.release()
+            if acquired:
+                self.release()

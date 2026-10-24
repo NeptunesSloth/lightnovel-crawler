@@ -19,6 +19,13 @@ from lncrawl.services.scheduler.handlers.export_source import _download_novel
 
 
 class ContentCacheTests(unittest.TestCase):
+    def test_corrupt_cached_text_is_a_repairable_gap(self) -> None:
+        for content in (b"\x28\xb5\x2f\xfd\x00broken", b"\xff\xfe\xff"):
+            self.files.save("chapter.zst", content)
+            self.assertFalse(self.files.has_chapter_content("chapter.zst"))
+            self.files.save_text("chapter.zst", "<p>Recovered chapter.</p>")
+            self.assertTrue(self.files.has_chapter_content("chapter.zst"))
+
     def test_overlapping_writes_do_not_share_or_delete_each_others_temporary_file(self) -> None:
         bodies = [f"<p>Complete chapter revision {i}: {'story text ' * 100}</p>" for i in range(40)]
         with ThreadPoolExecutor(max_workers=8) as writers:

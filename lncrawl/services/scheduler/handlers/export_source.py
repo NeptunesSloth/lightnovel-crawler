@@ -270,7 +270,8 @@ def _save_manifest(domain: str, novels: Dict[str, dict], tuned_rps: float = 0) -
     path = _manifest_path(domain)
     try:
         data = _load_manifest_file(domain)
-        data["novels"] = novels
+        previous = data.get("novels")
+        data["novels"] = {**(previous if isinstance(previous, dict) else {}), **novels}
         if tuned_rps > 0:
             data["tuned_rps"] = round(tuned_rps, 2)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -278,6 +279,23 @@ def _save_manifest(domain: str, novels: Dict[str, dict], tuned_rps: float = 0) -
             temporary.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
     except Exception as e:
         raise HandlerException(f"Could not save export checkpoint for {domain}: {e}") from e
+
+
+def _legacy_chapter_limit(novel_url: str, file: Path) -> Optional[int]:
+    """Recover scope for old EPUB checkpoints that did not record sample limits."""
+    novel = ctx.novels.find_by_url(novel_url)
+    if novel is None or not novel.chapter_count:
+        return None
+    try:
+        with zipfile.ZipFile(file) as book:
+            count = sum(
+                bool(re.search(r"(?:^|/)chapter_\d+\.xhtml$", name)) for name in book.namelist()
+            )
+        if count >= novel.chapter_count:
+            return 0
+        return count or None
+    except (OSError, zipfile.BadZipFile):
+        return None
 
 
 def _restore_archived_books(domain: str, manifest: Dict[str, dict]) -> None:
@@ -530,11 +548,21 @@ class ExportSourceHandler(BaseHandler):
             pending = []
             finished_urls = []
             for novel_url in urls:
-                rec = manifest.get(novel_url) if resume else None
-                done_file = rec.get("file") if isinstance(rec, dict) else None
+                saved_record = manifest.get(novel_url) if resume else None
+                rec = saved_record if isinstance(saved_record, dict) else {}
+                done_file = rec.get("file")
+                if done_file and "chapter_limit" not in rec and Path(done_file).is_file():
+                    recovered_limit = _legacy_chapter_limit(novel_url, Path(done_file))
+                    if recovered_limit is not None:
+                        rec["chapter_limit"] = recovered_limit
                 if (
                     done_file
+                    and "chapter_limit" in rec
                     and not (rec or {}).get("missing")
+                    and (
+                        not (rec or {}).get("chapter_limit")
+                        or (max_chapters > 0 and int((rec or {})["chapter_limit"]) >= max_chapters)
+                    )
                     and Path(done_file).suffix == f".{fmt.value}"
                     and Path(done_file).is_file()
                 ):
@@ -688,6 +716,7 @@ class ExportSourceHandler(BaseHandler):
                             "file": str(file),
                             "missing": result["missing"],
                             "format": fmt.value,
+                            "chapter_limit": max_chapters,
                         }
                         _save_manifest(domain, manifest)
                     if result["duplicate"]:
@@ -1049,6 +1078,6 @@ def _download_novel(
     file = None
     if artifact and artifact.is_available:
         file = ctx.files.resolve(artifact.output_file)
-        if seen_titles is not None:
+        if seen_titles is not None and missing == 0:
             seen_titles.add(norm)  # remember it so other sources skip this story
     return {"file": file, "missing": missing, "duplicate": False, "errors": errors}
