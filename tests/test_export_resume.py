@@ -8,11 +8,10 @@ from unittest.mock import MagicMock, patch
 import zipfile
 
 from lncrawl.exceptions import AbortedException
+from lncrawl.services.crawl_engine import CrawlStalledError, crawl_items
 from lncrawl.services.scheduler.handlers._base import HandlerException
 from lncrawl.services.scheduler.handlers.export_source import (
-    ExportStalledError,
     _build_index_html,
-    _drain,
     _restore_archived_books,
     _save_manifest,
 )
@@ -22,13 +21,10 @@ class ExportWatchdogTests(unittest.TestCase):
     def test_hung_download_stops_instead_of_replacing_worker_pools(self) -> None:
         future = Future()
         signal = Event()
-        crawler = SimpleNamespace(taskman=SimpleNamespace(init_executor=MagicMock()))
-        with patch("lncrawl.services.scheduler.handlers.export_source.STALL_TIMEOUT", 0.02):
-            with self.assertRaisesRegex(ExportStalledError, "downloaded chapters.*retained"):
-                _drain(crawler, [future], None, signal)
-        self.assertTrue(signal.is_set())
+        with self.assertRaisesRegex(CrawlStalledError, "No crawl worker completed"):
+            list(crawl_items(["chapter"], lambda _: future, signal, idle_timeout=0.02))
+        self.assertFalse(signal.is_set())
         self.assertTrue(future.cancelled())
-        crawler.taskman.init_executor.assert_not_called()
 
     def test_stop_is_checked_between_short_waits(self) -> None:
         future = Future()
@@ -39,11 +35,9 @@ class ExportWatchdogTests(unittest.TestCase):
             signal.set()
             return set(), pending
 
-        with patch(
-            "lncrawl.services.scheduler.handlers.export_source._wait_futures", side_effect=wait
-        ):
+        with patch("lncrawl.services.crawl_engine.wait", side_effect=wait):
             with self.assertRaises(AbortedException):
-                _drain(None, [future], None, signal)
+                list(crawl_items(["chapter"], lambda _: future, signal))
         self.assertTrue(future.cancelled())
 
     def test_successful_completions_are_counted(self) -> None:
@@ -51,8 +45,11 @@ class ExportWatchdogTests(unittest.TestCase):
         for future in futures:
             future.set_result("downloaded")
         progress = MagicMock()
-        self.assertEqual(_drain(None, futures, progress, Event()), 2)
-        progress.assert_called_once_with(2)
+        outcomes = list(
+            crawl_items(["0", "1"], lambda item: futures[int(item)], Event(), on_progress=progress)
+        )
+        self.assertEqual(len(outcomes), 2)
+        progress.assert_called_with(2)
 
 
 class ArchiveResumeTests(unittest.TestCase):

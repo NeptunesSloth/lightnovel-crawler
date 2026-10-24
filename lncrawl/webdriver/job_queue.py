@@ -1,6 +1,7 @@
 import atexit
 import logging
 from threading import Semaphore
+from time import monotonic
 from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
@@ -29,6 +30,17 @@ def __override_stop(browser: "Browser") -> None:
 
 
 def acquire_queue(timeout: Optional[float] = None) -> None:
+    from ..core.request_budget import current_budget
+
+    budget = current_budget()
+    if budget is not None:
+        end = monotonic() + timeout if timeout is not None else budget.deadline
+        while True:
+            remaining = min(budget.remaining(), end - monotonic())
+            if remaining <= 0:
+                raise TimeoutError("Failed to acquire browser semaphore")
+            if __semaphore.acquire(True, min(0.25, remaining)):
+                return
     acquired = __semaphore.acquire(True, timeout)
     if not acquired:
         raise TimeoutError("Failed to acquire browser semaphore")

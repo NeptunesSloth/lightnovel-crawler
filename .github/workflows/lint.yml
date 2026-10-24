@@ -17,6 +17,7 @@ on:
       - "sources/**/*.py"
       - "pyproject.toml"
       - "uv.lock"
+      - "tests/**"
       - ".github/workflows/lint.yml"
   pull_request:
     branches:
@@ -26,6 +27,7 @@ on:
       - "sources/**/*.py"
       - "pyproject.toml"
       - "uv.lock"
+      - "tests/**"
       - ".github/workflows/lint.yml"
 
 concurrency:
@@ -61,6 +63,9 @@ jobs:
           uv run ruff format --diff --check
           uv run ruff check
           git diff --name-only -- "*.py" | xargs -r pyright
+
+      - name: 🧪 Crawl regression tests
+        run: uv run --frozen python -m unittest discover -s tests -v
 
       - name: 🏗️ Build Wheel
         run: uv run python -m build --wheel --no-isolation
