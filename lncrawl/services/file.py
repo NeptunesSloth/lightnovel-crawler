@@ -8,6 +8,7 @@ from typing import Tuple, Union
 from ..context import ctx
 from ..exceptions import ServerErrors
 from ..utils.chapter_content import has_chapter_content
+from ..utils.file_tools import atomic_write
 from ..utils.text_tools import is_compressed, text_compress, text_decompress
 
 logger = logging.getLogger(__name__)
@@ -65,12 +66,8 @@ class FileService:
     def save(self, file_path: StrPath, content: bytes) -> Path:
         file = self.resolve(file_path)
         file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = file.with_suffix(f"{file.suffix}.tmp")
-        try:
-            tmp.write_bytes(content)
-            os.replace(tmp, file)
-        finally:
-            tmp.unlink(missing_ok=True)
+        with atomic_write(file) as temporary:
+            temporary.write(content)
         return file
 
     def load_text(

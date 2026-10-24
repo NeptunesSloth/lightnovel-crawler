@@ -29,6 +29,8 @@ these safeguards. It is a last-resort failure, not the normal retry mechanism.
 Valid cached text and images are reused across crawler updates. Empty or known
 NovelFire login-notice bodies are gaps. Partial and complete ebook results are
 checkpointed atomically, and the selected novel URLs are retained for replay.
+Chapter files use unique atomic temporary files so overlapping jobs cannot
+delete or overwrite one another's temporary write.
 Completed books can also be recovered from retained export ZIPs with matching
 complete index entries. A ZIP stored only on another machine cannot be reused
 until it is available to the app.
