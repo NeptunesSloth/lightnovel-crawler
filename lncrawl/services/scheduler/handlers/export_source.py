@@ -187,6 +187,22 @@ def _apply_rate(crawler, rps: float) -> None:
     )
 
 
+def _select_novels(urls: List[str], limit: Optional[int] = None) -> List[str]:
+    """The distinct novels to export, in discovery order, capped at ``limit``.
+
+    De-duplication has to happen before the cap rather than after it. A source
+    lists the same novel from more than one place — its search results and its
+    sitemap both turn it up — so trimming first and de-duplicating second hands
+    back fewer novels than were asked for, which is the one thing the limit is
+    there to control. Asking for 100 is meant to yield 100 novels, not 100
+    entries that collapse into 80.
+    """
+    unique = list(dict.fromkeys(url for url in urls if url))
+    if limit and limit > 0:
+        return unique[:limit]
+    return unique
+
+
 def _build_index_html(domain: str, entries: List[Tuple[str, str, str]]) -> str:
     """A self-contained clickable index of the novels bundled in the export zip.
 
@@ -438,8 +454,11 @@ class ExportSourceHandler(BaseHandler):
         try:
             selected = self.job.extra.get("urls")
             if selected:
-                # specific novels were picked — export exactly those
-                urls = list(selected)
+                # specific novels were picked — export exactly those, so the
+                # limit (a cap on how much of a catalogue to take) does not
+                # apply and must not silently drop any of them. This is also
+                # the resume path: the list persisted below was already capped.
+                urls = _select_novels(list(selected))
             else:
                 # Discovery runs before any download; drive the progress bar with
                 # seed progress so a slow/throttled source isn't a silent 0%.
@@ -482,13 +501,11 @@ class ExportSourceHandler(BaseHandler):
                         "the source is likely throttling or blocking automated requests. "
                         "Try a smaller limit, enable polite mode, or use a different source."
                     )
-                if limit:
-                    urls = urls[:limit]
+                urls = _select_novels(urls, limit)
             if not urls:
                 self._set_extra(exported=0, failed=0, total_novels=0)
                 return
 
-            urls = list(dict.fromkeys(urls))
             # Replay copies job extras: persist discovery once so Resume does
             # not enumerate a different catalogue or reset its selection.
             self._set_extra(urls=urls)
