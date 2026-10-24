@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,6 +19,17 @@ from lncrawl.services.scheduler.handlers.export_source import _download_novel
 
 
 class ContentCacheTests(unittest.TestCase):
+    def test_overlapping_writes_do_not_share_or_delete_each_others_temporary_file(self) -> None:
+        bodies = [f"<p>Complete chapter revision {i}: {'story text ' * 100}</p>" for i in range(40)]
+        with ThreadPoolExecutor(max_workers=8) as writers:
+            results = list(
+                writers.map(lambda body: self.files.save_text("chapter.zst", body), bodies)
+            )
+        self.assertEqual(len(results), 40)
+        self.assertIn(self.files.load_text("chapter.zst"), bodies)
+        self.assertTrue(self.files.has_chapter_content("chapter.zst"))
+        self.assertEqual(list(self.root.glob("*.tmp")), [])
+
     def setUp(self) -> None:
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)

@@ -9,6 +9,7 @@ from pydantic import HttpUrl
 
 from ..context import ctx
 from ..core import Chapter as CrawlerChapter, Crawler, Novel as CrawlerNovel, SearchResult
+from ..core.request_budget import request_budget
 from ..dao import Chapter, ChapterImage, Novel
 from ..exceptions import AbortedException, EmptyChapterError, ServerErrors
 from ..utils.chapter_content import has_chapter_content
@@ -45,6 +46,19 @@ class CrawlerService:
                     pending.append(chapter_id)
         return pending
 
+    def pending_image_ids(self, image_ids: List[str]) -> List[str]:
+        selected = list(dict.fromkeys(image_ids))
+        pending: List[str] = []
+        for offset in range(0, len(selected), 500):
+            batch = selected[offset : offset + 500]
+            images = {image.id: image for image in ctx.images.get_many(batch)}
+            pending.extend(
+                image_id
+                for image_id in batch
+                if image_id not in images or not images[image_id].is_available
+            )
+        return pending
+
     @contextmanager
     def prepare_crawler(
         self,
@@ -79,6 +93,17 @@ class CrawlerService:
                 crawler.close()
 
     def fetch_novel(
+        self,
+        user_id: str,
+        url: Union[str, HttpUrl],
+        signal: Optional[Event] = None,
+        custom: Optional[Crawler] = None,
+    ) -> Novel:
+        cancellation = signal or (custom.scraper.signal if custom is not None else None)
+        with request_budget(cancellation, seconds=180):
+            return self._fetch_novel(user_id, url, signal, custom)
+
+    def _fetch_novel(
         self,
         user_id: str,
         url: Union[str, HttpUrl],
@@ -171,6 +196,18 @@ class CrawlerService:
         custom: Optional[Crawler] = None,
         refresh: bool = False,
     ) -> Chapter:
+        cancellation = signal or (custom.scraper.signal if custom is not None else None)
+        with request_budget(cancellation):
+            return self._fetch_chapter(user_id, chapter_id, signal, custom, refresh)
+
+    def _fetch_chapter(
+        self,
+        user_id: str,
+        chapter_id: str,
+        signal: Optional[Event] = None,
+        custom: Optional[Crawler] = None,
+        refresh: bool = False,
+    ) -> Chapter:
         chapter = ctx.chapters.get(chapter_id)
         novel = ctx.novels.get(chapter.novel_id)
         try:
@@ -256,6 +293,18 @@ class CrawlerService:
             return chapter
 
     def fetch_image(
+        self,
+        user_id: str,
+        image_id: str,
+        signal: Optional[Event] = None,
+        custom: Optional[Crawler] = None,
+        refresh: bool = False,
+    ) -> ChapterImage:
+        cancellation = signal or (custom.scraper.signal if custom is not None else None)
+        with request_budget(cancellation):
+            return self._fetch_image(user_id, image_id, signal, custom, refresh)
+
+    def _fetch_image(
         self,
         user_id: str,
         image_id: str,
@@ -417,9 +466,13 @@ class CrawlerService:
                         break
                     hits = 0
                     try:
-                        for item in crawler.search(query):
-                            hits += 1
-                            remember(item)
+                        budget = 30.0
+                        if time_budget is not None:
+                            budget = min(budget, max(0.001, time_budget - (monotonic() - start)))
+                        with request_budget(signal, seconds=budget):
+                            for item in crawler.search(query):
+                                hits += 1
+                                remember(item)
                     except Exception as e:
                         logger.debug(f"Discover '{query}' on {domain} failed: {e}")
                     counts[query] = hits
@@ -485,7 +538,8 @@ class CrawlerService:
             if stopped():
                 return None
             try:
-                response = crawler.scraper.get(url)
+                with request_budget(crawler.scraper.signal, seconds=30):
+                    response = crawler.scraper.get(url)
                 if int(getattr(response, "status_code", 200) or 200) >= 400:
                     return None
                 data: bytes = response.content

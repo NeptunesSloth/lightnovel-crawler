@@ -36,6 +36,8 @@ from scraper import (
 from scraper.memory import Memory
 
 from ..context import ctx
+from ..exceptions import AbortedException
+from .request_budget import current_budget
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +239,37 @@ def new_scraper(
         parser=parser,
         state=shared_state(rate),
     )
+    original_fetch = scraper.fetch
+
+    def bounded_fetch(method, url, **kwargs):
+        budget = current_budget()
+        if budget is None:
+            return original_fetch(method, url, **kwargs)
+        remaining = budget.remaining()
+        previous_signal = kwargs.get("signal")
+
+        class RetrievalSignal:
+            def is_set(self) -> bool:
+                return budget.is_set() or bool(previous_signal and previous_signal.is_set())
+
+        kwargs["signal"] = RetrievalSignal()
+        configured = kwargs.get("timeout") or scraper.config.timeout
+        if isinstance(configured, (int, float)):
+            configured = (configured, configured)
+        connect, read = configured if isinstance(configured, tuple) else (10, 20)
+        kwargs["timeout"] = (
+            min(float(connect or 10), 10, remaining),
+            min(float(read or 20), 20, remaining),
+        )
+        try:
+            response = original_fetch(method, url, **kwargs)
+        except AbortedException:
+            budget.remaining()  # Distinguish a chapter timeout from job cancellation.
+            raise
+        budget.remaining()
+        return response
+
+    setattr(scraper, "fetch", bounded_fetch)
     if rate > 0 and origin:
         _hold_rate(scraper, origin, 1.0 / rate)
     return scraper

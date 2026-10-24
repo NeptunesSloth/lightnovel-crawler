@@ -1,4 +1,3 @@
-from concurrent.futures import FIRST_COMPLETED, wait as _wait_futures
 import hashlib
 from html import escape
 import json
@@ -15,11 +14,13 @@ from urllib.parse import quote, unquote
 import zipfile
 
 from bs4 import BeautifulSoup
+from typing_extensions import NotRequired
 
 from ....context import ctx
 from ....enums import JobType, OutputFormat
 from ....utils.file_tools import atomic_write, safe_filename
 from ....utils.notify import notify_finished
+from ...crawl_engine import CrawlStalledError, crawl_items
 from ._base import AbortedException, BaseHandler, HandlerException
 
 
@@ -27,6 +28,7 @@ class NovelResult(TypedDict):
     file: Optional[Path]  # the built ebook, or None if it couldn't be made
     missing: int  # chapters still not downloaded
     duplicate: bool  # already present (same title) from another source
+    errors: NotRequired[List[str]]  # bounded samples used for pacing and diagnosis
 
 
 # How many extra passes to make over novels that failed or came out incomplete,
@@ -77,13 +79,10 @@ RPS_MIN = 0.2  # slowest auto-tuned rate (1 request / 5s)
 RPS_MAX = 5.0  # fastest auto-tuned rate
 RPS_RAISE_AFTER = 3  # consecutive clean novels before nudging the rate up
 
-# Per-novel download watchdog. A single hung request through the single worker can
-# otherwise stall a novel — and the whole run — indefinitely. If nothing completes
-# within STALL_TIMEOUT, the worker is assumed stuck (the pool is refreshed); if too
-# many chapter requests fail back-to-back, the source is blocking and the novel is
-# abandoned (it stays partial and is retried/resumed later).
+# Defensive idle guard for failures outside normal per-item request budgets.
+# The engine drains only a bounded number of requests and stops scheduling a
+# novel after repeated failures; partial content remains resumable.
 STALL_TIMEOUT = 120.0  # seconds with no completion before giving up on a novel
-MAX_CONSECUTIVE_FAILS = 10  # back-to-back request failures before abandoning a novel
 
 
 class ExportStalledError(HandlerException):
@@ -202,57 +201,6 @@ def _select_novels(urls: List[str], limit: Optional[int] = None) -> List[str]:
     if limit and limit > 0:
         return unique[:limit]
     return unique
-
-
-def _drain(crawler, futures, on_tick, signal) -> int:
-    """Resolve download futures with a stall watchdog.
-
-    Returns how many futures were processed. Guards against the two ways a bulk
-    run gets stuck on one novel: a hung request (nothing completes within
-    ``STALL_TIMEOUT`` → the export stops with its checkpoints retained) and a source
-    refusing request after request (``MAX_CONSECUTIVE_FAILS`` back-to-back
-    failures → the rest is abandoned). Remaining work is cancelled; the chapters
-    that did download are kept (the novel becomes partial and is retried/resumed).
-    """
-    pending = set(futures)
-    done_count = 0
-    consecutive_fails = 0
-    deadline = monotonic() + STALL_TIMEOUT
-    while pending:
-        if signal.is_set():
-            for f in pending:
-                f.cancel()
-            raise AbortedException()
-        done, pending = _wait_futures(
-            pending,
-            timeout=min(1.0, max(0.001, deadline - monotonic())),
-            return_when=FIRST_COMPLETED,
-        )
-        if not done:
-            if monotonic() < deadline:
-                continue
-            for f in pending:
-                f.cancel()
-            signal.set()
-            raise ExportStalledError(
-                f"No download completed for {STALL_TIMEOUT:g} seconds. Export stopped; "
-                "downloaded chapters and completed books are retained. Resume to retry the gaps."
-            )
-        deadline = monotonic() + STALL_TIMEOUT
-        for f in done:
-            done_count += 1
-            try:
-                f.result()
-                consecutive_fails = 0
-            except Exception:
-                consecutive_fails += 1
-        if on_tick:
-            on_tick(done_count)
-        if consecutive_fails >= MAX_CONSECUTIVE_FAILS:
-            for f in pending:
-                f.cancel()
-            break
-    return done_count
 
 
 def _build_index_html(domain: str, entries: List[Tuple[str, str, str]]) -> str:
@@ -763,7 +711,10 @@ class ExportSourceHandler(BaseHandler):
                             # a partial novel has no exception reason; always refresh
                             # it with the latest missing count so retries that fill in
                             # chapters report the current number, not a stale one
+                            details = result.get("errors") or []
                             last_error[novel_url] = f"{result['missing']} chapter(s) still missing"
+                            if details:
+                                last_error[novel_url] += "; " + "; ".join(details)
                             # stop retrying once a pass makes no progress (the missing
                             # chapters are unreachable, not just throttled) — keep the
                             # partial and move on instead of blocking the batch
@@ -1017,15 +968,12 @@ def _download_novel(
     # download the chapters (fetch_chapter skips ones already fetched), reporting
     # progress as each one completes
     pending_chapters = ctx.crawler.pending_chapter_ids(chapter_ids)
-    chapter_futures = [
-        crawler.taskman.submit_task(ctx.crawler.fetch_chapter, user_id, cid, custom=crawler)
-        for cid in pending_chapters
-    ]
     c_total = len(chapter_ids)
-    c_cached = c_total - len(chapter_futures)
+    c_cached = c_total - len(pending_chapters)
     if on_novel:
         on_novel(novel.title, c_cached, c_total)
     last_emit = [monotonic()]
+    errors: List[str] = []
 
     def _tick(done: int) -> None:
         # report at least every ~2s (and at the end) so the UI reflects real
@@ -1035,17 +983,49 @@ def _download_novel(
             on_novel(novel.title, done + c_cached, c_total)
 
     # drain with the stall watchdog so one hung request can't freeze the run
-    _drain(crawler, chapter_futures, _tick, signal)
+    try:
+        for outcome in crawl_items(
+            pending_chapters,
+            lambda cid: crawler.taskman.submit_task(
+                ctx.crawler.fetch_chapter,
+                user_id,
+                cid,
+                signal=signal,
+                custom=crawler,
+            ),
+            signal,
+            max_inflight=EXPORT_WORKERS,
+            idle_timeout=STALL_TIMEOUT,
+            on_progress=_tick,
+        ):
+            if outcome.error is not None and len(errors) < 3:
+                errors.append(f"{type(outcome.error).__name__}: {outcome.error}"[:300])
+    except CrawlStalledError as error:
+        signal.set()
+        raise ExportStalledError(str(error)) from error
 
     # download chapter images in one batch (covers manga pages and inline art);
     # one query for the whole novel instead of one per chapter
     image_ids = ctx.images.list_ids(novel_id=novel.id)
     if image_ids:
-        image_futures = [
-            crawler.taskman.submit_task(ctx.crawler.fetch_image, user_id, iid, custom=crawler)
-            for iid in sorted(set(image_ids))
-        ]
-        _drain(crawler, image_futures, None, signal)
+        try:
+            for _ in crawl_items(
+                ctx.crawler.pending_image_ids(image_ids),
+                lambda image_id: crawler.taskman.submit_task(
+                    ctx.crawler.fetch_image,
+                    user_id,
+                    image_id,
+                    signal=signal,
+                    custom=crawler,
+                ),
+                signal,
+                max_inflight=EXPORT_WORKERS,
+                idle_timeout=STALL_TIMEOUT,
+            ):
+                pass
+        except CrawlStalledError as error:
+            signal.set()
+            raise ExportStalledError(str(error)) from error
 
     # how many of the targeted chapters are still not downloaded (drives retries)
     # Old completion flags can outlive blank or missing content files. Inspect
@@ -1071,4 +1051,4 @@ def _download_novel(
         file = ctx.files.resolve(artifact.output_file)
         if seen_titles is not None:
             seen_titles.add(norm)  # remember it so other sources skip this story
-    return {"file": file, "missing": missing, "duplicate": False}
+    return {"file": file, "missing": missing, "duplicate": False, "errors": errors}

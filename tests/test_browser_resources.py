@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
+from lncrawl.core.request_budget import CrawlTimeoutError, request_budget
 from lncrawl.exceptions import LNException
 from lncrawl.utils.async_loop import run_async
 from lncrawl.webdriver import job_queue
@@ -31,6 +32,12 @@ local = _load_browser_factory()
 
 
 class BrowserSlotTests(unittest.TestCase):
+    def test_wait_for_busy_browser_pool_obeys_chapter_budget(self) -> None:
+        semaphore = BoundedSemaphore(0)
+        with patch.object(job_queue, "__semaphore", semaphore), request_budget(Event(), 0.01):
+            with self.assertRaises(CrawlTimeoutError):
+                job_queue.acquire_queue(timeout=120)
+
     def test_missing_executable_does_not_consume_browser_slot(self) -> None:
         semaphore = BoundedSemaphore(1)
         with (

@@ -8,6 +8,7 @@ import typer
 
 from ...context import ctx
 from ...enums import OutputFormat
+from ...services.crawl_engine import crawl_items
 from .app import app
 
 logger = logging.getLogger(__name__)
@@ -150,38 +151,48 @@ def crawl(
 
     # download chapters
     pending_chapters = ctx.crawler.pending_chapter_ids(chapters)
-    chapter_futures = [
-        crawler.taskman.submit_task(
-            ctx.crawler.fetch_chapter,
-            user.id,
-            chapter_id,
-            custom=crawler,
-        )
-        for chapter_id in pending_chapters
-    ]
     downloaded_chapter_ids = list(set(chapters) - set(pending_chapters))
-    for chapter in crawler.taskman.resolve(chapter_futures, desc="Chapters", unit=" c"):
-        if not chapter:
-            continue
-        downloaded_chapter_ids.append(chapter.id)
+    with crawler.taskman.progress_bar(
+        total=len(pending_chapters), desc="Chapters", unit=" c"
+    ) as bar:
+        for outcome in crawl_items(
+            pending_chapters,
+            lambda chapter_id: crawler.taskman.submit_task(
+                ctx.crawler.fetch_chapter,
+                user.id,
+                chapter_id,
+                signal=crawler.scraper.signal,
+                custom=crawler,
+            ),
+            crawler.scraper.signal,
+            max_inflight=crawler.taskman.workers,
+        ):
+            bar.update()
+            if outcome.value is not None:
+                downloaded_chapter_ids.append(outcome.value.id)
+            elif outcome.error is not None:
+                logger.warning(f"Chapter {outcome.item_id} failed: {outcome.error}")
 
     chapter_image_ids = ctx.images.list_ids(novel_id=novel.id, chapter_ids=downloaded_chapter_ids)
 
     # download chapter images
-    image_futures = [
-        crawler.taskman.submit_task(
-            ctx.crawler.fetch_image,
-            user.id,
-            image_id,
-            custom=crawler,
-        )
-        for image_id in sorted(set(chapter_image_ids))
-    ]
-    crawler.taskman.resolve_futures(
-        image_futures,
-        desc="Images",
-        unit=" img",
-    )
+    pending_images = ctx.crawler.pending_image_ids(chapter_image_ids)
+    with crawler.taskman.progress_bar(total=len(pending_images), desc="Images", unit=" img") as bar:
+        for outcome in crawl_items(
+            pending_images,
+            lambda image_id: crawler.taskman.submit_task(
+                ctx.crawler.fetch_image,
+                user.id,
+                image_id,
+                signal=crawler.scraper.signal,
+                custom=crawler,
+            ),
+            crawler.scraper.signal,
+            max_inflight=crawler.taskman.workers,
+        ):
+            bar.update()
+            if outcome.error is not None:
+                logger.warning(f"Image {outcome.item_id} failed: {outcome.error}")
 
     # create artifacts
     format_set = set(formats)
