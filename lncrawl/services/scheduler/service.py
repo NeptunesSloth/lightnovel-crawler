@@ -23,11 +23,6 @@ def run_artifact_maker(signal: Event):
     JobRunner.run(signal, True)
 
 
-def reset_runner(signal: Event):
-    JobRunner.cancel_all()
-    logger.info("Runner reset")
-
-
 class JobScheduler:
     def __init__(self) -> None:
         self._threads: List[Thread] = []
@@ -70,7 +65,6 @@ class JobScheduler:
             self._thread(run_jobs, ctx.config.crawler.runner_cooldown)
         self._thread(run_scrubber, ctx.config.crawler.scrubber_cooldown)
         self._thread(run_artifact_maker, ctx.config.crawler.runner_cooldown)
-        self._thread(reset_runner, ctx.config.crawler.runner_reset_interval)
         logger.info("Scheduler started")
 
     def stop(self):

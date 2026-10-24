@@ -56,7 +56,7 @@ class NovelRepairTests(unittest.TestCase):
         self.assertEqual(job.extra["urls"], ["https://novelfire.net/book/example"])
         self.source.taskman.init_executor.assert_called_once()
 
-    def export_novel(self, discover: bool = False) -> Job:
+    def export_novel(self, discover: bool = False, **options) -> Job:
         with self.ctx.db.session() as session:
             novel = session.get(Novel, "novel")
             novel.synopsis = "A known novel."
@@ -77,6 +77,7 @@ class NovelRepairTests(unittest.TestCase):
         )
         url = "https://novelfire.net/book/example"
         data = {"domain": "novelfire.net", "retries": 0, "dedupe": False, "auto_tune": False}
+        data.update(options)
         if not discover:
             data["urls"] = [url]
         job = self.ctx.jobs._create(self.user, JobType.EXPORT_SOURCE, data)
@@ -107,6 +108,59 @@ class NovelRepairTests(unittest.TestCase):
         self.assertEqual(self.downloads, [])
         with ZipFile(self.ctx.files.resolve(resumed.extra["export_file"])) as archive:
             self.assertIn("Test Novel.epub", archive.namelist())
+
+    def test_partial_book_is_retried_when_deduplication_is_enabled(self) -> None:
+        download = self.source.download_chapter
+        attempts = []
+
+        def fail_once(chapter):
+            attempts.append(chapter.id)
+            if chapter.id == 2 and attempts.count(2) == 1:
+                raise ValueError("Temporary source failure")
+            download(chapter)
+
+        self.source.download_chapter = fail_once
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        with patch(f"{module}.RETRY_BACKOFF", 0), patch(f"{module}.ADAPTIVE_STEP", 0):
+            job = self.export_novel(dedupe=True, retries=1)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["complete"], 1)
+        self.assertEqual(job.extra["incomplete"], 0)
+        self.assertEqual(attempts.count(2), 2)
+
+    def test_sample_export_does_not_satisfy_later_full_export(self) -> None:
+        sample = self.export_novel(max_chapters=2)
+        self.assertEqual(sample.status, JobStatus.SUCCESS, sample.error)
+        self.downloads.clear()
+        complete = self.export_novel()
+        self.assertEqual(complete.status, JobStatus.SUCCESS, complete.error)
+        self.assertEqual(complete.extra["complete"], 1)
+        self.assertCountEqual(self.downloads, [3, 4])
+        self.assertTrue(self.ctx.chapters.completeness("novel").complete)
+
+    def test_completed_reader_job_does_not_prevent_fetching_a_gap(self) -> None:
+        old = self.ctx.jobs.fetch_chapter(self.user, "chapter-3")
+        with self.ctx.db.session() as session:
+            self.ctx.jobs._success(session, old.id)
+            session.commit()
+        self.ctx.history = SimpleNamespace(add=MagicMock())
+        response = self.ctx.chapters.read(self.user, "chapter-3", auto_fetch=True)
+        self.assertIsNone(response.content)
+        self.assertIsNotNone(response.job)
+        self.assertNotEqual(response.job.id, old.id)
+        self.assertFalse(response.job.is_done)
+
+    def test_legacy_sample_checkpoint_is_not_mistaken_for_complete_book(self) -> None:
+        self.export_novel(max_chapters=2)
+        file = self.ctx.files.resolve("exports/manifest/novelfire.net.json")
+        data = json.loads(file.read_text())
+        data["novels"]["https://novelfire.net/book/example"].pop("chapter_limit")
+        file.write_text(json.dumps(data))
+        self.downloads.clear()
+        result = self.export_novel()
+        self.assertEqual(result.status, JobStatus.SUCCESS, result.error)
+        self.assertCountEqual(self.downloads, [3, 4])
+        self.assertTrue(self.ctx.chapters.completeness("novel").complete)
 
     def test_partial_export_is_checkpointed_and_resumed_without_redownloading_good_chapters(
         self,

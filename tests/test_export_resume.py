@@ -12,6 +12,7 @@ from lncrawl.services.crawl_engine import CrawlStalledError, crawl_items
 from lncrawl.services.scheduler.handlers._base import HandlerException
 from lncrawl.services.scheduler.handlers.export_source import (
     _build_index_html,
+    _load_manifest,
     _restore_archived_books,
     _save_manifest,
 )
@@ -53,6 +54,17 @@ class ExportWatchdogTests(unittest.TestCase):
 
 
 class ArchiveResumeTests(unittest.TestCase):
+    def test_new_export_preserves_other_novels_in_resume_history(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            ctx = SimpleNamespace(files=SimpleNamespace(resolve=lambda path: root / path))
+            first = {"https://novelfire.net/book/first": {"file": "first.epub", "missing": 0}}
+            second = {"https://novelfire.net/book/second": {"file": "second.epub", "missing": 0}}
+            with patch("lncrawl.services.scheduler.handlers.export_source.ctx", ctx):
+                _save_manifest("novelfire.net", first)
+                _save_manifest("novelfire.net", second)
+                self.assertEqual(_load_manifest("novelfire.net"), {**first, **second})
+
     def test_checkpoint_write_failure_is_reported_instead_of_ignored(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

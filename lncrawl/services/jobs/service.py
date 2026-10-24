@@ -139,6 +139,10 @@ class JobService:
                 .where(
                     Job.user_id == user_id,
                     Job.type == JobType.CHAPTER,
+                    sq.col(Job.is_done).is_(False),
+                    sq.col(Job.status).in_(
+                        [JobStatus.PENDING, JobStatus.RUNNING, JobStatus.PAUSED]
+                    ),
                     sq.col(Job.parent_job_id).is_(None),
                     Job.extra["chapter_id"].as_string() == chapter_id,
                 )
@@ -154,6 +158,10 @@ class JobService:
                 .where(
                     Job.user_id == user_id,
                     Job.type == JobType.CHAPTER_TRANSLATION,
+                    sq.col(Job.is_done).is_(False),
+                    sq.col(Job.status).in_(
+                        [JobStatus.PENDING, JobStatus.RUNNING, JobStatus.PAUSED]
+                    ),
                     sq.col(Job.parent_job_id).is_(None),
                     Job.extra["chapter_id"].as_string() == chapter_id,
                     Job.extra["language"].as_string() == language,
@@ -981,9 +989,13 @@ class JobService:
         artifact: Optional[bool] = None,
         skip_job_ids: Iterable[str] = [],
         skip_user_ids: Iterable[str] = [],
+        skip_exports: bool = False,
     ) -> Optional[Job]:
         with ctx.db.session() as sess:
             stmt = sq.select(Job)
+
+            if skip_exports:
+                stmt = stmt.where(Job.type != JobType.EXPORT_SOURCE)
 
             job_alias = aliased(Job)
             dep_is_done = (

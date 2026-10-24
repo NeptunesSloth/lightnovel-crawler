@@ -26,6 +26,10 @@ these safeguards. It is a last-resort failure, not the normal retry mechanism.
 
 ## Resume and output
 
+The scheduler does not periodically cancel active workers. On startup it requeues
+jobs left running by a previous process. Cancellation retains the worker's export
+lease until that worker actually exits, so Resume cannot overlap a stopping export.
+
 Valid cached text and images are reused across crawler updates. Empty or known
 NovelFire login-notice bodies are gaps. Partial and complete ebook results are
 checkpointed atomically, and the selected novel URLs are retained for replay.
@@ -38,6 +42,10 @@ until it is available to the app.
 Explicit repair rebuilds an EPUB only after all known chapter text is present.
 Bulk exports may include partial books; the ZIP index labels them incomplete.
 Failed chapters remain eligible for retry and existing valid files are preserved.
+Incomplete books do not enter the completed-title de-duplication set. Checkpoint
+writes preserve other novels' export history, and a chapter-limited sample cannot
+satisfy a later full export. Corrupt compressed/encoded chapter files are repairable
+gaps; completed reader jobs do not prevent creating a new fetch job for a gap.
 
 ## Validation
 

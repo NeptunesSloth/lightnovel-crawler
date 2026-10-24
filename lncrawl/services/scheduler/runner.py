@@ -3,6 +3,7 @@ from threading import Event
 from typing import Dict
 
 from ...context import ctx
+from ...enums import JobType
 from ...utils.event_lock import EventLock
 from .handlers import run_job
 
@@ -11,6 +12,7 @@ logger = logging.getLogger(__name__)
 _lock = EventLock()
 _queue: Dict[str, Event] = {}
 _users: Dict[str, str] = {}
+_types: Dict[str, JobType] = {}
 
 
 class JobRunner:
@@ -22,12 +24,14 @@ class JobRunner:
                 artifact,
                 skip_job_ids=_queue.keys(),
                 skip_user_ids=_users.values(),
+                skip_exports=JobType.EXPORT_SOURCE in _types.values(),
             )
             # if no such job, get next pending job for any existing users
             if not job:
                 job = ctx.jobs._pending(
                     artifact,
                     skip_job_ids=_queue.keys(),
+                    skip_exports=JobType.EXPORT_SOURCE in _types.values(),
                 )
             if not job:
                 return  # no pending job
@@ -42,6 +46,7 @@ class JobRunner:
             job_signal = Event()
             _queue[job.id] = job_signal
             _users[job.id] = job.user_id
+            _types[job.id] = job.type
 
         # process the current job
         try:
@@ -49,17 +54,18 @@ class JobRunner:
         finally:
             # release from queue
             with _lock:
-                if job.id in _queue:
+                if _queue.get(job.id) is job_signal:
                     _queue.pop(job.id).set()
-                    _users.pop(job.id)
+                    _users.pop(job.id, None)
+                    _types.pop(job.id, None)
 
     @staticmethod
     def cancel(job_id: str, cancel_children: bool = True):
-        # release from queue and set the signal
+        # Keep the lease until the worker exits. Cancellation is a request, not
+        # evidence that its network/browser operations have already stopped.
         with _lock:
             if job_id in _queue:
-                _queue.pop(job_id).set()
-                _users.pop(job_id)
+                _queue[job_id].set()
 
         # recursively cancel all children as well
         if cancel_children:
@@ -68,9 +74,7 @@ class JobRunner:
 
     @staticmethod
     def cancel_all():
-        # release everything from the queue and set all signals
+        # The owning workers release their leases in finally.
         with _lock:
             for signal in _queue.values():
                 signal.set()
-            _queue.clear()
-            _users.clear()

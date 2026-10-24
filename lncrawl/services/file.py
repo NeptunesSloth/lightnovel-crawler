@@ -5,6 +5,8 @@ from pathlib import Path
 import stat
 from typing import Tuple, Union
 
+from zstd import Error as ZstdError
+
 from ..context import ctx
 from ..exceptions import ServerErrors
 from ..utils.chapter_content import has_chapter_content
@@ -21,9 +23,12 @@ def _chapter_content_available(file: Path, signature: Tuple[int, ...]) -> bool:
     # Cache only the verdict, not chapter text. The stat signature changes on
     # writes/replacements, including edits made outside this process.
     data = file.read_bytes()
-    if is_compressed(data):
-        data = text_decompress(data)
-    return has_chapter_content(data.decode("utf-8"))
+    try:
+        if is_compressed(data):
+            data = text_decompress(data)
+        return has_chapter_content(data.decode("utf-8"))
+    except (UnicodeError, ZstdError):
+        return False
 
 
 class FileService:
