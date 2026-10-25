@@ -32,6 +32,7 @@ from scraper import (
     Scraper,
     ScraperConfig,
     SharedState,
+    diagnosis,
 )
 from scraper.memory import Memory
 
@@ -57,6 +58,22 @@ DEFAULT_EXIT_KIND = ExitKind.DATACENTER
 # backoff multiplies the interval in force: from a literal zero there is nothing
 # to grow, and a site that starts pushing back could never be backed away from.
 PACING_FLOOR = 0.05
+
+# A JavaScript-only redirect page names its destination in a JS string, and pages
+# that build that string with a JSON encoder escape the slashes: "https:\/\/host\/x".
+# lncrawl-scraper 1.9.0 follows the text as written, so urljoin reads it as a path on
+# the redirecting host and the hop lands on a 404. NovelFire now sends every chapter
+# through such a page, which left each one empty. Decoding the escapes first gives
+# the address the page actually sends a browser to.
+_find_js_redirect = diagnosis.js_redirect
+
+
+def _js_redirect(body: str) -> str:
+    # ponytail: only JSON's escaped slash; decode \uXXXX too if a site ever sends it.
+    return _find_js_redirect(body).replace("\\/", "/")
+
+
+diagnosis.js_redirect = _js_redirect
 
 _lock = threading.RLock()
 _memory: Optional[Memory] = None

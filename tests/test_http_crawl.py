@@ -53,8 +53,9 @@ class HttpCrawlTests(unittest.TestCase):
         self.slow = set()
         self.notices = set()
         self.fail_once = set()
+        self.js_redirected = set()
         counts, slow, notices = self.counts, self.slow, self.notices
-        fail_once = self.fail_once
+        fail_once, js_redirected = self.fail_once, self.js_redirected
         cover = BytesIO()
         Image.new("RGB", (2, 2), "blue").save(cover, format="JPEG")
         cover_bytes = cover.getvalue()
@@ -64,7 +65,31 @@ class HttpCrawlTests(unittest.TestCase):
                 counts[self.path] += 1
                 if self.path in slow:
                     sleep(1.2)
-                serial = self.path.rsplit("-", 1)[-1]
+                if self.path in js_redirected:
+                    # NovelFire's chapter pages answer with a redirect to a "Loading..."
+                    # page whose script sends the reader on to a mirror holding the text.
+                    self.send_response(302)
+                    self.send_header("Location", f"/loading{self.path}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if self.path.startswith("/loading/"):
+                    origin = f"http://127.0.0.1:{self.server.server_port}"
+                    mirror = f"{origin}/mirror{self.path.removeprefix('/loading')}?noti=1"
+                    # The page writes the address as a JSON string, slashes escaped.
+                    escaped = mirror.replace("/", "\\/")
+                    body = (
+                        "<!DOCTYPE html><html><head><title>Loading...</title></head><body>"
+                        '<div class="text">Loading...</div><script>setTimeout(() => {'
+                        f' window.location.href = "{escaped}"; }}, 5);</script></body></html>'
+                    ).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                serial = self.path.split("?", 1)[0].rsplit("-", 1)[-1]
                 body = (
                     f'<html><body><div id="content"><div class="chapter-text">'
                     f"<h2>Chapter {serial}: A title</h2><p>Real story text for chapter {serial}.</p>"
@@ -345,6 +370,19 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertIn(
             "Real story text for chapter 2.", self.ctx.files.load_text(chapter.content_file)
         )
+
+    def test_chapter_behind_javascript_redirect_with_escaped_url_is_downloaded(self) -> None:
+        self.js_redirected.update(f"/chapter-{serial}" for serial in range(1, 5))
+        job = self.export(seconds=5)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["complete"], 1)
+        for serial in range(1, 5):
+            self.assertEqual(self.counts[f"/mirror/chapter-{serial}?noti=1"], 1)
+            chapter = self.ctx.chapters.get(f"chapter-{serial}")
+            self.assertIn(
+                f"Real story text for chapter {serial}.",
+                self.ctx.files.load_text(chapter.content_file),
+            )
 
     def test_transient_http_failure_is_retried_before_accepting_chapter(self) -> None:
         self.fail_once.add("/chapter-2")
