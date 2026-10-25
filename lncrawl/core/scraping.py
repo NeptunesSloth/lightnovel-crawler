@@ -21,7 +21,6 @@ into a block.
 """
 
 import logging
-import re
 import threading
 from typing import Dict, List, Optional
 
@@ -66,17 +65,12 @@ PACING_FLOOR = 0.05
 # the redirecting host and the hop lands on a 404. NovelFire now sends every chapter
 # through such a page, which left each one empty. Decoding the escapes first gives
 # the address the page actually sends a browser to.
-_JS_ESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(.))", re.DOTALL)
 _find_js_redirect = diagnosis.js_redirect
 
 
-def _unescape_js(match: "re.Match[str]") -> str:
-    code = match.group(1) or match.group(2)
-    return chr(int(code, 16)) if code else match.group(3)
-
-
 def _js_redirect(body: str) -> str:
-    return _JS_ESCAPE.sub(_unescape_js, _find_js_redirect(body))
+    # ponytail: only JSON's escaped slash; decode \uXXXX too if a site ever sends it.
+    return _find_js_redirect(body).replace("\\/", "/")
 
 
 diagnosis.js_redirect = _js_redirect
