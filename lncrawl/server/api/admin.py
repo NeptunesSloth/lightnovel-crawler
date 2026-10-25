@@ -1,5 +1,6 @@
 from pathlib import Path
 import sqlite3
+from tempfile import NamedTemporaryFile
 import time
 from typing import Any, Dict, List, Literal, Union
 import zipfile
@@ -7,6 +8,7 @@ import zipfile
 from fastapi import APIRouter, Body, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.engine import make_url
+from starlette.background import BackgroundTask
 
 from ...context import ctx
 from ...exceptions import ServerErrors
@@ -23,6 +25,27 @@ from ..models.activity import (
 
 # The root router
 router = APIRouter()
+
+
+@router.get("/library/export", summary="Download all saved EPUBs with an offline index")
+def export_library() -> FileResponse:
+    from ...services.library_export import build_library_zip
+
+    with NamedTemporaryFile(suffix=".zip", delete=False) as temp:
+        output = Path(temp.name)
+    try:
+        count = build_library_zip(ctx.files.resolve("."), output)
+        if not count:
+            raise ServerErrors.no_epub_file
+        return FileResponse(
+            output,
+            media_type="application/zip",
+            filename="library.zip",
+            background=BackgroundTask(output.unlink, missing_ok=True),
+        )
+    except BaseException:
+        output.unlink(missing_ok=True)
+        raise
 
 
 @router.post("/backup", summary="Create a full backup zip (database + downloaded library)")

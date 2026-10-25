@@ -259,6 +259,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <summary>My exports (library)</summary>
     <p class="hint">Past source exports on this machine. Click to re-download the ZIP.</p>
     <div id="library-list"><span class="muted">Sign in to see your exports.</span></div>
+    <button id="library-export">Export entire EPUB library as ZIP</button>
+    <p class="hint">Includes saved EPUBs and books inside past export ZIPs. Extract the ZIP and open index.html to browse.</p>
     <button id="library-refresh" class="secondary">Refresh</button>
     </details>
   </div>
@@ -937,6 +939,25 @@ _TOOLS_HTML = """<!DOCTYPE html>
       })
       .catch(function () { box.innerHTML = "<span class='muted'>Couldn't load exports.</span>"; });
   }
+  document.getElementById("library-export").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var btn = this;
+    busy(btn, true);
+    log("Packing all saved EPUBs and an offline index…", "log-info");
+    fetch("/api/admin/library/export", { headers: { "Authorization": "Bearer " + token() } })
+      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.blob(); })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement("a");
+        link.href = url; link.download = "library.zip";
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+        log("Library ZIP saved. Extract it and open index.html to browse.", "log-ok");
+      })
+      .catch(function (error) { log("Library export failed: " + error.message, "log-err"); })
+      .finally(function () { busy(btn, false); });
+  });
+
   document.getElementById("library-refresh").addEventListener("click", function () {
     if (!requireAuth()) return;
     loadLibrary(window._lncrawlUserId);
