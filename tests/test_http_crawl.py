@@ -323,6 +323,18 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(resumed.extra["resumed"], 1)
         self.assertEqual(self.counts, previous_requests)
 
+    def test_all_chapter_downloads_fail_without_creating_empty_ebook(self) -> None:
+        with (
+            patch.object(
+                self.ctx.crawler, "fetch_chapter", side_effect=RuntimeError("source blocked")
+            ),
+            patch.object(self.ctx.binder, "make_artifact") as binder,
+        ):
+            job = self.export()
+        self.assertEqual(job.status, JobStatus.FAILED)
+        binder.assert_not_called()
+        self.assertFalse(list((self.root / "novels").rglob("*.epub")))
+
     def test_real_http_login_notice_is_retried_until_actual_story_is_saved(self) -> None:
         self.notices.add("/chapter-2")
         job = self.export(seconds=5)

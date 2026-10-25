@@ -1060,7 +1060,13 @@ def _download_novel(
     # Old completion flags can outlive blank or missing content files. Inspect
     # the targeted files so those gaps stay eligible for the next retry pass.
     downloaded = ctx.chapters.get_many(chapter_ids)
-    missing = len(chapter_ids) - sum(chapter.is_available for chapter in downloaded)
+    available = sum(chapter.is_available for chapter in downloaded)
+    missing = len(chapter_ids) - available
+    if not available:
+        reason = "No chapter text was downloaded; refusing to export an empty ebook"
+        if errors:
+            reason += "; " + "; ".join(errors)
+        raise HandlerException(reason)
 
     # build the ebook. Formats derived from epub need an epub built first.
     epub_artifact = None
