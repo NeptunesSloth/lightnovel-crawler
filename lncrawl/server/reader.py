@@ -586,6 +586,8 @@ _READER_HTML = """<!DOCTYPE html>
     var btn = this;
     btn.disabled = true;
     var i = 0;
+    var failed = 0;
+    var reason = "";
     (function step() {
       if (i >= ids.length) {
         btn.disabled = false;
@@ -593,10 +595,16 @@ _READER_HTML = """<!DOCTYPE html>
         els["lib-select"].textContent = "☑ Select";
         updateDelBtn();
         loadLibrary(els["search"].value.trim());
+        // a refusal must not look like nothing happened
+        if (failed) alert(failed + " of " + ids.length + " novel(s) could not be deleted: " + reason);
         return;
       }
       var id = ids[i++];
-      api("/novel/" + id, { method: "DELETE" }).then(step).catch(step);
+      api("/novel/" + id, { method: "DELETE" }).then(step).catch(function (e) {
+        failed += 1;
+        reason = reason || e.message;
+        step();
+      });
     })();
   });
 

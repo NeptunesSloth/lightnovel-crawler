@@ -5,7 +5,17 @@ from typing import Any, Dict, List, Optional
 import sqlmodel as sq
 
 from ..context import ctx
-from ..dao import LanguageCode, Novel, NovelTranslation
+from ..dao import (
+    Artifact,
+    LanguageCode,
+    Library,
+    LibraryNovel,
+    Novel,
+    NovelTranslation,
+    ReadHistory,
+    User,
+    UserRole,
+)
 from ..exceptions import ServerErrors
 from ..server.models import Paginated
 from ..utils.url_tools import extract_host
@@ -131,6 +141,39 @@ class NovelService:
                 )
                 .limit(1)
             ).first()
+
+    def can_delete(self, novel_id: str, user: User) -> bool:
+        """Whether `user` may remove this novel from the library.
+
+        The library is shared, so only an admin may delete just any novel. Anyone
+        else may delete the ones that are theirs alone: every file kept for it is
+        one they made or imported, and nobody else has it on a shelf or has read
+        it.
+        """
+        if user.role == UserRole.ADMIN:
+            return True
+        with ctx.db.session() as sess:
+            owners = set(
+                sess.exec(sq.select(Artifact.user_id).where(Artifact.novel_id == novel_id)).all()
+            )
+            if owners != {user.id}:
+                return False
+            shelved = sess.exec(
+                sq.select(LibraryNovel.novel_id)
+                .join(Library, sq.col(Library.id) == LibraryNovel.library_id)
+                .where(LibraryNovel.novel_id == novel_id)
+                .where(Library.user_id != user.id)
+                .limit(1)
+            ).first()
+            if shelved:
+                return False
+            read = sess.exec(
+                sq.select(ReadHistory.id)
+                .where(ReadHistory.novel_id == novel_id)
+                .where(ReadHistory.user_id != user.id)
+                .limit(1)
+            ).first()
+            return read is None
 
     def delete(self, novel_id: str) -> bool:
         novel_dir = ctx.files.resolve(f"novels/{novel_id}")

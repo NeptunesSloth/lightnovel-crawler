@@ -27,16 +27,30 @@ from ..models.activity import (
 router = APIRouter()
 
 
-@router.get("/library/export", summary="Download all saved EPUBs with an offline index")
-def export_library() -> FileResponse:
+@router.get(
+    "/library/export",
+    summary="Download all saved EPUBs and CBZs with an offline index, one copy per novel",
+)
+def export_library(
+    nsfw: Literal["include", "exclude", "only"] = Query(
+        default="include",
+        description="Keep NSFW novels (include), leave them out (exclude), or export only them",
+    ),
+) -> FileResponse:
+    from ...dao import Novel
     from ...services.library_export import build_library_zip
+
+    def tags_for(novel_id: str) -> List[str]:
+        with ctx.db.session() as sess:
+            novel = sess.get(Novel, novel_id)
+            return list(novel.tags) if novel else []
 
     with NamedTemporaryFile(suffix=".zip", delete=False) as temp:
         output = Path(temp.name)
     try:
-        count = build_library_zip(ctx.files.resolve("."), output)
+        count = build_library_zip(ctx.files.resolve("."), output, nsfw=nsfw, tags_for=tags_for)
         if not count:
-            raise ServerErrors.no_epub_file
+            raise ServerErrors.no_books_to_export
         return FileResponse(
             output,
             media_type="application/zip",
