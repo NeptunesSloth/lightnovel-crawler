@@ -155,6 +155,13 @@ class ServerErrors:
     no_images = ServerError(status.HTTP_404_NOT_FOUND, "No images found")
     no_novel_cover = ServerError(status.HTTP_404_NOT_FOUND, "Novel cover is not available")
     no_epub_file = ServerError(status.HTTP_404_NOT_FOUND, "No EPub file found")
+    no_books_to_export = ServerError(
+        status.HTTP_404_NOT_FOUND, "No saved EPUB or CBZ books match this export"
+    )
+    cannot_delete_novel = ServerError(
+        status.HTTP_403_FORBIDDEN,
+        "Only an admin can delete this novel: other users have it, or it was not added by you",
+    )
 
     invalid_url = ServerError(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid URL")
     invalid_input = ServerError(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid input")

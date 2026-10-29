@@ -10,7 +10,7 @@ from ...exceptions import ServerErrors
 from ...utils.file_tools import dir_size
 from ..models import Paginated
 from ..models.novel import NovelCompleteness
-from ..security import ensure_admin, ensure_user
+from ..security import ensure_user
 
 # The root router
 router = APIRouter()
@@ -220,11 +220,13 @@ def get_novel_recommended(
 
 @router.delete(
     "/{novel_id}",
-    summary="Removes a novel",
-    dependencies=[Security(ensure_admin)],
+    summary="Removes a novel (admins: any; others: ones only they imported or made)",
 )
 def delete_novel(
     novel_id: str = Path(),
+    user: User = Security(ensure_user),
 ) -> bool:
+    if not ctx.novels.can_delete(novel_id, user):
+        raise ServerErrors.cannot_delete_novel
     ctx.novels.delete(novel_id)
     return True

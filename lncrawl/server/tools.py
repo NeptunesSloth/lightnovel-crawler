@@ -259,8 +259,17 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <summary>My exports (library)</summary>
     <p class="hint">Past source exports on this machine. Click to re-download the ZIP.</p>
     <div id="library-list"><span class="muted">Sign in to see your exports.</span></div>
-    <button id="library-export">Export entire EPUB library as ZIP</button>
-    <p class="hint">Includes saved EPUBs and books inside past export ZIPs. Extract the ZIP and open index.html to browse.</p>
+    <label for="library-nsfw">NSFW novels</label>
+    <select id="library-nsfw">
+      <option value="include" selected>Include them</option>
+      <option value="exclude">Leave them out</option>
+      <option value="only">Export only NSFW</option>
+    </select>
+    <button id="library-export">Export entire library as ZIP</button>
+    <p class="hint">Includes saved EPUBs, CBZ manga and books inside past export ZIPs, one copy
+      per novel (the most complete one). NSFW is judged by a novel's tags (Adult, Mature, Smut,
+      Ecchi, R-18&hellip;), so an untagged novel always counts as safe. Extract the ZIP and
+      open index.html to browse.</p>
     <button id="library-refresh" class="secondary">Refresh</button>
     </details>
   </div>
@@ -865,19 +874,34 @@ _TOOLS_HTML = """<!DOCTYPE html>
       });
   }
 
+  // Each file goes up in a request of its own, one after another. Sending them
+  // all in one request meant a single dropped connection or oversized file lost
+  // every file after it, so a big drop only ever got a few novels in at a time.
   function uploadArchives(list) {
     if (!requireAuth()) return;
     var files = Array.prototype.slice.call(list || []);
     if (!files.length) return;
+    log("Uploading " + files.length + " file(s), one at a time…", "log-info");
 
+    var failed = 0;
+    (function next(i) {
+      if (i >= files.length) {
+        importStatus.textContent = "";
+        if (failed) log(failed + " of " + files.length + " upload(s) failed — drop those again to retry.", "log-err");
+        return;
+      }
+      uploadOne(files[i], i, files.length, function (ok) {
+        if (!ok) failed += 1;
+        next(i + 1);
+      });
+    })(0);
+  }
+
+  function uploadOne(file, index, total, done) {
+    var label = (total > 1 ? "(" + (index + 1) + "/" + total + ") " : "") + file.name;
     var form = new FormData();
-    var names = [];
-    files.forEach(function (f) {
-      form.append("files", f, f.name);
-      names.push(f.name);
-    });
+    form.append("files", file, file.name);
 
-    log("Uploading " + files.length + " file(s)…", "log-info");
     var xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/import");
     xhr.setRequestHeader("Authorization", "Bearer " + token());
@@ -885,26 +909,26 @@ _TOOLS_HTML = """<!DOCTYPE html>
     // boundary, and naming it here without one makes the body unparseable.
     xhr.upload.onprogress = function (e) {
       if (!e.lengthComputable) return;
-      importStatus.textContent = "Uploading… " + Math.round((e.loaded / e.total) * 100) + "%";
+      importStatus.textContent = "Uploading " + label + "… " + Math.round((e.loaded / e.total) * 100) + "%";
     };
     xhr.onload = function () {
-      importStatus.textContent = "";
       var res = null;
       try { res = JSON.parse(xhr.responseText || "null"); } catch (err) { res = null; }
       if (xhr.status < 200 || xhr.status >= 300) {
         var msg = (res && (res.error || res.detail || res.message)) || ("HTTP " + xhr.status);
-        log("Upload failed: " + msg, "log-err");
+        log("Upload failed for " + file.name + ": " + msg, "log-err");
+        done(false);
         return;
       }
-      (res || []).forEach(function (job, i) {
-        var name = names[i] || "archive";
-        log("Importing " + name + "…", "log-info");
-        pollImport(job.id, name, 0);
+      (res || []).forEach(function (job) {
+        log("Importing " + file.name + "…", "log-info");
+        pollImport(job.id, file.name, 0);
       });
+      done(true);
     };
     xhr.onerror = function () {
-      importStatus.textContent = "";
-      log("Upload failed — the connection dropped.", "log-err");
+      log("Upload failed for " + file.name + " — the connection dropped.", "log-err");
+      done(false);
     };
     xhr.send(form);
   }
@@ -943,8 +967,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (!requireAuth()) return;
     var btn = this;
     busy(btn, true);
-    log("Packing all saved EPUBs and an offline index…", "log-info");
-    fetch("/api/admin/library/export", { headers: { "Authorization": "Bearer " + token() } })
+    var nsfw = document.getElementById("library-nsfw").value;
+    log("Packing all saved books and an offline index…", "log-info");
+    fetch("/api/admin/library/export?nsfw=" + encodeURIComponent(nsfw), { headers: { "Authorization": "Bearer " + token() } })
       .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.blob(); })
       .then(function (blob) {
         var url = URL.createObjectURL(blob);
