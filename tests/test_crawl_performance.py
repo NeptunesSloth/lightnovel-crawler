@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -145,6 +145,53 @@ class PendingChapterTests(unittest.TestCase):
         self.assertEqual(result["file"], Path("novel.epub"))
         crawler.taskman.submit_task.assert_not_called()
         progress.assert_called_once_with("Novel", 516, 516)
+
+    def test_manga_page_downloads_report_progress(self) -> None:
+        def done_future(*args, **kwargs):
+            future: Future = Future()
+            future.set_result(None)
+            return future
+
+        crawler = SimpleNamespace(
+            taskman=SimpleNamespace(submit_task=MagicMock(side_effect=done_future))
+        )
+        ctx = SimpleNamespace(
+            crawler=SimpleNamespace(
+                pending_chapter_ids=MagicMock(return_value=[]),
+                pending_image_ids=MagicMock(return_value=["b", "c"]),
+                fetch_image=MagicMock(),
+            ),
+            novels=SimpleNamespace(
+                find_by_url=MagicMock(
+                    return_value=SimpleNamespace(id="novel", title="Manga", synopsis="A synopsis.")
+                )
+            ),
+            chapters=SimpleNamespace(
+                list_ids=MagicMock(return_value=["chapter"]),
+                get_many=MagicMock(return_value=[SimpleNamespace(is_available=True)]),
+            ),
+            images=SimpleNamespace(list_ids=MagicMock(return_value=["a", "b", "c"])),
+            binder=SimpleNamespace(
+                depends_on_epub=set(),
+                make_artifact=MagicMock(
+                    return_value=SimpleNamespace(is_available=True, output_file="manga.epub")
+                ),
+            ),
+            files=SimpleNamespace(resolve=lambda file: Path(file)),
+        )
+        images = MagicMock()
+        with patch("lncrawl.services.scheduler.handlers.export_source.ctx", ctx):
+            _download_novel(
+                crawler,
+                "user",
+                "https://example.com/manga",
+                OutputFormat.epub,
+                Event(),
+                on_images=images,
+            )
+        self.assertEqual(crawler.taskman.submit_task.call_count, 2)
+        self.assertEqual(images.call_args_list[0].args, (1, 3))
+        self.assertEqual(images.call_args_list[-1].args, (3, 3))
 
     def test_only_missing_or_empty_chapters_are_queued(self) -> None:
         chapters = [
