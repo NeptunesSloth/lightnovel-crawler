@@ -668,6 +668,13 @@ class ExportSourceHandler(BaseHandler):
                             total_novels=total,
                         )
 
+                    def _on_images(i_done: int, i_total: int) -> None:
+                        self._set_extra(
+                            phase="downloading-images",
+                            current_images=i_done,
+                            current_total_images=i_total,
+                        )
+
                     result: NovelResult
                     try:
                         result = _download_novel(
@@ -680,6 +687,7 @@ class ExportSourceHandler(BaseHandler):
                             dedupe,
                             max_chapters,
                             _on_novel,
+                            _on_images,
                         )
                     except ExportStalledError:
                         try:
@@ -964,6 +972,7 @@ def _download_novel(
     dedupe: bool = False,
     max_chapters: int = 0,
     on_novel: Optional[Callable[[str, int, int], None]] = None,
+    on_images: Optional[Callable[[int, int], None]] = None,
 ) -> NovelResult:
     """Download a novel and build its ebook.
 
@@ -974,7 +983,8 @@ def _download_novel(
     the novel is reported as a duplicate without downloading anything.
     ``max_chapters`` (>0) caps how many chapters are pulled per novel so one huge
     series can't stall the whole run. ``on_novel(title, done, total)`` reports
-    live chapter progress.
+    live chapter progress, and ``on_images(done, total)`` the page images after
+    them — for a long manga that is thousands of images and most of the time.
     """
     # Reuse already-fetched metadata: on retry rounds (and re-runs) the novel and
     # its chapter list are already in the DB, so skip re-downloading the info page
@@ -1037,9 +1047,20 @@ def _download_novel(
     # one query for the whole novel instead of one per chapter
     image_ids = ctx.images.list_ids(novel_id=novel.id)
     if image_ids:
+        pending_images = ctx.crawler.pending_image_ids(image_ids)
+        i_total = len(image_ids)
+        i_cached = i_total - len(pending_images)
+        if on_images and pending_images:
+            on_images(i_cached, i_total)
+
+        def _image_tick(done: int) -> None:
+            if on_images and (done + i_cached == i_total or monotonic() - last_emit[0] >= 2.0):
+                last_emit[0] = monotonic()
+                on_images(done + i_cached, i_total)
+
         try:
             for _ in crawl_items(
-                ctx.crawler.pending_image_ids(image_ids),
+                pending_images,
                 lambda image_id: crawler.taskman.submit_task(
                     ctx.crawler.fetch_image,
                     user_id,
@@ -1050,6 +1071,7 @@ def _download_novel(
                 signal,
                 max_inflight=EXPORT_WORKERS,
                 idle_timeout=STALL_TIMEOUT,
+                on_progress=_image_tick,
             ):
                 pass
         except CrawlStalledError as error:

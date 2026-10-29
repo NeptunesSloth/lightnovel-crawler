@@ -551,6 +551,30 @@ _TOOLS_HTML = """<!DOCTYPE html>
     return bits.length ? " [" + bits.join(", ") + "]" : "";
   }
 
+  // Only one export runs at a time, so a queued one is waiting on another. Name
+  // it, and point Stop at it, so a queue that never moves can be cleared from here.
+  function explainQueued(id) {
+    explainQueued._said = explainQueued._said || {};
+    api("/jobs?type=53&status=1&limit=5", { method: "GET" })
+      .then(function (res) {
+        var blocker = ((res && res.items) || []).filter(function (j) { return j.id !== id; })[0];
+        var key = blocker ? blocker.id : "none";
+        if (explainQueued._said[id] === key) return;
+        explainQueued._said[id] = key;
+        if (blocker) {
+          var bx = blocker.extra || {};
+          var what = (bx.domain || "another export") + (bx.current_title ? " (" + bx.current_title + ")" : "");
+          setExportControls(blocker.id, null);
+          log("⏳ Queued behind the running export of " + what + " — it starts when that one finishes. " +
+            "Press Stop to end that export and start this one.", "log-info");
+        } else {
+          log("⏳ Queued — waiting for the previous export to finish shutting down. " +
+            "If this doesn't start within a few minutes, restart the app; queued exports resume.", "log-info");
+        }
+      })
+      .catch(function () {});
+  }
+
   function pollExport(id, fails) {
     fails = fails || 0;
     api("/job/" + id, { method: "GET" })
@@ -559,12 +583,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
         var ex = job.extra || {};
         if (status === "RUNNING") setExportControls(id, id);
         if (status === "PENDING") {
-          // queued behind another export — say so once, then wait quietly
-          pollExport._queued = pollExport._queued || {};
-          if (!pollExport._queued[id]) {
-            pollExport._queued[id] = 1;
-            log("⏳ Queued — will start automatically when the current export finishes.", "log-info");
-          }
+          explainQueued(id);
         } else if (status === "RUNNING" && ex.phase === "discovering") {
           log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches + sitemap pages)", "log-info");
         } else if (status === "RUNNING" && ex.phase === "solving-challenge") {
@@ -583,6 +602,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
                 (ex.last_fail_detail ? " (" + ex.last_fail_detail + ")" : ""), "log-err");
             }
           }
+        } else if (status === "RUNNING" && ex.phase === "downloading-images" && ex.current_title) {
+          // a manga's pages come after its chapters and can take far longer
+          log("Downloading pages " + job.done + "/" + job.total + ": " + ex.current_title +
+            " — image " + (ex.current_images || 0) + "/" + (ex.current_total_images || 0) +
+            rateNote(ex), "log-info");
         } else if (status === "RUNNING" && ex.phase === "waiting-between-novels") {
           log("Waiting " + (ex.adaptive_delay || 0) + " seconds before the next novel after source errors; downloaded chapters are retained.", "log-info");
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
