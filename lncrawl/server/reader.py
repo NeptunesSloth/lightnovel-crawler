@@ -244,9 +244,20 @@ _READER_HTML = """<!DOCTYPE html>
     <div class="toolbar">
       <select id="lib-sort" title="Sort">
         <option value="recent">Recently added</option>
+        <option value="read">Recently read</option>
         <option value="updated">Recently updated</option>
-        <option value="chapters">Most chapters</option>
+        <option value="oldest">Oldest added</option>
         <option value="title">Title A–Z</option>
+        <option value="title-desc">Title Z–A</option>
+        <option value="chapters">Most chapters</option>
+        <option value="chapters-asc">Fewest chapters</option>
+        <option value="author">Author A–Z</option>
+        <option value="source">Source A–Z</option>
+      </select>
+      <select id="lib-kind" title="Show">
+        <option value="">Novels &amp; manga</option>
+        <option value="novel">Novels only</option>
+        <option value="manga">Manga only</option>
       </select>
       <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
       <button id="lib-select" title="Select novels to delete">☑ Select</button>
@@ -372,11 +383,13 @@ _READER_HTML = """<!DOCTYPE html>
   function saveBmks(m) { localStorage.setItem(BMK, JSON.stringify(m)); }
   function loadView() { try { return JSON.parse(localStorage.getItem(VIEW) || "{}"); } catch (e) { return {}; } }
   function saveView() {
-    localStorage.setItem(VIEW, JSON.stringify({ sort: els["lib-sort"].value, cat: lib.cat }));
+    localStorage.setItem(VIEW, JSON.stringify({
+      sort: els["lib-sort"].value, kind: els["lib-kind"].value, cat: lib.cat
+    }));
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-kind","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -414,11 +427,31 @@ _READER_HTML = """<!DOCTYPE html>
       .catch(function () { /* leave placeholder */ });
   }
 
+  // The server hands out at most 100 novels a request, so the library is read a
+  // page at a time until every novel is in, however large it has grown.
+  function fetchAllNovels(q) {
+    var all = [];
+    function page(offset) {
+      return api("/novels?limit=100&offset=" + offset + "&search=" + encodeURIComponent(q || ""))
+        .then(function (res) {
+          var items = (res && res.items) || [];
+          all = all.concat(items);
+          var total = (res && res.total) || 0;
+          if (items.length === 100 && all.length < total) {
+            els["lib-status"].textContent = "Loading your library… " + all.length + " of " + total;
+            return page(offset + items.length);
+          }
+          return all;
+        });
+    }
+    return page(0);
+  }
+
   function loadLibrary(q) {
     els["lib-status"].textContent = "Loading your library…";
     els["lib-list"].innerHTML = "";
-    api("/novels?limit=100&search=" + encodeURIComponent(q || "")).then(function (res) {
-      lib.all = (res && res.items) || [];
+    fetchAllNovels(q).then(function (items) {
+      lib.all = items;
       renderContinue();
       renderCategories();
       renderLibrary();
@@ -490,12 +523,31 @@ _READER_HTML = """<!DOCTYPE html>
       items = items.filter(function (n) { return (n.tags || []).indexOf(lib.cat) >= 0; });
     }
 
+    var kind = els["lib-kind"].value;
+    if (kind === "manga") items = items.filter(function (n) { return n.manga; });
+    else if (kind === "novel") items = items.filter(function (n) { return !n.manga; });
+
     var sort = els["lib-sort"].value;
+    var byText = function (a, b, key) {
+      // empty values last, then natural order so "Vol 2" comes before "Vol 10"
+      var x = a[key] || "", y = b[key] || "";
+      if (!x !== !y) return x ? -1 : 1;
+      return x.localeCompare(y, undefined, { numeric: true, sensitivity: "base" });
+    };
+    var readAt = function (n) { var p = posOf(n.id); return (p && p.ts) || 0; };
     items.sort(function (a, b) {
-      if (sort === "title") return (a.title || "").localeCompare(b.title || "");
-      if (sort === "chapters") return (b.chapter_count || 0) - (a.chapter_count || 0);
-      if (sort === "updated") return (b.updated_at || 0) - (a.updated_at || 0);
-      return (b.created_at || 0) - (a.created_at || 0);  // recent
+      var d = 0;
+      if (sort === "title") d = byText(a, b, "title");
+      else if (sort === "title-desc") d = -byText(a, b, "title");
+      else if (sort === "chapters") d = (b.chapter_count || 0) - (a.chapter_count || 0);
+      else if (sort === "chapters-asc") d = (a.chapter_count || 0) - (b.chapter_count || 0);
+      else if (sort === "updated") d = (b.updated_at || 0) - (a.updated_at || 0);
+      else if (sort === "oldest") d = (a.created_at || 0) - (b.created_at || 0);
+      else if (sort === "read") d = readAt(b) - readAt(a);
+      else if (sort === "author") d = byText(a, b, "authors");
+      else if (sort === "source") d = byText(a, b, "domain");
+      else d = (b.created_at || 0) - (a.created_at || 0);  // recent
+      return d || byText(a, b, "title");
     });
 
     els["lib-list"].innerHTML = "";
@@ -504,6 +556,7 @@ _READER_HTML = """<!DOCTYPE html>
       return;
     }
     els["lib-status"].textContent = items.length + " novel(s)" +
+      (kind ? " · " + (kind === "manga" ? "manga only" : "novels only") : "") +
       (lib.cat ? (" · " + (lib.cat === "__fav" ? "★ Favorites" : lib.cat)) : "");
     items.forEach(function (n) {
       var c = document.createElement("div");
@@ -609,6 +662,7 @@ _READER_HTML = """<!DOCTYPE html>
   });
 
   els["lib-sort"].addEventListener("change", renderLibrary);
+  els["lib-kind"].addEventListener("change", renderLibrary);
 
   // "Check updates": re-fetch every novel's info from its source, one at a time
   // (sequential on purpose — polite to the sources), and badge the ones that
@@ -919,8 +973,8 @@ _READER_HTML = """<!DOCTYPE html>
     var btn = this; btn.disabled = true;
     api("/novel/" + current.novel.id + "/merge", { method: "POST" }).then(function (res) {
       var cid = res && res.canonical_id;
-      return api("/novels?limit=100&search=").then(function (r) {
-        lib.all = (r && r.items) || [];
+      return fetchAllNovels("").then(function (items) {
+        lib.all = items;
         renderCategories();
         var canon = null;
         for (var i = 0; i < lib.all.length; i++) { if (lib.all[i].id === cid) canon = lib.all[i]; }
@@ -1278,6 +1332,7 @@ _READER_HTML = """<!DOCTYPE html>
     applyPrefs();
     var v = loadView();
     if (v.sort) els["lib-sort"].value = v.sort;
+    if (v.kind) els["lib-kind"].value = v.kind;
     if (v.cat) lib.cat = v.cat;
     if (!token()) { show("auth"); return; }
     api("/auth/me", { method: "GET" })
