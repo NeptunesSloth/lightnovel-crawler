@@ -138,7 +138,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <input id="src-full" type="checkbox" />
       <label for="src-full" style="margin:0">Fetch full contents of every novel found</label>
     </div>
-    <button id="discover-btn">Discover &amp; queue</button>
+    <div class="row">
+      <button id="discover-btn">Discover &amp; queue</button>
+      <button id="discover-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop discovery</button>
+    </div>
   </div>
 
   <div class="card">
@@ -428,6 +431,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           document.getElementById("who").textContent = (u && (u.email || u.name)) || "user";
           window._lncrawlUserId = u && u.id;
           loadActiveExports(u && u.id);
+          loadActiveDiscoveries(u && u.id);
           loadLibrary(u && u.id);
           loadNotifyConfig();
         })
@@ -500,7 +504,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
       });
   }
 
-  function pollJob(id, label) {
+  function pollJob(id, label, onEnd) {
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
         var status = statusName(job.status);
@@ -525,13 +529,58 @@ _TOOLS_HTML = """<!DOCTYPE html>
             " downloaded, " + c.missing + " missing, " + c.failed + " failed, " + c.empty + " empty.", "log-info");
         }
         if (isActive(status)) {
-          setTimeout(function () { pollJob(id, label); }, 3000);
-        } else if (status === "FAILED" && job.error) {
+          setTimeout(function () { pollJob(id, label, onEnd); }, 3000);
+          return;
+        }
+        if (status === "FAILED" && job.error) {
           log(label + " failed: " + job.error, "log-err");
         }
+        if (onEnd) onEnd(status);
       })
       .catch(function (e) { log("Status check failed: " + e.message, "log-err"); });
   }
+
+  // Discovery jobs that are still going, so Stop can end them (and the novel
+  // fetches they queued) — including ones started before this page was opened.
+  var activeDiscoveries = {};
+
+  function updateDiscoverStop() {
+    var stop = document.getElementById("discover-stop");
+    stop.classList.toggle("hidden", !Object.keys(activeDiscoveries).length);
+  }
+
+  function watchDiscovery(id) {
+    activeDiscoveries[id] = 1;
+    updateDiscoverStop();
+    pollJob(id, "Discover", function () {
+      delete activeDiscoveries[id];
+      updateDiscoverStop();
+    });
+  }
+
+  function loadActiveDiscoveries(userId) {
+    var q = "/jobs?type=52&limit=10" + (userId ? "&user_id=" + encodeURIComponent(userId) : "");
+    api(q, { method: "GET" })
+      .then(function (res) {
+        ((res && res.items) || []).forEach(function (j) {
+          if (!isActive(statusName(j.status)) || activeDiscoveries[j.id]) return;
+          log("Resuming discovery " + String(j.id).slice(0, 8) + "…", "log-info");
+          watchDiscovery(j.id);
+        });
+      })
+      .catch(function () {});
+  }
+
+  document.getElementById("discover-stop").addEventListener("click", function () {
+    var ids = Object.keys(activeDiscoveries);
+    if (!ids.length) return;
+    log("Stopping discovery… (novels already fetched are kept)", "log-info");
+    ids.forEach(function (id) {
+      api("/job/" + id + "/cancel", { method: "POST" })
+        .then(function () { log("Discovery stopped.", "log-ok"); })
+        .catch(function (e) { log("Stop failed: " + e.message, "log-err"); });
+    });
+  });
 
   document.getElementById("discover-btn").addEventListener("click", function () {
     if (!requireAuth()) return;
@@ -544,7 +593,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     api("/job/create/discover-source", { method: "POST", body: JSON.stringify({ url: url, full: full }) })
       .then(function (job) {
         log("Discovery job created: " + job.id, "log-ok");
-        pollJob(job.id, "Discover");
+        watchDiscovery(job.id);
       })
       .catch(function (e) { log("Discovery failed: " + e.message, "log-err"); })
       .finally(function () { busy(btn, false); });
