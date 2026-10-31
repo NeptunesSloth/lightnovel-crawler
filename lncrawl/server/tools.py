@@ -138,7 +138,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <input id="src-full" type="checkbox" />
       <label for="src-full" style="margin:0">Fetch full contents of every novel found</label>
     </div>
-    <button id="discover-btn">Discover &amp; queue</button>
+    <div class="row">
+      <button id="discover-btn">Discover &amp; queue</button>
+      <button id="discover-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop discovery</button>
+    </div>
   </div>
 
   <div class="card">
@@ -428,6 +431,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           document.getElementById("who").textContent = (u && (u.email || u.name)) || "user";
           window._lncrawlUserId = u && u.id;
           loadActiveExports(u && u.id);
+          loadActiveDiscoveries(u && u.id);
           loadLibrary(u && u.id);
           loadNotifyConfig();
         })
@@ -481,24 +485,102 @@ _TOOLS_HTML = """<!DOCTYPE html>
   }
   function isActive(s) { return s === "PENDING" || s === "RUNNING"; }
 
-  function pollJob(id, label) {
+  // Jobs share a few workers. Say what a waiting job is waiting behind, once per change.
+  function explainWaiting(id, label) {
+    explainWaiting._said = explainWaiting._said || {};
+    api("/jobs?status=1&limit=20", { method: "GET" })
+      .then(function (res) {
+        var running = ((res && res.items) || []).filter(function (j) { return j.id !== id; });
+        var names = running.slice(0, 3).map(function (j) { return j.job_title || "job"; });
+        var key = names.join("|") || "none";
+        if (explainWaiting._said[id] === key) return;
+        explainWaiting._said[id] = key;
+        log(label + " · waiting for a free worker" +
+          (names.length ? " — running: " + names.join("; ") + (running.length > 3 ? " and more" : "") : "") + ".",
+          "log-info");
+      })
+      .catch(function () {
+        log(label + " · PENDING", "log-info");
+      });
+  }
+
+  function pollJob(id, label, onEnd) {
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
         var status = statusName(job.status);
-        log(label + " · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        var ex = job.extra || {};
+        if (status === "PENDING") {
+          explainWaiting(id, label);
+        } else if (status === "RUNNING" && ex.phase === "discovering") {
+          log(label + " · searching the source… " + (ex.found || 0) + " novels found (" +
+            (ex.searched || 0) + "/" + (ex.seeds || 0) + " searches + sitemap pages)", "log-info");
+        } else if (status === "RUNNING" && ex.phase === "fetching") {
+          log(label + " · fetching novel details " + job.done + "/" + job.total +
+            " (" + (ex.total_found || 0) + " found" + (ex.truncated ? ", capped" : "") + ")", "log-info");
+        } else {
+          log(label + " · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        }
+        if (status === "SUCCESS" && ex.discovery_capped) {
+          log("  ⚠ Discovery stopped at its 10 minute cap, so this is only part of the catalogue.", "log-info");
+        }
         if (job.extra && job.extra.completeness) {
           var c = job.extra.completeness;
           log((c.complete ? "Complete" : "Incomplete") + " — " + c.downloaded + "/" + c.total +
             " downloaded, " + c.missing + " missing, " + c.failed + " failed, " + c.empty + " empty.", "log-info");
         }
         if (isActive(status)) {
-          setTimeout(function () { pollJob(id, label); }, 3000);
-        } else if (status === "FAILED" && job.error) {
+          setTimeout(function () { pollJob(id, label, onEnd); }, 3000);
+          return;
+        }
+        if (status === "FAILED" && job.error) {
           log(label + " failed: " + job.error, "log-err");
         }
+        if (onEnd) onEnd(status);
       })
       .catch(function (e) { log("Status check failed: " + e.message, "log-err"); });
   }
+
+  // Discovery jobs that are still going, so Stop can end them (and the novel
+  // fetches they queued) — including ones started before this page was opened.
+  var activeDiscoveries = {};
+
+  function updateDiscoverStop() {
+    var stop = document.getElementById("discover-stop");
+    stop.classList.toggle("hidden", !Object.keys(activeDiscoveries).length);
+  }
+
+  function watchDiscovery(id) {
+    activeDiscoveries[id] = 1;
+    updateDiscoverStop();
+    pollJob(id, "Discover", function () {
+      delete activeDiscoveries[id];
+      updateDiscoverStop();
+    });
+  }
+
+  function loadActiveDiscoveries(userId) {
+    var q = "/jobs?type=52&limit=10" + (userId ? "&user_id=" + encodeURIComponent(userId) : "");
+    api(q, { method: "GET" })
+      .then(function (res) {
+        ((res && res.items) || []).forEach(function (j) {
+          if (!isActive(statusName(j.status)) || activeDiscoveries[j.id]) return;
+          log("Resuming discovery " + String(j.id).slice(0, 8) + "…", "log-info");
+          watchDiscovery(j.id);
+        });
+      })
+      .catch(function () {});
+  }
+
+  document.getElementById("discover-stop").addEventListener("click", function () {
+    var ids = Object.keys(activeDiscoveries);
+    if (!ids.length) return;
+    log("Stopping discovery… (novels already fetched are kept)", "log-info");
+    ids.forEach(function (id) {
+      api("/job/" + id + "/cancel", { method: "POST" })
+        .then(function () { log("Discovery stopped.", "log-ok"); })
+        .catch(function (e) { log("Stop failed: " + e.message, "log-err"); });
+    });
+  });
 
   document.getElementById("discover-btn").addEventListener("click", function () {
     if (!requireAuth()) return;
@@ -511,7 +593,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     api("/job/create/discover-source", { method: "POST", body: JSON.stringify({ url: url, full: full }) })
       .then(function (job) {
         log("Discovery job created: " + job.id, "log-ok");
-        pollJob(job.id, "Discover");
+        watchDiscovery(job.id);
       })
       .catch(function (e) { log("Discovery failed: " + e.message, "log-err"); })
       .finally(function () { busy(btn, false); });
