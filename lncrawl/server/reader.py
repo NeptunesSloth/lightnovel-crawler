@@ -82,6 +82,8 @@ _READER_HTML = """<!DOCTYPE html>
   .chip:hover { color: #e6e6e6; border-color: #3b4250; }
   .chip.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
   .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .toolbar.filters input[type=text] { flex: 1 1 220px; max-width: 360px; margin: 0; }
+  .toolbar .check { display: flex; align-items: center; gap: 5px; font-size: 13px; margin: 0; cursor: pointer; }
   select {
     padding: 7px 10px; border-radius: 8px; border: 1px solid #303644;
     background: #0f1115; color: #e6e6e6; font-size: 13px;
@@ -254,15 +256,27 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="author">Author A–Z</option>
         <option value="source">Source A–Z</option>
       </select>
-      <select id="lib-kind" title="Show">
-        <option value="">Novels &amp; manga</option>
-        <option value="novel">Novels only</option>
-        <option value="manga">Manga only</option>
+      <select id="lib-kind" title="Media type">
+        <option value="">All media</option>
+        <option value="novel">Novels</option>
+        <option value="comic">All comics</option>
+        <option value="manga">Manga (Japanese)</option>
+        <option value="manhwa">Manhwa (Korean)</option>
+        <option value="manhua">Manhua (Chinese)</option>
       </select>
       <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
       <button id="lib-select" title="Select novels to delete">☑ Select</button>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
       <div id="lib-cats" class="tags"></div>
+    </div>
+    <div class="toolbar filters">
+      <input id="lib-tag" type="text" list="lib-tag-list" autocomplete="off"
+             placeholder="Tags: romance, fantasy, -harem" title="Show novels with every tag listed; put - before a tag to hide it" />
+      <datalist id="lib-tag-list"></datalist>
+      <select id="lib-source" title="Source"><option value="">All sources</option></select>
+      <select id="lib-lang" title="Language"><option value="">All languages</option></select>
+      <label class="check" title="Hide machine-translated (MTL) novels"><input id="lib-nomtl" type="checkbox" /> Hide MTL</label>
+      <button id="lib-clear" class="hidden" title="Clear every filter">✕ Clear filters</button>
     </div>
     <p class="muted" id="lib-status">Loading your library…</p>
     <div id="lib-list"></div>
@@ -384,12 +398,14 @@ _READER_HTML = """<!DOCTYPE html>
   function loadView() { try { return JSON.parse(localStorage.getItem(VIEW) || "{}"); } catch (e) { return {}; } }
   function saveView() {
     localStorage.setItem(VIEW, JSON.stringify({
-      sort: els["lib-sort"].value, kind: els["lib-kind"].value, cat: lib.cat
+      sort: els["lib-sort"].value, kind: els["lib-kind"].value, cat: lib.cat,
+      tag: els["lib-tag"].value, source: els["lib-source"].value,
+      lang: els["lib-lang"].value, nomtl: els["lib-nomtl"].checked
     }));
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-kind","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-nomtl","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -453,6 +469,7 @@ _READER_HTML = """<!DOCTYPE html>
     fetchAllNovels(q).then(function (items) {
       lib.all = items;
       renderContinue();
+      renderFilterOptions();
       renderCategories();
       renderLibrary();
     }).catch(function (e) { els["lib-status"].textContent = "Couldn't load library: " + e.message; });
@@ -491,6 +508,78 @@ _READER_HTML = """<!DOCTYPE html>
     });
   }
 
+  // What kind of comic a novel is. The library only records manga or not, so
+  // the kind comes from its tags, then from its original language.
+  function mediaType(n) {
+    if (!n.manga) return "novel";
+    var tags = (n.tags || []).join(" ").toLowerCase();
+    if (tags.indexOf("manhwa") >= 0) return "manhwa";
+    if (tags.indexOf("manhua") >= 0) return "manhua";
+    var lang = (n.language || "").toLowerCase().slice(0, 2);
+    if (lang === "ko") return "manhwa";
+    if (lang === "zh") return "manhua";
+    return "manga";
+  }
+
+  var LANG_NAMES = { en: "English", ja: "Japanese", ko: "Korean", zh: "Chinese", es: "Spanish",
+    fr: "French", pt: "Portuguese", ru: "Russian", id: "Indonesian", vi: "Vietnamese", de: "German",
+    it: "Italian", ar: "Arabic", th: "Thai", tr: "Turkish", pl: "Polish" };
+
+  function fillSelect(sel, values, label, keep) {
+    var first = sel.options[0].textContent;
+    sel.innerHTML = "";
+    var all = document.createElement("option"); all.value = ""; all.textContent = first; sel.appendChild(all);
+    values.forEach(function (v) {
+      var o = document.createElement("option"); o.value = v[0];
+      o.textContent = label(v[0]) + " (" + v[1] + ")"; sel.appendChild(o);
+    });
+    sel.value = values.some(function (v) { return v[0] === keep; }) ? keep : "";
+  }
+
+  function counted(key) {
+    var counts = {};
+    lib.all.forEach(function (n) { var k = key(n); if (k) counts[k] = (counts[k] || 0) + 1; });
+    return Object.keys(counts).sort().map(function (k) { return [k, counts[k]]; });
+  }
+
+  function renderFilterOptions() {
+    var pending = lib.pending || {};
+    fillSelect(els["lib-source"], counted(function (n) { return n.domain; }),
+      function (d) { return d; }, pending.source || els["lib-source"].value);
+    fillSelect(els["lib-lang"], counted(function (n) { return (n.language || "").slice(0, 2).toLowerCase(); }),
+      function (l) { return LANG_NAMES[l] || l; }, pending.lang || els["lib-lang"].value);
+    lib.pending = null;
+    var tags = {};
+    lib.all.forEach(function (n) { (n.tags || []).forEach(function (t) { if (t) tags[t] = (tags[t] || 0) + 1; }); });
+    els["lib-tag-list"].innerHTML = "";
+    Object.keys(tags).sort(function (a, b) { return tags[b] - tags[a] || a.localeCompare(b); })
+      .forEach(function (t) {
+        var o = document.createElement("option"); o.value = t; o.label = tags[t] + " novel(s)";
+        els["lib-tag-list"].appendChild(o);
+      });
+  }
+
+  // "romance, -harem": every plain term must match one of a novel's tags (in
+  // part, ignoring case), and no term starting with - may match any of them.
+  function tagTerms() {
+    return els["lib-tag"].value.split(",").map(function (t) { return t.trim().toLowerCase(); })
+      .filter(Boolean);
+  }
+
+  function matchesTags(n, terms) {
+    var tags = (n.tags || []).map(function (t) { return t.toLowerCase(); });
+    var has = function (term) { return tags.some(function (t) { return t.indexOf(term) >= 0; }); };
+    return terms.every(function (term) {
+      if (term.charAt(0) === "-") return term.length === 1 || !has(term.slice(1).trim());
+      return has(term);
+    });
+  }
+
+  function filtersActive() {
+    return !!(els["lib-kind"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
+      els["lib-lang"].value || els["lib-nomtl"].checked || lib.cat);
+  }
+
   function renderCategories() {
     var counts = {};
     lib.all.forEach(function (n) {
@@ -524,8 +613,16 @@ _READER_HTML = """<!DOCTYPE html>
     }
 
     var kind = els["lib-kind"].value;
-    if (kind === "manga") items = items.filter(function (n) { return n.manga; });
-    else if (kind === "novel") items = items.filter(function (n) { return !n.manga; });
+    if (kind === "comic") items = items.filter(function (n) { return n.manga; });
+    else if (kind) items = items.filter(function (n) { return mediaType(n) === kind; });
+    var terms = tagTerms();
+    if (terms.length) items = items.filter(function (n) { return matchesTags(n, terms); });
+    var source = els["lib-source"].value;
+    if (source) items = items.filter(function (n) { return n.domain === source; });
+    var lang = els["lib-lang"].value;
+    if (lang) items = items.filter(function (n) { return (n.language || "").slice(0, 2).toLowerCase() === lang; });
+    if (els["lib-nomtl"].checked) items = items.filter(function (n) { return !n.mtl; });
+    els["lib-clear"].classList.toggle("hidden", !filtersActive());
 
     var sort = els["lib-sort"].value;
     var byText = function (a, b, key) {
@@ -556,7 +653,8 @@ _READER_HTML = """<!DOCTYPE html>
       return;
     }
     els["lib-status"].textContent = items.length + " novel(s)" +
-      (kind ? " · " + (kind === "manga" ? "manga only" : "novels only") : "") +
+      (kind ? " · " + els["lib-kind"].selectedOptions[0].textContent : "") +
+      (terms.length ? " · tags: " + terms.join(", ") : "") +
       (lib.cat ? (" · " + (lib.cat === "__fav" ? "★ Favorites" : lib.cat)) : "");
     items.forEach(function (n) {
       var c = document.createElement("div");
@@ -663,6 +761,19 @@ _READER_HTML = """<!DOCTYPE html>
 
   els["lib-sort"].addEventListener("change", renderLibrary);
   els["lib-kind"].addEventListener("change", renderLibrary);
+  els["lib-source"].addEventListener("change", renderLibrary);
+  els["lib-lang"].addEventListener("change", renderLibrary);
+  els["lib-nomtl"].addEventListener("change", renderLibrary);
+  var tagTimer = null;
+  els["lib-tag"].addEventListener("input", function () {
+    clearTimeout(tagTimer);
+    tagTimer = setTimeout(renderLibrary, 150);
+  });
+  els["lib-clear"].addEventListener("click", function () {
+    els["lib-kind"].value = ""; els["lib-tag"].value = ""; els["lib-source"].value = "";
+    els["lib-lang"].value = ""; els["lib-nomtl"].checked = false; lib.cat = "";
+    renderCategories(); renderLibrary();
+  });
 
   // "Check updates": re-fetch every novel's info from its source, one at a time
   // (sequential on purpose — polite to the sources), and badge the ones that
@@ -975,6 +1086,7 @@ _READER_HTML = """<!DOCTYPE html>
       var cid = res && res.canonical_id;
       return fetchAllNovels("").then(function (items) {
         lib.all = items;
+        renderFilterOptions();
         renderCategories();
         var canon = null;
         for (var i = 0; i < lib.all.length; i++) { if (lib.all[i].id === cid) canon = lib.all[i]; }
@@ -1333,6 +1445,9 @@ _READER_HTML = """<!DOCTYPE html>
     var v = loadView();
     if (v.sort) els["lib-sort"].value = v.sort;
     if (v.kind) els["lib-kind"].value = v.kind;
+    if (v.tag) els["lib-tag"].value = v.tag;
+    if (v.nomtl) els["lib-nomtl"].checked = true;
+    lib.pending = { source: v.source || "", lang: v.lang || "" };
     if (v.cat) lib.cat = v.cat;
     if (!token()) { show("auth"); return; }
     api("/auth/me", { method: "GET" })
