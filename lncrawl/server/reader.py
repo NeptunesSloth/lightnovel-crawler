@@ -100,6 +100,8 @@ _READER_HTML = """<!DOCTYPE html>
     width: 104px; height: 148px; object-fit: cover; border-radius: 6px; display: block;
     background: #0b0d11; border: 1px solid #262b36;
   }
+  .shelf-title .see-all { float: right; font-size: 12px; color: #7aa2ff; cursor: pointer; }
+  .shelf .mini .mm { font-size: 11px; color: #8b93a1; margin-top: 2px; }
   .shelf .mini .mt {
     font-size: 12px; color: #cbd2dd; margin-top: 5px;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -245,7 +247,8 @@ _READER_HTML = """<!DOCTYPE html>
 
   <div id="view-library">
     <div id="lib-continue-wrap" class="hidden">
-      <div class="shelf-title">⏵ Continue reading</div>
+      <div class="shelf-title">⏵ Continue reading
+        <a id="lib-continue-all" class="see-all" title="Show everything you are reading, last read first"></a></div>
       <div id="lib-continue" class="shelf"></div>
     </div>
     <div class="toolbar">
@@ -431,7 +434,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -494,6 +497,8 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-list"].innerHTML = "";
     fetchAllNovels(q).then(function (items) {
       lib.all = items;
+      // the shelf shows everything being read, not just what a search matched
+      if (!q) lib.everything = items;
       renderContinue();
       renderFilterOptions();
       renderCategories();
@@ -502,24 +507,45 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   // A "Continue reading" shelf of the most recently opened novels.
+  function timeAgo(ts) {
+    if (!ts) return "";
+    var s = Math.max(0, (Date.now() - ts) / 1000);
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    if (s < 86400 * 30) return Math.floor(s / 86400) + "d ago";
+    return new Date(ts).toLocaleDateString();
+  }
+
+  // Novels being read, last read first. Finished ones drop off until they gain
+  // chapters; the full list is one click away as the "Reading" filter.
+  var CONTINUE_MAX = 20;
   function renderContinue() {
-    var byId = {}; lib.all.forEach(function (n) { byId[n.id] = n; });
+    var byId = {}; (lib.everything || lib.all).forEach(function (n) { byId[n.id] = n; });
     var recent = [];
     var posMap = loadPos();
     Object.keys(posMap).forEach(function (id) {
       var n = byId[id]; var pe = posOf(id);
-      if (n && pe) recent.push({ n: n, pe: pe });
+      if (n && pe && progressOf(n) !== "finished") recent.push({ n: n, pe: pe });
     });
     recent.sort(function (a, b) { return (b.pe.ts || 0) - (a.pe.ts || 0); });
-    recent = recent.slice(0, 12);
+    var total = recent.length;
+    recent = recent.slice(0, CONTINUE_MAX);
     els["lib-continue"].innerHTML = "";
     els["lib-continue-wrap"].classList.toggle("hidden", !recent.length);
+    els["lib-continue-all"].textContent = total > CONTINUE_MAX ? "See all (" + total + ") ›" : (total > 1 ? "See all ›" : "");
     recent.forEach(function (r) {
       var mini = document.createElement("div"); mini.className = "mini";
+      mini.title = (r.n.title || "") + (r.pe.ts ? " · last read " + new Date(r.pe.ts).toLocaleString() : "");
       var img = document.createElement("img"); img.alt = "";
       if (r.n.cover_available) loadCover(img, r.n.id);
       var t = document.createElement("div"); t.className = "mt"; t.textContent = r.n.title || "Untitled";
-      mini.appendChild(img); mini.appendChild(t);
+      var meta = document.createElement("div"); meta.className = "mm";
+      meta.textContent = [
+        r.pe.serial ? "Ch " + r.pe.serial + (r.n.chapter_count ? " / " + r.n.chapter_count : "") : "",
+        timeAgo(r.pe.ts)
+      ].filter(Boolean).join(" · ");
+      mini.appendChild(img); mini.appendChild(t); mini.appendChild(meta);
       if (r.pe.serial && r.n.chapter_count) {
         var pr = document.createElement("div"); pr.className = "progress";
         var sp = document.createElement("span");
@@ -830,6 +856,12 @@ _READER_HTML = """<!DOCTYPE html>
   els["lib-lang"].addEventListener("change", renderLibrary);
   els["lib-state"].addEventListener("change", renderLibrary);
   els["lib-progress"].addEventListener("change", renderLibrary);
+  els["lib-continue-all"].addEventListener("click", function () {
+    els["lib-progress"].value = "reading";
+    els["lib-sort"].value = "read";
+    renderLibrary();
+    els["lib-status"].scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   els["lib-favonly"].addEventListener("change", renderLibrary);
   els["lib-nomtl"].addEventListener("change", renderLibrary);
   var tagTimer = null;
