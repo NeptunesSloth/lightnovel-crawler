@@ -481,11 +481,44 @@ _TOOLS_HTML = """<!DOCTYPE html>
   }
   function isActive(s) { return s === "PENDING" || s === "RUNNING"; }
 
+  // Jobs share a few workers. Say what a waiting job is waiting behind, once per change.
+  function explainWaiting(id, label) {
+    explainWaiting._said = explainWaiting._said || {};
+    api("/jobs?status=1&limit=20", { method: "GET" })
+      .then(function (res) {
+        var running = ((res && res.items) || []).filter(function (j) { return j.id !== id; });
+        var names = running.slice(0, 3).map(function (j) { return j.job_title || "job"; });
+        var key = names.join("|") || "none";
+        if (explainWaiting._said[id] === key) return;
+        explainWaiting._said[id] = key;
+        log(label + " · waiting for a free worker" +
+          (names.length ? " — running: " + names.join("; ") + (running.length > 3 ? " and more" : "") : "") + ".",
+          "log-info");
+      })
+      .catch(function () {
+        log(label + " · PENDING", "log-info");
+      });
+  }
+
   function pollJob(id, label) {
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
         var status = statusName(job.status);
-        log(label + " · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        var ex = job.extra || {};
+        if (status === "PENDING") {
+          explainWaiting(id, label);
+        } else if (status === "RUNNING" && ex.phase === "discovering") {
+          log(label + " · searching the source… " + (ex.found || 0) + " novels found (" +
+            (ex.searched || 0) + "/" + (ex.seeds || 0) + " searches + sitemap pages)", "log-info");
+        } else if (status === "RUNNING" && ex.phase === "fetching") {
+          log(label + " · fetching novel details " + job.done + "/" + job.total +
+            " (" + (ex.total_found || 0) + " found" + (ex.truncated ? ", capped" : "") + ")", "log-info");
+        } else {
+          log(label + " · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        }
+        if (status === "SUCCESS" && ex.discovery_capped) {
+          log("  ⚠ Discovery stopped at its 10 minute cap, so this is only part of the catalogue.", "log-info");
+        }
         if (job.extra && job.extra.completeness) {
           var c = job.extra.completeness;
           log((c.complete ? "Complete" : "Incomplete") + " — " + c.downloaded + "/" + c.total +

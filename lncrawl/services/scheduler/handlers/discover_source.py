@@ -1,3 +1,4 @@
+from time import monotonic
 from typing import List
 
 from ....context import ctx
@@ -9,6 +10,11 @@ from ._base import AbortedException, BatchHandler, HandlerException
 # fetch for every one of them. Cap it so one discover job can't flood the
 # scheduler; ``extra["limit"]`` overrides it for a deliberate bigger run.
 MAX_DISCOVERED = 2000
+
+# How long discovery may run, as for an export. A big site's search seeds and
+# sitemap can otherwise keep it going for an hour with nothing to show for it;
+# ``extra["discovery_minutes"]`` overrides it.
+DISCOVERY_MINUTES = 10
 
 
 class DiscoverSourceHandler(BatchHandler):
@@ -52,14 +58,34 @@ class DiscoverSourceHandler(BatchHandler):
 
         if self.signal.is_set():
             raise AbortedException()
-        urls = ctx.crawler.discover_novels(self.user.id, domain, self.signal)
+
+        # report as it goes, or the page shows "RUNNING (0/1)" until the end
+        def on_progress(done: int, seeds: int, found: int) -> None:
+            self._set_extra(phase="discovering", searched=done, seeds=seeds, found=found)
+
+        budget = float(self.job.extra.get("discovery_minutes") or DISCOVERY_MINUTES) * 60
+        started = monotonic()
+        urls = ctx.crawler.discover_novels(
+            self.user.id,
+            domain,
+            self.signal,
+            on_progress=on_progress,
+            time_budget=budget,
+        )
         if self.signal.is_set():
             raise AbortedException()
+        capped = monotonic() - started >= budget
 
         cap = int(self.job.extra.get("limit") or MAX_DISCOVERED)
         total = len(urls)
         if total > cap:
             urls = urls[:cap]
 
-        self._set_extra(discovered=urls, total_found=total, truncated=total > cap)
+        self._set_extra(
+            phase="fetching",
+            discovered=urls,
+            total_found=total,
+            truncated=total > cap,
+            discovery_capped=capped,
+        )
         return urls
