@@ -177,6 +177,11 @@ _READER_HTML = """<!DOCTYPE html>
   .bmk-row:hover { background: #171a21; }
   .bmk-row .x { color: #6b7280; padding: 0 6px; }
   .bmk-row .x:hover { color: #e66; }
+  .bmk-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bmk-row .nv { color: #cbd2dd; font-weight: 600; }
+  .bmk-row .when { color: #6b7280; font-size: 12px; white-space: nowrap; }
+  .libcard .fav-star { cursor: pointer; color: #6b7280; font-size: 18px; line-height: 1; float: right; padding: 0 2px; }
+  .libcard .fav-star.on { color: #f5b301; }
 
   /* ---- Tap-translate popup ---- */
   #trans-pop {
@@ -265,6 +270,7 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="manhua">Manhua (Chinese)</option>
       </select>
       <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
+      <button id="lib-bmks-btn" title="Every bookmark, across all novels">🔖 Bookmarks</button>
       <button id="lib-select" title="Select novels to delete">☑ Select</button>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
       <div id="lib-cats" class="tags"></div>
@@ -289,8 +295,13 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="cancelled">Cancelled</option>
         <option value="unknown">Status unknown</option>
       </select>
+      <label class="check" title="Show only novels you starred"><input id="lib-favonly" type="checkbox" /> ★ Favorites only</label>
       <label class="check" title="Hide machine-translated (MTL) novels"><input id="lib-nomtl" type="checkbox" /> Hide MTL</label>
       <button id="lib-clear" class="hidden" title="Clear every filter">✕ Clear filters</button>
+    </div>
+    <div id="lib-bmks" class="card hidden">
+      <div class="shelf-title">🔖 Bookmarks <span class="muted" id="lib-bmks-count"></span></div>
+      <div id="lib-bmks-list"></div>
     </div>
     <p class="muted" id="lib-status">Loading your library…</p>
     <div id="lib-list"></div>
@@ -414,12 +425,13 @@ _READER_HTML = """<!DOCTYPE html>
     localStorage.setItem(VIEW, JSON.stringify({
       sort: els["lib-sort"].value, kind: els["lib-kind"].value, cat: lib.cat,
       tag: els["lib-tag"].value, source: els["lib-source"].value,
-      lang: els["lib-lang"].value, state: els["lib-state"].value, progress: els["lib-progress"].value, nomtl: els["lib-nomtl"].checked
+      lang: els["lib-lang"].value, state: els["lib-state"].value, progress: els["lib-progress"].value,
+      favonly: els["lib-favonly"].checked, nomtl: els["lib-nomtl"].checked
     }));
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-nomtl","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -606,7 +618,7 @@ _READER_HTML = """<!DOCTYPE html>
 
   function filtersActive() {
     return !!(els["lib-kind"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
-      els["lib-state"].value || els["lib-progress"].value ||
+      els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked ||
       els["lib-lang"].value || els["lib-nomtl"].checked || lib.cat);
   }
 
@@ -617,9 +629,7 @@ _READER_HTML = """<!DOCTYPE html>
     });
     var top = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; }).slice(0, 12);
     els["lib-cats"].innerHTML = "";
-    // favorites filter first, then the top categories
-    var chips = [{ v: "__fav", t: "★ Favorites" }].concat(top.map(function (t) { return { v: t, t: t }; }));
-    if (chips.length === 1 && !loadFavs().length) return;
+    var chips = top.map(function (t) { return { v: t, t: t }; });
     chips.forEach(function (c) {
       var chip = document.createElement("span");
       chip.className = "chip" + (lib.cat === c.v ? " active" : "");
@@ -634,11 +644,13 @@ _READER_HTML = """<!DOCTYPE html>
 
   function renderLibrary() {
     saveView();
+    renderAllBookmarks();  // keeps the Bookmarks count current after reading
     var items = lib.all.slice();
-    if (lib.cat === "__fav") {
+    if (els["lib-favonly"].checked) {
       var favs = loadFavs();
       items = items.filter(function (n) { return favs.indexOf(n.id) >= 0; });
-    } else if (lib.cat) {
+    }
+    if (lib.cat) {
       items = items.filter(function (n) { return (n.tags || []).indexOf(lib.cat) >= 0; });
     }
 
@@ -691,7 +703,8 @@ _READER_HTML = """<!DOCTYPE html>
       (terms.length ? " · tags: " + terms.join(", ") : "") +
       (state ? " · " + els["lib-state"].selectedOptions[0].textContent : "") +
       (progress ? " · " + els["lib-progress"].selectedOptions[0].textContent : "") +
-      (lib.cat ? (" · " + (lib.cat === "__fav" ? "★ Favorites" : lib.cat)) : "");
+      (els["lib-favonly"].checked ? " · ★ Favorites" : "") +
+      (lib.cat ? " · " + lib.cat : "");
     items.forEach(function (n) {
       var c = document.createElement("div");
       c.className = "card libcard";
@@ -701,7 +714,15 @@ _READER_HTML = """<!DOCTYPE html>
 
       var body = document.createElement("div"); body.className = "body";
       var h = document.createElement("h3"); h.textContent = n.title || "Untitled";
-      if (isFav(n.id)) { var st = document.createElement("span"); st.className = "badge"; st.textContent = "★"; h.appendChild(st); }
+      var star = document.createElement("span");
+      star.className = "fav-star" + (isFav(n.id) ? " on" : "");
+      star.textContent = isFav(n.id) ? "★" : "☆";
+      star.title = isFav(n.id) ? "Remove from favorites" : "Add to favorites";
+      star.addEventListener("click", function (e) {
+        e.stopPropagation();
+        toggleFav(n.id);
+        renderLibrary();
+      });
       if (n.manga) { var bd = document.createElement("span"); bd.className = "badge"; bd.textContent = "Manga"; h.appendChild(bd); }
       var st8 = statusOf(n);
       if (st8 && st8 !== "ongoing") {
@@ -717,6 +738,7 @@ _READER_HTML = """<!DOCTYPE html>
       var m = document.createElement("div"); m.className = "meta";
       m.textContent = [n.authors || "", (n.chapter_count || 0) + " chapters", n.domain || ""]
         .filter(Boolean).join("  ·  ");
+      h.insertBefore(star, h.firstChild);
       body.appendChild(h); body.appendChild(m);
 
       var pe = posOf(n.id);
@@ -808,6 +830,7 @@ _READER_HTML = """<!DOCTYPE html>
   els["lib-lang"].addEventListener("change", renderLibrary);
   els["lib-state"].addEventListener("change", renderLibrary);
   els["lib-progress"].addEventListener("change", renderLibrary);
+  els["lib-favonly"].addEventListener("change", renderLibrary);
   els["lib-nomtl"].addEventListener("change", renderLibrary);
   var tagTimer = null;
   els["lib-tag"].addEventListener("input", function () {
@@ -816,7 +839,7 @@ _READER_HTML = """<!DOCTYPE html>
   });
   els["lib-clear"].addEventListener("click", function () {
     els["lib-kind"].value = ""; els["lib-tag"].value = ""; els["lib-source"].value = "";
-    els["lib-lang"].value = ""; els["lib-state"].value = ""; els["lib-progress"].value = ""; els["lib-nomtl"].checked = false; lib.cat = "";
+    els["lib-lang"].value = ""; els["lib-state"].value = ""; els["lib-progress"].value = ""; els["lib-favonly"].checked = false; els["lib-nomtl"].checked = false; lib.cat = "";
     renderCategories(); renderLibrary();
   });
 
@@ -1332,16 +1355,77 @@ _READER_HTML = """<!DOCTYPE html>
     els["fav-btn"].textContent = on ? "★ Favorited" : "☆ Favorite";
     els["fav-btn"].title = on ? "Remove from favorites" : "Add to favorites";
   }
+  function toggleFav(id) {
+    var favs = loadFavs();
+    var i = favs.indexOf(id);
+    if (i >= 0) favs.splice(i, 1); else favs.push(id);
+    saveFavs(favs);
+  }
   els["fav-btn"].addEventListener("click", function () {
     if (!current.novel) return;
-    var favs = loadFavs();
-    var i = favs.indexOf(current.novel.id);
-    if (i >= 0) favs.splice(i, 1); else favs.push(current.novel.id);
-    saveFavs(favs);
+    toggleFav(current.novel.id);
     renderFavBtn(current.novel);
   });
 
   // ---- Bookmarks ----
+  // Every bookmark across the library, newest first, so a saved spot can be
+  // found without remembering which novel it was in.
+  function renderAllBookmarks() {
+    var m = loadBmks();
+    var byId = {}; lib.all.forEach(function (n) { byId[n.id] = n; });
+    var rows = [];
+    Object.keys(m).forEach(function (novelId) {
+      (m[novelId] || []).forEach(function (b, idx) { rows.push({ novelId: novelId, b: b, idx: idx }); });
+    });
+    rows.sort(function (x, y) { return (y.b.ts || 0) - (x.b.ts || 0); });
+    els["lib-bmks-btn"].textContent = "🔖 Bookmarks" + (rows.length ? " (" + rows.length + ")" : "");
+    els["lib-bmks-count"].textContent = rows.length ? rows.length + " saved" : "";
+    var box = els["lib-bmks-list"];
+    box.innerHTML = "";
+    if (!rows.length) {
+      box.innerHTML = "<p class='muted'>No bookmarks yet. While reading, press 🔖 to save your spot.</p>";
+      return;
+    }
+    rows.forEach(function (r) {
+      var novel = byId[r.novelId];
+      var row = document.createElement("div"); row.className = "bmk-row";
+      var icon = document.createElement("span"); icon.textContent = "🔖";
+      var t = document.createElement("span"); t.className = "t";
+      var nv = document.createElement("span"); nv.className = "nv";
+      nv.textContent = novel ? (novel.title || "Untitled") : "(novel no longer in library)";
+      t.appendChild(nv);
+      t.appendChild(document.createTextNode("  ·  " + (r.b.title || ("Chapter " + (r.b.serial || ""))) +
+        " · " + Math.round((r.b.scroll || 0) * 100) + "%"));
+      var when = document.createElement("span"); when.className = "when";
+      when.textContent = r.b.ts ? new Date(r.b.ts).toLocaleDateString() : "";
+      var x = document.createElement("span"); x.className = "x"; x.textContent = "✕"; x.title = "Remove bookmark";
+      x.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var mm = loadBmks(); var list = mm[r.novelId] || [];
+        // find it again by value: indexes shift as others are removed
+        var i = list.findIndex(function (b) { return b.id === r.b.id && b.ts === r.b.ts; });
+        if (i >= 0) list.splice(i, 1);
+        if (!list.length) delete mm[r.novelId];
+        saveBmks(mm);
+        renderAllBookmarks();
+      });
+      row.appendChild(icon); row.appendChild(t); row.appendChild(when); row.appendChild(x);
+      if (novel) {
+        row.addEventListener("click", function () {
+          current = { novel: novel, chapters: [], offset: 0 };
+          openChapter(r.b.id, r.b.scroll || 0);
+        });
+      } else {
+        row.style.cursor = "default";
+      }
+      box.appendChild(row);
+    });
+  }
+  els["lib-bmks-btn"].addEventListener("click", function () {
+    var open = els["lib-bmks"].classList.toggle("hidden") === false;
+    if (open) renderAllBookmarks();
+  });
+
   function renderBookmarks(novel) {
     var list = (loadBmks()[novel.id] || []);
     els["bmk-list"].innerHTML = "";
@@ -1504,8 +1588,9 @@ _READER_HTML = """<!DOCTYPE html>
     if (v.nomtl) els["lib-nomtl"].checked = true;
     if (v.state) els["lib-state"].value = v.state;
     if (v.progress) els["lib-progress"].value = v.progress;
+    if (v.favonly || v.cat === "__fav") els["lib-favonly"].checked = true;
     lib.pending = { source: v.source || "", lang: v.lang || "" };
-    if (v.cat) lib.cat = v.cat;
+    if (v.cat && v.cat !== "__fav") lib.cat = v.cat;
     if (!token()) { show("auth"); return; }
     api("/auth/me", { method: "GET" })
       .then(function () { show("view-library"); loadLibrary(""); })
