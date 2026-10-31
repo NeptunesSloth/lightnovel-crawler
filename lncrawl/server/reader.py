@@ -275,6 +275,14 @@ _READER_HTML = """<!DOCTYPE html>
       <datalist id="lib-tag-list"></datalist>
       <select id="lib-source" title="Source"><option value="">All sources</option></select>
       <select id="lib-lang" title="Language"><option value="">All languages</option></select>
+      <select id="lib-state" title="Status">
+        <option value="">Any status</option>
+        <option value="completed">Completed</option>
+        <option value="ongoing">Ongoing</option>
+        <option value="hiatus">On hiatus</option>
+        <option value="cancelled">Cancelled</option>
+        <option value="unknown">Status unknown</option>
+      </select>
       <label class="check" title="Hide machine-translated (MTL) novels"><input id="lib-nomtl" type="checkbox" /> Hide MTL</label>
       <button id="lib-clear" class="hidden" title="Clear every filter">✕ Clear filters</button>
     </div>
@@ -400,12 +408,12 @@ _READER_HTML = """<!DOCTYPE html>
     localStorage.setItem(VIEW, JSON.stringify({
       sort: els["lib-sort"].value, kind: els["lib-kind"].value, cat: lib.cat,
       tag: els["lib-tag"].value, source: els["lib-source"].value,
-      lang: els["lib-lang"].value, nomtl: els["lib-nomtl"].checked
+      lang: els["lib-lang"].value, state: els["lib-state"].value, nomtl: els["lib-nomtl"].checked
     }));
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-nomtl","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-state","lib-nomtl","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -575,8 +583,13 @@ _READER_HTML = """<!DOCTYPE html>
     });
   }
 
+  // completed / ongoing / hiatus / cancelled, as the server worked it out when
+  // the novel was last fetched from its source; null when the source never said
+  function statusOf(n) { return (n.extra && n.extra.status) || null; }
+
   function filtersActive() {
     return !!(els["lib-kind"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
+      els["lib-state"].value ||
       els["lib-lang"].value || els["lib-nomtl"].checked || lib.cat);
   }
 
@@ -621,6 +634,8 @@ _READER_HTML = """<!DOCTYPE html>
     if (source) items = items.filter(function (n) { return n.domain === source; });
     var lang = els["lib-lang"].value;
     if (lang) items = items.filter(function (n) { return (n.language || "").slice(0, 2).toLowerCase() === lang; });
+    var state = els["lib-state"].value;
+    if (state) items = items.filter(function (n) { return (statusOf(n) || "unknown") === state; });
     if (els["lib-nomtl"].checked) items = items.filter(function (n) { return !n.mtl; });
     els["lib-clear"].classList.toggle("hidden", !filtersActive());
 
@@ -655,6 +670,7 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-status"].textContent = items.length + " novel(s)" +
       (kind ? " · " + els["lib-kind"].selectedOptions[0].textContent : "") +
       (terms.length ? " · tags: " + terms.join(", ") : "") +
+      (state ? " · " + els["lib-state"].selectedOptions[0].textContent : "") +
       (lib.cat ? (" · " + (lib.cat === "__fav" ? "★ Favorites" : lib.cat)) : "");
     items.forEach(function (n) {
       var c = document.createElement("div");
@@ -667,6 +683,12 @@ _READER_HTML = """<!DOCTYPE html>
       var h = document.createElement("h3"); h.textContent = n.title || "Untitled";
       if (isFav(n.id)) { var st = document.createElement("span"); st.className = "badge"; st.textContent = "★"; h.appendChild(st); }
       if (n.manga) { var bd = document.createElement("span"); bd.className = "badge"; bd.textContent = "Manga"; h.appendChild(bd); }
+      var st8 = statusOf(n);
+      if (st8 && st8 !== "ongoing") {
+        var sb = document.createElement("span"); sb.className = "badge";
+        sb.textContent = { completed: "Completed", hiatus: "Hiatus", cancelled: "Cancelled" }[st8] || st8;
+        h.appendChild(sb);
+      }
       var upd = loadUpdates()[n.id];
       if (upd && upd.found) {
         var nb = document.createElement("span"); nb.className = "badge new";
@@ -763,6 +785,7 @@ _READER_HTML = """<!DOCTYPE html>
   els["lib-kind"].addEventListener("change", renderLibrary);
   els["lib-source"].addEventListener("change", renderLibrary);
   els["lib-lang"].addEventListener("change", renderLibrary);
+  els["lib-state"].addEventListener("change", renderLibrary);
   els["lib-nomtl"].addEventListener("change", renderLibrary);
   var tagTimer = null;
   els["lib-tag"].addEventListener("input", function () {
@@ -771,7 +794,7 @@ _READER_HTML = """<!DOCTYPE html>
   });
   els["lib-clear"].addEventListener("click", function () {
     els["lib-kind"].value = ""; els["lib-tag"].value = ""; els["lib-source"].value = "";
-    els["lib-lang"].value = ""; els["lib-nomtl"].checked = false; lib.cat = "";
+    els["lib-lang"].value = ""; els["lib-state"].value = ""; els["lib-nomtl"].checked = false; lib.cat = "";
     renderCategories(); renderLibrary();
   });
 
@@ -1447,6 +1470,7 @@ _READER_HTML = """<!DOCTYPE html>
     if (v.kind) els["lib-kind"].value = v.kind;
     if (v.tag) els["lib-tag"].value = v.tag;
     if (v.nomtl) els["lib-nomtl"].checked = true;
+    if (v.state) els["lib-state"].value = v.state;
     lib.pending = { source: v.source || "", lang: v.lang || "" };
     if (v.cat) lib.cat = v.cat;
     if (!token()) { show("auth"); return; }
