@@ -248,6 +248,11 @@ class SoupTemplate(BrowserTemplate):
             ctx.logger.warn("Failed to parse novel synopsis", exc_info=True)
 
         try:
+            self.parse_status(soup, novel)
+        except Exception:
+            ctx.logger.debug("Failed to parse novel status", exc_info=True)
+
+        try:
             novel.volumes = []
             novel.chapters = []
             self.parse_toc(soup, novel)
@@ -347,6 +352,18 @@ class SoupTemplate(BrowserTemplate):
         if not novel.tags:
             meta_tag = soup.select_one(SoupTemplate.novel_tags_selector)
             novel.tags = [t.strip() for t in meta_tag.get("content").split(",")]
+
+    def parse_status(self, soup: PageSoup, novel: Novel) -> None:
+        """Parse and set whether the novel is completed, ongoing, on hiatus or cancelled.
+
+        Most sites print it beside a "Status" label, which this finds without a
+        selector; override it for a site that shows it some other way.
+        """
+        from ..utils.novel_status import from_page
+
+        status = from_page(soup)
+        if status:
+            novel.status = status
 
     def parse_summary(self, soup: PageSoup, novel: Novel) -> None:
         """Parse and set the novel summary or synopsis"""

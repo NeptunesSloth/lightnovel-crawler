@@ -12,6 +12,7 @@ from ..core import Chapter as CrawlerChapter, Crawler, Novel as CrawlerNovel, Se
 from ..core.request_budget import request_budget
 from ..dao import Chapter, ChapterImage, Novel
 from ..exceptions import AbortedException, EmptyChapterError, ServerErrors
+from ..utils import novel_status
 from ..utils.chapter_content import has_chapter_content
 from ..utils.sitemap import collect_sitemap_urls, learn_shapes, title_from_url
 from ..utils.url_tools import extract_host
@@ -158,6 +159,15 @@ class CrawlerService:
             extra = dict(**novel.extra)
             extra.update(model.get_extras())
             extra["crawler_version"] = crawler.version
+            # completed / ongoing / hiatus / cancelled, from whatever the source
+            # gave; a fetch that finds nothing keeps what an earlier one found
+            status = novel_status.detect(
+                model.get("status") or model.get("novel_status"),
+                model.tags or [],
+                model.chapters[-1].title if model.chapters else "",
+            )
+            if status:
+                extra["status"] = status
             novel.extra = extra
 
             # save updates
