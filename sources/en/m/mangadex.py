@@ -18,6 +18,8 @@ UUID_RE = re.compile(
     re.IGNORECASE,
 )
 LANG = "en"
+# The kind of comic by the language it was first published in.
+ORIGIN_KIND = {"ja": "Manga", "ko": "Manhwa", "zh": "Manhua"}
 RATINGS = "contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica&contentRating[]=pornographic"
 # MangaDex's API rejects browser User-Agents (HTTP 400); send a plain client UA.
 API_HEADERS = {"User-Agent": "lightnovel-crawler (+https://github.com/dipu-bd/lightnovel-crawler)"}
@@ -92,6 +94,21 @@ class MangaDexCrawler(LegacyCrawler):
         synopsis = (attrs.get("description") or {}).get("en")
         if synopsis:
             self.novel_synopsis = synopsis
+
+        # Genres and themes, plus what the library filters on: where the comic
+        # comes from (its kind), whether it is adult, and whether it is finished.
+        tags = [
+            ((t.get("attributes") or {}).get("name") or {}).get("en") or ""
+            for t in attrs.get("tags") or []
+        ]
+        kind = ORIGIN_KIND.get((attrs.get("originalLanguage") or "").split("-")[0])
+        if kind:
+            tags.insert(0, kind)
+        rating = attrs.get("contentRating") or ""
+        if rating in ("erotica", "pornographic"):
+            tags.append(rating.title())
+        self.novel_tags = list(dict.fromkeys(t for t in tags if t))
+        self.novel_status = attrs.get("status") or None
 
         # Fetch the chapter list (paginated), keeping one entry per chapter number
         seen = set()

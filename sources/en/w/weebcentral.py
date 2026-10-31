@@ -7,6 +7,7 @@ import re
 from urllib.parse import quote_plus
 
 from lncrawl.core import Chapter, LegacyCrawler, Volume
+from lncrawl.utils.novel_status import from_page
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,20 @@ class WeebCentralCrawler(LegacyCrawler):
         ]
         if authors:
             self.novel_author = ", ".join(dict.fromkeys(authors))
+
+        # The info list links each fact to a search: type (Manga / Manhwa /
+        # Manhua) and adult content become tags so the library can filter on
+        # them, and the status says whether the series is finished.
+        tags = [
+            a.get_text(strip=True)
+            for a in soup.select("a[href*='included_type='], a[href*='included_tag=']")
+            if a.get_text(strip=True)
+        ]
+        if soup.select_one("a[href*='adult=True']"):
+            tags.append("Adult")
+        self.novel_tags = list(dict.fromkeys(tags))
+        status = soup.select_one("a[href*='included_status=']")
+        self.novel_status = from_page(soup) or (status.get_text(strip=True) if status else None)
 
         # The full chapter list lives behind a dedicated endpoint.
         match = re.search(r"/series/(" + ULID + ")", self.novel_url)

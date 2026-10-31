@@ -3,6 +3,7 @@ import re
 
 from lncrawl.core import Chapter, LegacyCrawler, Volume
 from lncrawl.core.models import SearchResult
+from lncrawl.utils.novel_status import from_page
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,8 @@ class NovelFireCrawler(LegacyCrawler):
             self.novel_synopsis = self.cleaner.extract_contents(summary)
 
         self.novel_tags = [a.text.strip() for a in soup.select(".categories a") if a.text.strip()]
+        # "<strong>Ongoing</strong> <small>Status</small>" in the header stats
+        self.novel_status = from_page(soup)
 
         vol_id = 1
         vol_url = self.novel_url + "/chapters"
