@@ -39,8 +39,12 @@ def _chosen_novels(user: User, scope: str) -> List[str]:
             return list(sess.exec(sq.select(Novel.id).limit(MAX_NOVELS)).all())
     ids: List[str] = []
     if scope in ("favorites", "both"):
-        favs = (state.get("favs") or {}).get("data") or []
-        ids += [str(i) for i in favs if isinstance(i, str)]
+        items = state.get("favitems") or {}
+        if isinstance(items, dict) and items:
+            ids += [k for k, v in items.items() if isinstance(v, dict) and v.get("on")]
+        else:  # saved by a Reader from before favorites synced item by item
+            favs = (state.get("favs") or {}).get("data") or []
+            ids += [str(i) for i in favs if isinstance(i, str)]
     if scope in ("reading", "both"):
         ids += [str(i) for i in (state.get("pos") or {})]
     return list(dict.fromkeys(ids))[:MAX_NOVELS]
@@ -85,6 +89,7 @@ def run(signal=None) -> int:
             if current:
                 extra = dict(current.extra or {})
                 extra["autoupdate_last"] = now
+                extra["autoupdate_queued"] = len(novels)
                 current.extra = extra
                 sess.add(current)
                 sess.commit()

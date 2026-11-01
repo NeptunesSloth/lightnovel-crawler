@@ -58,6 +58,10 @@ class FetchLatestRequest(BaseModel):
 class SearchSourceRequest(BaseModel):
     query: str = Field(description="Search query", min_length=2, max_length=50)
     domain: Optional[str] = Field(default=None, description="Search in a specific source only")
+    domains: Optional[List[str]] = Field(
+        default=None,
+        description="Search only these sources (all searchable ones when empty)",
+    )
     results_only: bool = Field(
         default=False,
         description="Only list what the sources return; do not add every result to the library",

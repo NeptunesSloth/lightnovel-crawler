@@ -342,7 +342,9 @@ def search_sources(
             user, body.query, body.domain, results_only=body.results_only
         )
     else:
-        return ctx.jobs.search_all_sources(user, body.query, results_only=body.results_only)
+        return ctx.jobs.search_all_sources(
+            user, body.query, results_only=body.results_only, domains=body.domains or None
+        )
 
 
 @router.post(

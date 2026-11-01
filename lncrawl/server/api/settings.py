@@ -68,6 +68,17 @@ def put_notification_settings(
     return True
 
 
+@router.get("/auto-update", summary="When this user's daily new-chapter check last ran")
+def get_auto_update_status(user: User = Security(ensure_user)) -> Dict[str, Any]:
+    with ctx.db.session() as sess:
+        current = sess.get(User, user.id)
+        extra = (current.extra or {}) if current else {}
+    return {
+        "last": int(extra.get("autoupdate_last") or 0),
+        "queued": int(extra.get("autoupdate_queued") or 0),
+    }
+
+
 @router.get("/reader-state", summary="The Reader's saved state for this user, across devices")
 def get_reader_state(user: User = Security(ensure_user)) -> Dict[str, Any]:
     with ctx.db.session() as sess:

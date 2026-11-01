@@ -22,8 +22,24 @@ class ReaderStateMergeTests(unittest.TestCase):
         self.assertEqual(out["favs"]["data"], ["a"])  # the removal made later wins
         self.assertEqual(out["views"]["data"], {"x": {}})  # an older copy does not
 
+    def test_favorites_merge_item_by_item(self) -> None:
+        # the phone removed "a" at 300; the PC added "b" at 200 while offline
+        phone = {"favitems": {"a": {"on": False, "ts": 300}, "c": {"on": True, "ts": 50}}}
+        pc = {"favitems": {"a": {"on": True, "ts": 100}, "b": {"on": True, "ts": 200}}}
+        out = merge(phone, pc)["favitems"]
+        self.assertFalse(out["a"]["on"])  # the later removal holds
+        self.assertTrue(out["b"]["on"])  # the PC's addition is not lost
+        self.assertTrue(out["c"]["on"])
+
+    def test_stats_from_two_devices_both_kept(self) -> None:
+        out = merge(
+            {"stats": {"phone|2026-11-01": {"chapters": 3, "ts": 1}}},
+            {"stats": {"pc|2026-11-01": {"chapters": 5, "ts": 2}}},
+        )
+        self.assertEqual(sorted(out["stats"]), ["pc|2026-11-01", "phone|2026-11-01"])
+
     def test_ignores_malformed_input(self) -> None:
-        out = merge({"pos": {"a": "legacy-string"}}, {"pos": None, "favs": "nope"})
+        out = merge({"pos": {"a": "legacy-string"}}, {"pos": None, "favs": "nope", "favitems": []})
         self.assertEqual(out, {"pos": {}})
 
 

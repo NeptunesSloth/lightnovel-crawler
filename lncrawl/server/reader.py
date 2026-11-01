@@ -210,8 +210,37 @@ _READER_HTML = """<!DOCTYPE html>
   }
   #trans-pop .w { color: #7aa2ff; font-weight: 600; }
 
+  .more-menu { position: relative; }
+  .more-menu > summary {
+    list-style: none; cursor: pointer; padding: 7px 12px; border-radius: 8px;
+    border: 1px solid #303644; font-size: 13px; user-select: none;
+  }
+  .more-menu > summary::-webkit-details-marker { display: none; }
+  .more-list {
+    position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 220px;
+    display: flex; flex-direction: column; gap: 4px; padding: 6px;
+    background: #12151b; border: 1px solid #262b36; border-radius: 10px; box-shadow: 0 8px 24px #0008;
+  }
+  .more-list button { margin: 0; text-align: left; }
+  #lib-filters-btn.on { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  .chap .rd { color: #22c55e; width: 16px; }
+  .chap.here .t { color: #7aa2ff; font-weight: 600; }
+  .stat-bars { display: flex; align-items: flex-end; gap: 4px; height: 80px; margin: 8px 0 4px; }
+  .stat-bars span { flex: 1; background: #3b82f6; border-radius: 3px 3px 0 0; min-height: 2px; }
+  .stat-days { display: flex; gap: 4px; font-size: 10px; color: #6b7280; }
+  .stat-days span { flex: 1; text-align: center; }
+  .shelf-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid #20242d; }
+  .shelf-row .n { flex: 1; }
+  .shelf-row button { margin: 0; padding: 3px 9px; font-size: 12px; }
+
   /* ---- Mobile / small screens ---- */
   @media (max-width: 640px) {
+    .toolbar { gap: 6px; }
+    .toolbar select, .toolbar.filters input[type=text] { flex: 1 1 46%; min-width: 0; max-width: none; }
+    .toolbar.filters .check { flex: 1 1 46%; }
+    .chap-range { flex: 1 1 100%; }
+    .more-list { left: auto; right: 0; }
+    .novel-tools button { flex: 1 1 46%; }
     .topbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); }
     .topbar h1 { font-size: 15px; }
     #search-wrap { order: 3; flex: 1 1 100%; max-width: none; }
@@ -293,15 +322,26 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="manhwa">Manhwa (Korean)</option>
         <option value="manhua">Manhua (Chinese)</option>
       </select>
-      <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
-      <button id="lib-fill" class="hidden" title="Re-read the details (status, genres, description) of novels that are missing them">✚ Fill in details</button>
-      <button id="lib-bmks-btn" title="Every bookmark, across all novels">🔖 Bookmarks</button>
+      <button id="lib-filters-btn" title="Show or hide the filters">Filters</button>
       <button id="lib-auto-btn" title="New chapters: automatic checks and notifications">🔔 New chapters</button>
-      <button id="lib-select" title="Select novels to delete">☑ Select</button>
+      <button id="lib-bmks-btn" title="Every bookmark, across all novels">🔖 Bookmarks</button>
+      <details class="more-menu" id="lib-more">
+        <summary title="More actions">⋯ More</summary>
+        <div class="more-list">
+          <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
+          <button id="lib-fill" class="hidden" title="Re-read the details (status, genres, description) of novels that are missing them">✚ Fill in details</button>
+          <button id="lib-stats-btn" title="How much you have been reading">📊 Reading stats</button>
+          <button id="lib-shelves-btn" title="Rename, delete or reorder your shelves">📚 Manage shelves</button>
+          <button id="lib-backup" title="Save your positions, favorites, bookmarks, ratings, views and shelves to a file">⤓ Back up reading data</button>
+          <button id="lib-restore" title="Load a backup made here, adding it to what you have">⤒ Restore a backup</button>
+          <input id="lib-restore-file" type="file" accept="application/json,.json" class="hidden" />
+          <button id="lib-select" title="Select novels to delete">☑ Select</button>
+        </div>
+      </details>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
       <div id="lib-cats" class="tags"></div>
     </div>
-    <div class="toolbar filters">
+    <div class="toolbar filters hidden" id="lib-filters">
       <input id="lib-tag" type="text" list="lib-tag-list" autocomplete="off"
              placeholder="Tags: romance, fantasy, -harem" title="Show novels with every tag listed; put - before a tag to hide it" />
       <datalist id="lib-tag-list"></datalist>
@@ -346,6 +386,14 @@ _READER_HTML = """<!DOCTYPE html>
       <button id="lib-view-save" title="Save the current sort and filters under a name">💾 Save view</button>
       <button id="lib-view-del" class="hidden" title="Delete the selected saved view">✕</button>
     </div>
+    <div id="lib-stats" class="card hidden">
+      <div class="shelf-title">📊 Reading stats <span class="muted" id="lib-stats-note"></span></div>
+      <div id="lib-stats-body"></div>
+    </div>
+    <div id="lib-shelves" class="card hidden">
+      <div class="shelf-title">📚 Your shelves</div>
+      <div id="lib-shelves-list"></div>
+    </div>
     <div id="lib-auto" class="card hidden">
       <div class="shelf-title">🔔 New chapters</div>
       <label class="check"><input id="auto-on" type="checkbox" /> Check for new chapters every day, even with the Reader closed</label>
@@ -367,7 +415,13 @@ _READER_HTML = """<!DOCTYPE html>
       <div id="lib-bmks-list"></div>
     </div>
     <p class="muted" id="lib-status">Loading your library…</p>
-    <button id="lib-web-btn" class="hidden" title="Look for this on the sources the app can download from"></button>
+    <span id="lib-web-row" class="hidden">
+      <button id="lib-web-btn" title="Look for this on the sources the app can download from"></button>
+      <select id="lib-web-scope" title="Which sources to search">
+        <option value="mine">on the sources in my library</option>
+        <option value="all">on every source (slower)</option>
+      </select>
+    </span>
     <div id="lib-web" class="card hidden">
       <div class="shelf-title">🔎 From the sources <span class="muted" id="lib-web-status"></span>
         <a id="lib-web-stop" class="see-all">Stop</a></div>
@@ -399,6 +453,8 @@ _READER_HTML = """<!DOCTYPE html>
       <button id="prog-unread" class="secondary" title="Forget where you were">↺ Mark unread</button>
       <button id="prog-set" class="secondary" title="Say which chapter you are on (read elsewhere)">✎ Set chapter…</button>
       <button id="shelf-btn" class="secondary" title="Put this novel on your shelves">📚 Shelves</button>
+      <button id="offline-btn" class="secondary" title="Keep chapters on this device to read without a connection">⬇ Save for offline</button>
+      <span id="offline-msg" class="muted"></span>
     </div>
     <div id="shelf-box" class="tags hidden"></div>
     <span class="muted hidden" id="heal-msg" style="margin-left:8px"></span>
@@ -496,9 +552,31 @@ _READER_HTML = """<!DOCTYPE html>
   function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS) || "{}"); } catch (e) { return {}; } }
   function savePrefs(p) { localStorage.setItem(PREFS, JSON.stringify(p)); touchSync("prefs"); }
   function loadFavs() { try { return JSON.parse(localStorage.getItem(FAV) || "[]"); } catch (e) { return []; } }
-  function saveFavs(a) { localStorage.setItem(FAV, JSON.stringify(a)); touchSync("favs"); }
+  function saveFavs(a) {
+    var before = loadFavs();
+    localStorage.setItem(FAV, JSON.stringify(a));
+    var changes = {};
+    a.forEach(function (id) { if (before.indexOf(id) < 0) changes[id] = { on: true }; });
+    before.forEach(function (id) { if (a.indexOf(id) < 0) changes[id] = { on: false }; });
+    markItems("favitems", changes);
+  }
   function loadBmks() { try { return JSON.parse(localStorage.getItem(BMK) || "{}"); } catch (e) { return {}; } }
-  function saveBmks(m) { localStorage.setItem(BMK, JSON.stringify(m)); touchSync("bookmarks"); }
+  function bmkKey(novelId, b) { return novelId + "|" + b.id + "|" + b.ts; }
+  function flatBmks(m) {
+    var out = {};
+    Object.keys(m || {}).forEach(function (nid) {
+      (m[nid] || []).forEach(function (b) { out[bmkKey(nid, b)] = { novel: nid, b: b }; });
+    });
+    return out;
+  }
+  function saveBmks(m) {
+    var before = flatBmks(loadBmks()), after = flatBmks(m);
+    localStorage.setItem(BMK, JSON.stringify(m));
+    var changes = {};
+    Object.keys(after).forEach(function (k) { if (!before[k]) changes[k] = { on: true, novel: after[k].novel, b: after[k].b }; });
+    Object.keys(before).forEach(function (k) { if (!after[k]) changes[k] = { on: false }; });
+    markItems("bmkitems", changes);
+  }
   function loadView() { try { return JSON.parse(localStorage.getItem(VIEW) || "{}"); } catch (e) { return {}; } }
   // The sort and every filter, as one object: what is remembered between
   // visits, and what a saved view holds.
@@ -550,16 +628,69 @@ _READER_HTML = """<!DOCTYPE html>
   var RATE = "lncrawl_reader_ratings";  // { novelId: 1-5 }
   var AUTO = "lncrawl_reader_autoupdate";  // { enabled, scope, download, notify }
   function loadRatings() { try { return JSON.parse(localStorage.getItem(RATE) || "{}"); } catch (e) { return {}; } }
-  function saveRatings(m) { localStorage.setItem(RATE, JSON.stringify(m)); touchSync("ratings"); }
+  function saveRatings(m) {
+    var before = loadRatings();
+    localStorage.setItem(RATE, JSON.stringify(m));
+    var changes = {};
+    Object.keys(m).forEach(function (id) { if (before[id] !== m[id]) changes[id] = { v: m[id] }; });
+    Object.keys(before).forEach(function (id) { if (!(id in m)) changes[id] = { v: 0 }; });
+    markItems("rateitems", changes);
+  }
+
+  // Favorites, bookmarks and ratings also live here as one entry per item, each
+  // with the time it last changed (a removal kept as "off"), and reading stats
+  // as one entry per device and day. The server merges these entry by entry, so
+  // changes to different items on two devices both survive.
+  var ITEMS = "lncrawl_reader_items";  // { favitems, bmkitems, rateitems, stats }
+  var KEYED = ["favitems", "bmkitems", "rateitems", "stats"];
+  function loadItems() {
+    var it; try { it = JSON.parse(localStorage.getItem(ITEMS) || "null"); } catch (e) { it = null; }
+    if (!it) {
+      // first run: what this device already has, dated as old as possible so any
+      // change made elsewhere wins over it
+      it = { favitems: {}, bmkitems: {}, rateitems: {}, stats: {} };
+      loadFavs().forEach(function (id) { it.favitems[id] = { on: true, ts: 1 }; });
+      var fb = flatBmks(loadBmks());
+      Object.keys(fb).forEach(function (k) { it.bmkitems[k] = { on: true, ts: 1, novel: fb[k].novel, b: fb[k].b }; });
+      var r = loadRatings();
+      Object.keys(r).forEach(function (id) { it.rateitems[id] = { v: r[id], ts: 1 }; });
+      localStorage.setItem(ITEMS, JSON.stringify(it));
+    }
+    KEYED.forEach(function (k) { it[k] = it[k] || {}; });
+    return it;
+  }
+  function markItems(section, changes) {
+    var keys = Object.keys(changes);
+    if (!keys.length) return;
+    var it = loadItems(), now = Date.now();
+    keys.forEach(function (k) { changes[k].ts = now; it[section][k] = changes[k]; });
+    localStorage.setItem(ITEMS, JSON.stringify(it));
+    schedulePush();
+  }
+  // Rebuild the plain lists the page reads from the item entries.
+  function applyItems(it) {
+    var favs = loadFavs().filter(function (id) { return it.favitems[id] ? it.favitems[id].on : true; });
+    Object.keys(it.favitems).forEach(function (id) {
+      if (it.favitems[id].on && favs.indexOf(id) < 0) favs.push(id);
+    });
+    localStorage.setItem(FAV, JSON.stringify(favs));
+    var bm = {};
+    Object.keys(it.bmkitems).forEach(function (k) {
+      var e = it.bmkitems[k];
+      if (e.on && e.novel && e.b) (bm[e.novel] = bm[e.novel] || []).push(e.b);
+    });
+    Object.keys(bm).forEach(function (nid) { bm[nid].sort(function (a, b) { return (a.ts || 0) - (b.ts || 0); }); });
+    localStorage.setItem(BMK, JSON.stringify(bm));
+    var rt = {};
+    Object.keys(it.rateitems).forEach(function (id) { if (it.rateitems[id].v) rt[id] = it.rateitems[id].v; });
+    localStorage.setItem(RATE, JSON.stringify(rt));
+  }
   function loadAuto() { try { return JSON.parse(localStorage.getItem(AUTO) || "{}"); } catch (e) { return {}; } }
   function saveAuto(m) { localStorage.setItem(AUTO, JSON.stringify(m)); touchSync("autoupdate"); }
   var SECTIONS = {
     prefs: { load: function () { return loadPrefs(); }, key: function () { return PREFS; } },
     updates: { load: function () { return loadUpdates(); }, key: function () { return UPD; } },
-    ratings: { load: function () { return loadRatings(); }, key: function () { return RATE; } },
     autoupdate: { load: function () { return loadAuto(); }, key: function () { return AUTO; } },
-    favs: { load: function () { return loadFavs(); }, key: function () { return FAV; } },
-    bookmarks: { load: function () { return loadBmks(); }, key: function () { return BMK; } },
     views: { load: function () { return loadViews(); }, key: function () { return VIEWS; } }
   };
   function loadSyncTs() { try { return JSON.parse(localStorage.getItem(SYNC_TS) || "{}"); } catch (e) { return {}; } }
@@ -582,6 +713,8 @@ _READER_HTML = """<!DOCTYPE html>
     Object.keys(SECTIONS).forEach(function (name) {
       out[name] = { data: SECTIONS[name].load(), ts: t[name] || 0 };
     });
+    var it = loadItems();
+    KEYED.forEach(function (k) { out[k] = it[k]; });
     return out;
   }
   function isEmpty(v) { return !v || (Array.isArray(v) ? !v.length : !Object.keys(v).length); }
@@ -617,6 +750,19 @@ _READER_HTML = """<!DOCTYPE html>
       if (p[id] && typeof p[id] === "object" && (!theirs || (p[id].ts || 0) > (theirs.ts || 0))) dirty = true;
     });
     localStorage.setItem(POS, JSON.stringify(p));
+    var it = loadItems();
+    KEYED.forEach(function (k) {
+      var theirs = server[k] || {};
+      Object.keys(theirs).forEach(function (key) {
+        var mine = it[k][key];
+        if (!mine || (theirs[key].ts || 0) > (mine.ts || 0)) it[k][key] = theirs[key];
+      });
+      Object.keys(it[k]).forEach(function (key) {
+        if (!theirs[key] || (it[k][key].ts || 0) > (theirs[key].ts || 0)) dirty = true;
+      });
+    });
+    localStorage.setItem(ITEMS, JSON.stringify(it));
+    applyItems(it);
     var t = loadSyncTs();
     Object.keys(SECTIONS).forEach(function (name) {
       var theirs = server[name];
@@ -656,7 +802,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -1040,6 +1186,33 @@ _READER_HTML = """<!DOCTYPE html>
     return [min, max];
   }
 
+  // How many filters are on, for the Filters button.
+  function activeFilterCount() {
+    return [els["lib-tag"].value.trim(), els["lib-source"].value, els["lib-lang"].value,
+      els["lib-progress"].value, els["lib-shelf"].value, els["lib-state"].value,
+      els["lib-favonly"].checked, !!chapterRange(), els["lib-dupes"].checked,
+      els["lib-nobl"].checked, els["lib-nomtl"].checked, lib.cat].filter(Boolean).length;
+  }
+  var FILTERS_OPEN = "lncrawl_reader_filters_open";
+  function renderFiltersButton() {
+    var n = activeFilterCount();
+    var open = !els["lib-filters"].classList.contains("hidden");
+    els["lib-filters-btn"].textContent = (open ? "▾ " : "▸ ") + "Filters" + (n ? " (" + n + ")" : "");
+    els["lib-filters-btn"].classList.toggle("on", n > 0);
+  }
+  els["lib-filters-btn"].addEventListener("click", function () {
+    var open = els["lib-filters"].classList.toggle("hidden") === false;
+    try { localStorage.setItem(FILTERS_OPEN, open ? "1" : ""); } catch (e) { /* private mode */ }
+    renderFiltersButton();
+  });
+  // the More menu closes once something in it is picked, or on a click elsewhere
+  els["lib-more"].addEventListener("click", function (e) {
+    if (e.target.tagName === "BUTTON") els["lib-more"].open = false;
+  });
+  document.addEventListener("click", function (e) {
+    if (els["lib-more"].open && !els["lib-more"].contains(e.target)) els["lib-more"].open = false;
+  });
+
   function filtersActive() {
     return !!(els["lib-kind"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
       els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked || !!chapterRange() || !!els["lib-shelf"].value || els["lib-nobl"].checked || els["lib-dupes"].checked ||
@@ -1072,6 +1245,7 @@ _READER_HTML = """<!DOCTYPE html>
     updateWebButton();
     updateFillButton();
     renderAuto();
+    renderFiltersButton();
     var items = lib.all.slice();
     var q = els["search"].value;
     var words = norm(q).split(" ").filter(Boolean);
@@ -1505,7 +1679,16 @@ _READER_HTML = """<!DOCTYPE html>
   function updateWebButton() {
     var q = els["search"].value.trim();
     var btn = els["lib-web-btn"];
-    btn.classList.toggle("hidden", q.length < 2);
+    els["lib-web-row"].classList.toggle("hidden", q.length < 2);
+    var sel = els["lib-web-scope"];
+    if (sel.options.length <= 2) {
+      // and each source the library uses, to search just that one
+      var doms = {};
+      (lib.everything || lib.all).forEach(function (n) { if (n.domain) doms[n.domain] = 1; });
+      Object.keys(doms).sort().forEach(function (d) {
+        var o = document.createElement("option"); o.value = d; o.textContent = "on " + d + " only"; sel.appendChild(o);
+      });
+    }
     btn.textContent = "🔎 Search the sources for “" + q + "”";
   }
   function stopWebSearch() {
@@ -1526,9 +1709,18 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-web"].classList.remove("hidden");
     els["lib-web-list"].innerHTML = "";
     els["lib-web-status"].textContent = "· searching…";
+    var scope = els["lib-web-scope"].value;
+    var body = { query: q.slice(0, 50), results_only: true };
+    if (scope === "mine") {
+      var doms = {};
+      (lib.everything || lib.all).forEach(function (n) { if (n.domain) doms[n.domain] = 1; });
+      body.domains = Object.keys(doms);
+    } else if (scope !== "all") {
+      body.domain = scope;
+    }
     api("/job/create/search-sources", {
       method: "POST",
-      body: JSON.stringify({ query: q.slice(0, 50), results_only: true })
+      body: JSON.stringify(body)
     }).then(function (job) {
       web.job = job.id;
       els["lib-web-stop"].classList.remove("hidden");
@@ -1624,9 +1816,13 @@ _READER_HTML = """<!DOCTYPE html>
     els["auto-notify"].checked = !!a.notify;
     var fresh = lib.all.filter(function (n) { return hasNewChapters(n) && watched(n, a.scope || "both"); });
     els["lib-auto-btn"].textContent = "🔔 New chapters" + (fresh.length ? " (" + fresh.length + ")" : "");
+    var st = lib.autoStatus || {};
+    var since = st.last ? lib.all.filter(function (n) { return ((lib.latest || {})[n.id] || 0) > st.last; }).length : 0;
     els["auto-note"].textContent = (a.enabled
       ? "The server checks these once a day" + (a.download ? " and downloads what it finds." : ".")
       : "Off: use ⟳ Check updates to look now.") +
+      (st.last ? " Last check " + timeAgo(st.last) + " (" + (st.queued || 0) + " novel(s)); " +
+        since + " novel(s) got new chapters since." : (a.enabled ? " It hasn't run yet." : "")) +
       (fresh.length ? " " + fresh.length + " novel(s) have chapters you haven't read." : "");
     return fresh;
   }
@@ -1656,6 +1852,7 @@ _READER_HTML = """<!DOCTYPE html>
   els["lib-auto-btn"].addEventListener("click", function () {
     els["lib-auto"].classList.toggle("hidden");
     renderAuto();
+    api("/settings/auto-update").then(function (st) { lib.autoStatus = st; renderAuto(); }).catch(function () {});
   });
   ["auto-on", "auto-scope", "auto-dl"].forEach(function (k) { els[k].addEventListener("change", saveAutoFromForm); });
   els["auto-notify"].addEventListener("change", function () {
@@ -1683,6 +1880,61 @@ _READER_HTML = """<!DOCTYPE html>
       if (current.novel) renderShelfBox(current.novel);
     });
   }
+  // Shelves in the order you put them (kept with the synced reading settings).
+  function orderedShelves() {
+    var order = (prefs && prefs.shelfOrder) || [];
+    return (lib.shelves || []).slice().sort(function (a, b) {
+      var ia = order.indexOf(a.id), ib = order.indexOf(b.id);
+      if (ia < 0) ia = 1e6; if (ib < 0) ib = 1e6;
+      return ia - ib || a.name.localeCompare(b.name);
+    });
+  }
+  function renderShelvesPanel() {
+    var box = els["lib-shelves-list"];
+    box.innerHTML = "";
+    var list = orderedShelves();
+    if (!list.length) {
+      box.innerHTML = "<p class='muted'>No shelves yet. Open a novel and press 📚 Shelves → + New shelf.</p>";
+      return;
+    }
+    list.forEach(function (sh, i) {
+      var row = document.createElement("div"); row.className = "shelf-row";
+      var n = document.createElement("span"); n.className = "n";
+      n.textContent = sh.name + " (" + (((lib.membership || {})[sh.id]) || []).length + ")";
+      var up = document.createElement("button"); up.className = "secondary"; up.textContent = "↑"; up.disabled = i === 0;
+      var dn = document.createElement("button"); dn.className = "secondary"; dn.textContent = "↓"; dn.disabled = i === list.length - 1;
+      var rn = document.createElement("button"); rn.className = "secondary"; rn.textContent = "✎ Rename";
+      var del = document.createElement("button"); del.className = "secondary"; del.textContent = "🗑";
+      function move(by) {
+        var ids = list.map(function (x) { return x.id; });
+        var j = i + by; var tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp;
+        prefs.shelfOrder = ids; savePrefs(prefs);
+        renderShelvesPanel(); renderShelfFilter();
+      }
+      up.addEventListener("click", function () { move(-1); });
+      dn.addEventListener("click", function () { move(1); });
+      rn.addEventListener("click", function () {
+        var name = (prompt("Rename “" + sh.name + "” to:", sh.name) || "").trim();
+        if (!name || name === sh.name) return;
+        api("/library/" + sh.id, { method: "PATCH", body: JSON.stringify({ name: name }) })
+          .then(loadShelves).then(renderShelvesPanel)
+          .catch(function (e) { alert("Couldn't rename it: " + e.message); });
+      });
+      del.addEventListener("click", function () {
+        if (!confirm("Delete the shelf “" + sh.name + "”? The novels on it stay in your library.")) return;
+        api("/library/" + sh.id, { method: "DELETE" })
+          .then(loadShelves).then(renderShelvesPanel)
+          .catch(function (e) { alert("Couldn't delete it: " + e.message); });
+      });
+      row.appendChild(n); row.appendChild(up); row.appendChild(dn); row.appendChild(rn); row.appendChild(del);
+      box.appendChild(row);
+    });
+  }
+  els["lib-shelves-btn"].addEventListener("click", function () {
+    els["lib-shelves"].classList.toggle("hidden");
+    renderShelvesPanel();
+  });
+
   function shelvesOf(novelId) {
     return (lib.shelves || []).filter(function (s) { return ((lib.membership || {})[s.id] || []).indexOf(novelId) >= 0; });
   }
@@ -1692,7 +1944,7 @@ _READER_HTML = """<!DOCTYPE html>
     lib.pendingShelf = null;
     sel.innerHTML = "";
     var all = document.createElement("option"); all.value = ""; all.textContent = "All shelves"; sel.appendChild(all);
-    (lib.shelves || []).forEach(function (s) {
+    orderedShelves().forEach(function (s) {
       var o = document.createElement("option"); o.value = s.id;
       o.textContent = s.name + " (" + (((lib.membership || {})[s.id]) || []).length + ")";
       sel.appendChild(o);
@@ -1703,7 +1955,7 @@ _READER_HTML = """<!DOCTYPE html>
   function renderShelfBox(novel) {
     var box = els["shelf-box"];
     box.innerHTML = "";
-    (lib.shelves || []).forEach(function (s) {
+    orderedShelves().forEach(function (s) {
       var on = ((lib.membership || {})[s.id] || []).indexOf(novel.id) >= 0;
       var chip = document.createElement("span"); chip.className = "chip" + (on ? " active" : "");
       chip.textContent = (on ? "✓ " : "") + s.name;
@@ -1790,6 +2042,190 @@ _READER_HTML = """<!DOCTYPE html>
     var n = parseInt(raw || "", 10);
     if (!n || n < 1) return;
     setProgress(current.novel, n, 0).catch(function (e) { alert("Couldn't set it: " + e.message); });
+  });
+
+  // ---- Save for offline ----
+  // Chapters are fetched now and kept in the Reader's offline cache, the same
+  // one the service worker answers from with no connection, so they open later
+  // without one: the text, and a manga chapter's pages.
+  var OFFLINE_CACHE = "lncrawl-reader-v1";
+  function keep(url) {
+    return fetch(url, { headers: { "Authorization": "Bearer " + token() } }).then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      var copy = res.clone();
+      return caches.open(OFFLINE_CACHE).then(function (c) { return c.put(url, copy); }).then(function () { return res; });
+    });
+  }
+  els["offline-btn"].addEventListener("click", function () {
+    var novel = current.novel;
+    if (!novel) return;
+    if (!("caches" in window)) { alert("This browser can't keep pages for offline reading."); return; }
+    var pe = posOf(novel.id);
+    var from = pe && pe.serial ? pe.serial : 1;
+    var raw = prompt("How many chapters to keep, starting at chapter " + from + "? (a number, or “all”)", "20");
+    if (!raw) return;
+    var want = /^all$/i.test(raw.trim()) ? Infinity : parseInt(raw, 10);
+    if (!want || want < 1) return;
+    var msg = els["offline-msg"], btn = this, kept = 0, ids = [];
+    btn.disabled = true;
+    msg.textContent = "Finding chapters…";
+    keep("/api/novel/" + novel.id).catch(function () {});
+    (function page(offset) {
+      return api("/novel/" + novel.id + "/chapters?limit=100&offset=" + offset).then(function (res) {
+        var items = (res && res.items) || [];
+        keep("/api/novel/" + novel.id + "/chapters?limit=100&offset=" + offset).catch(function () {});
+        items.forEach(function (ch) { if (ch.is_available && ids.length < want) ids.push(ch.id); });
+        if (items.length === 100 && ids.length < want) return page(offset + 100);
+      });
+    })(Math.max(0, from - 1)).then(function () {
+      var i = 0;
+      function next() {
+        if (i >= ids.length) {
+          btn.disabled = false;
+          msg.textContent = "✓ " + kept + " chapter(s) saved on this device.";
+          return;
+        }
+        var id = ids[i++];
+        msg.textContent = "Saving " + i + "/" + ids.length + "…";
+        keep("/api/chapter/" + id + "/read?auto_fetch=false")
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            kept++;
+            var body = (data && (data.content || data.body)) || JSON.stringify(data || {});
+            var imgs = body.match(/images\\/([0-9a-fA-F]+)\\.jpg/g) || [];
+            return Promise.all(imgs.map(function (m) {
+              return keep("/api/chapter/image/" + m.slice(7, -4)).catch(function () {});
+            }));
+          })
+          .catch(function () { /* skip a chapter that fails */ })
+          .then(next);
+      }
+      next();
+    }).catch(function (e) { btn.disabled = false; msg.textContent = "Couldn't save: " + e.message; });
+  });
+
+  // ---- Back up and restore ----
+  els["lib-backup"].addEventListener("click", function () {
+    var byId = {}; (lib.everything || lib.all).forEach(function (n) { byId[n.id] = n; });
+    var shelves = orderedShelves().map(function (sh) {
+      return {
+        name: sh.name,
+        novels: (((lib.membership || {})[sh.id]) || []).map(function (id) {
+          var n = byId[id] || {}; return { id: id, url: n.url || "", title: n.title || "" };
+        })
+      };
+    });
+    var data = { app: "lncrawl-reader", version: 1, saved: new Date().toISOString(), state: statePayload(), shelves: shelves };
+    var blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "reader-backup-" + new Date().toISOString().slice(0, 10) + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+  });
+  els["lib-restore"].addEventListener("click", function () { els["lib-restore-file"].click(); });
+  els["lib-restore-file"].addEventListener("change", function () {
+    var file = this.files && this.files[0];
+    this.value = "";
+    if (!file) return;
+    file.text().then(function (text) {
+      var data = JSON.parse(text);
+      if (!data || data.app !== "lncrawl-reader" || !data.state) throw new Error("not a Reader backup");
+      // added to what is here: newer entries win, nothing here is dropped
+      absorbState(data.state, true);
+      var byUrl = {}, byId = {};
+      (lib.everything || lib.all).forEach(function (n) { byUrl[n.url] = n.id; byId[n.id] = n.id; });
+      var shelves = data.shelves || [];
+      return shelves.reduce(function (chain, sh) {
+        return chain.then(function () {
+          var have = (lib.shelves || []).filter(function (x) { return x.name === sh.name; })[0];
+          var made = have ? Promise.resolve(have) : api("/library", { method: "POST", body: JSON.stringify({ name: sh.name }) });
+          return made.then(function (shelf) {
+            var on = ((lib.membership || {})[shelf.id]) || [];
+            return (sh.novels || []).reduce(function (c2, nv) {
+              var id = byId[nv.id] || byUrl[nv.url];
+              if (!id || on.indexOf(id) >= 0) return c2;
+              return c2.then(function () { return api("/library/" + shelf.id + "/novel/" + id, { method: "PUT" }).catch(function () {}); });
+            }, Promise.resolve());
+          });
+        });
+      }, Promise.resolve()).then(function () { return shelves.length; });
+    }).then(function (n) {
+      pushState();
+      prefs = loadPrefs(); applyPrefs(); renderViews();
+      loadLibrary();
+      alert("Backup restored" + (n ? " (with " + n + " shelf/shelves)" : "") + ".");
+    }).catch(function (e) { alert("Couldn't restore it: " + e.message); });
+  });
+
+  // ---- Reading stats ----
+  // Chapters opened and time spent in the reader, per day, kept per device and
+  // added up across devices.
+  var DEVICE = "lncrawl_reader_device";
+  function deviceId() {
+    var d = localStorage.getItem(DEVICE);
+    if (!d) { d = Math.random().toString(36).slice(2, 10); localStorage.setItem(DEVICE, d); }
+    return d;
+  }
+  function dayKey(t) { var d = new Date(t || Date.now()); return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2); }
+  function addStat(chapters, ms) {
+    var it = loadItems();
+    var key = deviceId() + "|" + dayKey();
+    var e = it.stats[key] || { chapters: 0, ms: 0 };
+    e.chapters += chapters; e.ms += ms; e.ts = Date.now();
+    it.stats[key] = e;
+    localStorage.setItem(ITEMS, JSON.stringify(it));
+    schedulePush();
+  }
+  setInterval(function () {
+    if (document.visibilityState === "visible" && !els["view-reader"].classList.contains("hidden")) addStat(0, 30000);
+  }, 30000);
+  function statsByDay() {
+    var days = {};
+    var st = loadItems().stats;
+    Object.keys(st).forEach(function (k) {
+      var day = k.split("|")[1];
+      var d = days[day] || (days[day] = { chapters: 0, ms: 0 });
+      d.chapters += st[k].chapters || 0; d.ms += st[k].ms || 0;
+    });
+    return days;
+  }
+  function renderStats() {
+    var days = statsByDay();
+    var sum = function (n) {
+      var c = 0, ms = 0;
+      for (var i = 0; i < n; i++) { var d = days[dayKey(Date.now() - i * 864e5)]; if (d) { c += d.chapters; ms += d.ms; } }
+      return { c: c, ms: ms };
+    };
+    var hours = function (ms) { return ms >= 36e5 ? (ms / 36e5).toFixed(1) + " h" : Math.round(ms / 6e4) + " min"; };
+    var all = { c: 0, ms: 0 };
+    Object.keys(days).forEach(function (k) { all.c += days[k].chapters; all.ms += days[k].ms; });
+    var streak = 0;
+    while (days[dayKey(Date.now() - streak * 864e5)] && days[dayKey(Date.now() - streak * 864e5)].chapters) streak++;
+    var w = sum(7), m = sum(30);
+    var body = els["lib-stats-body"];
+    body.innerHTML = "";
+    var line = document.createElement("p");
+    line.textContent = "This week: " + w.c + " chapters · " + hours(w.ms) + "   ·   Last 30 days: " + m.c +
+      " chapters · " + hours(m.ms) + "   ·   All time: " + all.c + " chapters · " + hours(all.ms) +
+      "   ·   Streak: " + streak + " day" + (streak === 1 ? "" : "s");
+    body.appendChild(line);
+    var bars = document.createElement("div"); bars.className = "stat-bars";
+    var labels = document.createElement("div"); labels.className = "stat-days";
+    var counts = [];
+    for (var i = 13; i >= 0; i--) counts.push({ t: Date.now() - i * 864e5, c: (days[dayKey(Date.now() - i * 864e5)] || {}).chapters || 0 });
+    var max = Math.max.apply(null, counts.map(function (x) { return x.c; }).concat([1]));
+    counts.forEach(function (x) {
+      var b = document.createElement("span"); b.style.height = Math.round(100 * x.c / max) + "%";
+      b.title = dayKey(x.t) + ": " + x.c + " chapter(s)"; bars.appendChild(b);
+      var l = document.createElement("span"); l.textContent = new Date(x.t).getDate(); labels.appendChild(l);
+    });
+    body.appendChild(bars); body.appendChild(labels);
+    els["lib-stats-note"].textContent = "· chapters opened per day, last 14 days, all your devices";
+  }
+  els["lib-stats-btn"].addEventListener("click", function () {
+    els["lib-stats"].classList.toggle("hidden");
+    renderStats();
   });
 
   // ---- Novel ----
@@ -1967,7 +2403,15 @@ _READER_HTML = """<!DOCTYPE html>
         row.className = "chap" + (ch.is_available ? "" : " unavail");
         var n = document.createElement("span"); n.className = "n"; n.textContent = "#" + ch.serial;
         var t = document.createElement("span"); t.className = "t"; t.textContent = ch.title || ("Chapter " + ch.serial);
-        row.appendChild(n); row.appendChild(t);
+        // read up to where you are: earlier chapters ticked, yours marked
+        var rd = document.createElement("span"); rd.className = "rd";
+        var here = posOf(current.novel.id);
+        if (here && here.serial) {
+          var done = ch.serial < here.serial || (ch.serial === here.serial && (here.scroll || 0) >= 0.9);
+          if (done) { rd.textContent = "✓"; rd.title = "Read"; }
+          if (ch.serial === here.serial) { row.className += " here"; row.title = "You are here"; if (!done) rd.textContent = "▶"; }
+        }
+        row.appendChild(rd); row.appendChild(n); row.appendChild(t);
         if (ch.is_available) row.addEventListener("click", function () { openChapter(ch.id); });
         else { gaps = true; var u = document.createElement("span"); u.className = "muted"; u.textContent = "not downloaded"; row.appendChild(u); }
         els["chap-list"].appendChild(row);
@@ -2104,6 +2548,7 @@ _READER_HTML = """<!DOCTYPE html>
       applyFit();
       current.chapterId = chapterId;
       savePos(novel.id, chapterId, ch.serial);
+      addStat(1, 0);
       // resume mid-chapter where reading stopped (savePos keeps the saved
       // fraction when re-opening the same chapter, resets it on a new one);
       // an explicit scrollTo (from a bookmark) wins
@@ -2493,6 +2938,8 @@ _READER_HTML = """<!DOCTYPE html>
     applyPrefs();
     applyView(loadView());
     renderViews();
+    if (localStorage.getItem(FILTERS_OPEN)) els["lib-filters"].classList.remove("hidden");
+    renderFiltersButton();
     if (!token()) { show("auth"); return; }
     api("/auth/me", { method: "GET" })
       .then(function () { show("view-library"); loadLibrary(); syncState(); })
