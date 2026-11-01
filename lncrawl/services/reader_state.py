@@ -16,7 +16,7 @@ from typing import Any, Dict
 MAX_STATE_BYTES = 2 * 1024 * 1024
 
 # Sections synced as a whole, newest wins.
-WHOLE_SECTIONS = ("favs", "bookmarks", "views")
+WHOLE_SECTIONS = ("favs", "bookmarks", "views", "prefs", "updates", "ratings", "autoupdate")
 
 
 def _ts(value: Any) -> float:

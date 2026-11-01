@@ -1,4 +1,4 @@
-from typing import List
+from typing import Dict, List
 
 from fastapi import APIRouter, Path, Query, Security
 
@@ -57,6 +57,17 @@ def all_my_libraries(
     user: User = Security(ensure_user),
 ) -> List[LibraryItem]:
     return ctx.libraries.list_all(user.id)
+
+
+@router.get(
+    "/my/membership",
+    summary="Which of the current user's libraries each novel is in",
+)
+def my_library_membership(
+    user: User = Security(ensure_user),
+) -> Dict[str, List[str]]:
+    """``{library_id: [novel_id, ...]}`` for every library the user owns, in one query."""
+    return ctx.libraries.membership(user.id)
 
 
 @router.post(

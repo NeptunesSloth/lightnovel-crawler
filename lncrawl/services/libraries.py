@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import sqlmodel as sa
 
@@ -87,6 +87,19 @@ class LibraryService:
                 )
                 for library in libraries
             ]
+
+    def membership(self, user_id: str) -> Dict[str, List[str]]:
+        """The novels in each of a user's libraries, keyed by library id."""
+        with ctx.db.session() as sess:
+            rows = sess.exec(
+                sa.select(LibraryNovel.library_id, LibraryNovel.novel_id)
+                .join(Library, sa.col(Library.id) == LibraryNovel.library_id)
+                .where(Library.user_id == user_id)
+            ).all()
+        out: Dict[str, List[str]] = {}
+        for library_id, novel_id in rows:
+            out.setdefault(library_id, []).append(novel_id)
+        return out
 
     def create(
         self,
