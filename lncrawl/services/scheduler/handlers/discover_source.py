@@ -38,8 +38,14 @@ class DiscoverSourceHandler(BatchHandler):
         urls = self._discover_novels(domain)
         if not urls:
             return
+        # Queuing what was found is a VIP feature. Say so, rather than finish
+        # as a success that looks like it should have downloaded something.
         if not ctx.tier.search_can_fetch_novel_metadata(self.user):
-            return
+            raise HandlerException(
+                f"Found {len(urls)} novel(s) on {domain}, but your account tier cannot "
+                "queue downloads from a discovery. Ask an admin to upgrade your account, "
+                "or download the novels one by one."
+            )
 
         if self.signal.is_set():
             raise AbortedException()

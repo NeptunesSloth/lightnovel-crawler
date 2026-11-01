@@ -112,7 +112,14 @@ class LegacyCrawler(BrowserTemplate):
         return self.scraper.make_soup(*args, **kwargs)
 
     def get_soup(self, *args: Any, **kwargs: Any):
-        return self.scraper.get_soup(*args, **kwargs)
+        soup = self.scraper.get_soup(*args, **kwargs)
+        # keep the novel's own page while its details are read, so a status the
+        # source doesn't pick out itself can still be read off it
+        if getattr(self, "_novel_page_wanted", False) and args:
+            if str(args[0]).rstrip("/") == str(self.novel_url).rstrip("/"):
+                self._novel_page = soup
+                self._novel_page_wanted = False
+        return soup
 
     def post_soup(self, *args: Any, **kwargs: Any):
         return self.scraper.post_soup(*args, **kwargs)
@@ -139,10 +146,28 @@ class LegacyCrawler(BrowserTemplate):
             self.volumes = []
             self.chapters = []
 
+            self._novel_page: Any = None
+            self._novel_page_wanted = True
             known_keys = set(dir(self))
-            self.read_novel_info()
+            try:
+                self.read_novel_info()
+            finally:
+                self._novel_page_wanted = False
             new_keys = set(dir(self)) - known_keys
             novel.update({key: getattr(self, key) for key in new_keys})
+
+            # Most sources never read whether a novel is finished, but print it
+            # beside a "Status" label on the page they did fetch.
+            if not novel.get("novel_status") and self._novel_page is not None:
+                from ..utils.novel_status import from_page
+
+                try:
+                    status = from_page(self._novel_page)
+                except Exception:
+                    status = None
+                if status:
+                    novel["novel_status"] = status
+            self._novel_page = None
 
             novel.is_rtl = self.is_rtl
             novel.is_mtl = self.has_mtl

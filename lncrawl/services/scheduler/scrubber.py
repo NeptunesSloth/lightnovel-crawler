@@ -26,6 +26,7 @@ class Scrubber:
         scrubber.cancel_long_jobs()
         scrubber.delete_expired_tokens()
         scrubber.delete_inactive_users()
+        scrubber.check_reader_updates()
 
     def __init__(self, signal=Event()) -> None:
         self.signal = signal
@@ -165,6 +166,15 @@ class Scrubber:
                 if self.signal.is_set():
                     return
                 ctx.jobs.cancel(job_id)
+
+    def check_reader_updates(self):
+        """Readers' daily new-chapter checks, for those who turned them on."""
+        from ..auto_update import run
+
+        try:
+            run(self.signal)
+        except Exception:
+            logger.warning("Automatic update checks failed", exc_info=True)
 
     def delete_expired_tokens(self):
         now = current_timestamp()

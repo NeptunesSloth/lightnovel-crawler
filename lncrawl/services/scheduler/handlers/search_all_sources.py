@@ -24,6 +24,10 @@ class SearchAllSourcesHandler(BatchHandler):
             can_search=True,
         )
         domains = [source.domain for source in sources if source.domain not in added_domains]
+        # a search limited to some sources (the Reader's "sources in my library")
+        wanted = self.job.extra.get("domains")
+        if wanted:
+            domains = [d for d in domains if d in set(wanted)]
         if not domains:
             return
 
@@ -38,4 +42,5 @@ class SearchAllSourcesHandler(BatchHandler):
                 query,
                 domain,
                 parent_id=self.job.id,
+                results_only=bool(self.job.extra.get("results_only")),
             )

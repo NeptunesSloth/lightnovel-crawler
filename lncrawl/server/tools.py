@@ -136,7 +136,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <input id="src-url" type="text" placeholder="https://novelsource.example/" />
     <div class="row checkbox">
       <input id="src-full" type="checkbox" />
-      <label for="src-full" style="margin:0">Fetch full contents of every novel found</label>
+      <label for="src-full" style="margin:0">Also download every chapter (otherwise only each novel's details are added)</label>
     </div>
     <div class="row">
       <button id="discover-btn">Discover &amp; queue</button>
@@ -519,6 +519,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
             " (" + (ex.total_found || 0) + " found" + (ex.truncated ? ", capped" : "") + ")", "log-info");
         } else {
           log(label + " · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
+        }
+        if (status === "SUCCESS" && ex.phase === "fetching" && !ex.full && label === "Discover") {
+          log("  Added the details of " + (ex.discovered ? ex.discovered.length : job.total) + " novel(s). No chapters were downloaded — tick " +
+            "“Also download every chapter” to fetch them too.", "log-info");
         }
         if (status === "SUCCESS" && ex.discovery_capped) {
           log("  ⚠ Discovery stopped at its 10 minute cap, so this is only part of the catalogue.", "log-info");

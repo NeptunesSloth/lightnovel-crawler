@@ -53,7 +53,14 @@ class NovelService:
                 conditions.append(Novel.domain == extract_host(domain.strip()))
 
             if search:
-                conditions.append(sq.col(Novel.title).ilike(f"%{search}%"))
+                pattern = f"%{search}%"
+                conditions.append(
+                    sq.or_(
+                        sq.col(Novel.title).ilike(pattern),
+                        sq.col(Novel.authors).ilike(pattern),
+                        sq.col(Novel.synopsis).ilike(pattern),
+                    )
+                )
 
             if conditions:
                 cnd = sq.and_(*conditions)

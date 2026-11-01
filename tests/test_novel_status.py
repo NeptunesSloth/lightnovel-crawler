@@ -55,3 +55,40 @@ class NovelStatusTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LegacyStatusFromPageTests(unittest.TestCase):
+    """Sources that never read a status get it from the novel page they fetched."""
+
+    PAGES = {
+        "https://fake.example/n/1": "<h1>Book</h1><p><span>Status:</span> <span>Completed</span></p>",
+        "https://fake.example/n/1/chapters": "<p>Status: Ongoing</p>",
+    }
+
+    def crawl(self, own_status=None):
+        from lncrawl.core import LegacyCrawler, Novel as CrawlerNovel
+
+        class Fake(LegacyCrawler):
+            base_url = ["https://fake.example/"]
+
+            def read_novel_info(self):
+                soup = self.get_soup(self.novel_url)
+                self.novel_title = soup.select_one("h1").text
+                self.get_soup(self.novel_url + "/chapters")
+                if own_status:
+                    self.novel_status = own_status
+
+            def download_chapter_body(self, chapter):
+                return ""
+
+        crawler = Fake()
+        crawler.scraper.get_soup = lambda url, *a, **k: PageSoup(page(self.PAGES[url]))
+        model = CrawlerNovel(url="https://fake.example/n/1")
+        crawler.read_novel(model)
+        return model
+
+    def test_reads_status_from_the_novel_page_only(self) -> None:
+        self.assertEqual(self.crawl().get("novel_status"), "completed")
+
+    def test_keeps_the_status_the_source_read(self) -> None:
+        self.assertEqual(self.crawl("hiatus").get("novel_status"), "hiatus")

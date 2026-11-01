@@ -74,6 +74,8 @@ _READER_HTML = """<!DOCTYPE html>
     color: #aab2c0; font-size: 13px; margin: 5px 0 0;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   }
+  .libcard .desc.open { display: block; -webkit-line-clamp: unset; }
+  .libcard .desc-more { color: #7aa2ff; font-size: 12px; cursor: pointer; }
   .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
   .chip {
     font-size: 11px; color: #aab2c0; background: #20242d; border: 1px solid #2a2f3a;
@@ -83,6 +85,8 @@ _READER_HTML = """<!DOCTYPE html>
   .chip.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
   .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
   .toolbar.filters input[type=text] { flex: 1 1 220px; max-width: 360px; margin: 0; }
+  .chap-range { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+  .chap-range input[type=number] { width: 68px; margin: 0; padding: 6px 8px; }
   .toolbar .check { display: flex; align-items: center; gap: 5px; font-size: 13px; margin: 0; cursor: pointer; }
   select {
     padding: 7px 10px; border-radius: 8px; border: 1px solid #303644;
@@ -100,6 +104,19 @@ _READER_HTML = """<!DOCTYPE html>
     width: 104px; height: 148px; object-fit: cover; border-radius: 6px; display: block;
     background: #0b0d11; border: 1px solid #262b36;
   }
+  #lib-web-btn { margin: 0 0 10px; }
+  .web-row { display: flex; align-items: center; gap: 8px; padding: 7px 4px; border-bottom: 1px solid #20242d; font-size: 13px; }
+  .web-row .t { flex: 1; min-width: 0; }
+  .web-row .t b { color: #e6e6e6; }
+  .web-row .t .muted { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .web-row button { padding: 4px 10px; font-size: 12px; margin: 0; }
+  .novel-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; clear: both; }
+  .novel-tools button { margin: 0; }
+  .rate { font-size: 20px; letter-spacing: 2px; cursor: pointer; color: #4b5563; user-select: none; }
+  .rate .on { color: #f5b301; }
+  #shelf-box { margin: 0 0 12px; }
+  .badge.fresh { background: #1e3a8a; color: #dbeafe; border-color: #1e40af; }
+  .lib-more { height: 1px; }
   .shelf-title .see-all { float: right; font-size: 12px; color: #7aa2ff; cursor: pointer; }
   .shelf .mini .mm { font-size: 11px; color: #8b93a1; margin-top: 2px; }
   .shelf .mini .mt {
@@ -193,8 +210,37 @@ _READER_HTML = """<!DOCTYPE html>
   }
   #trans-pop .w { color: #7aa2ff; font-weight: 600; }
 
+  .more-menu { position: relative; }
+  .more-menu > summary {
+    list-style: none; cursor: pointer; padding: 7px 12px; border-radius: 8px;
+    border: 1px solid #303644; font-size: 13px; user-select: none;
+  }
+  .more-menu > summary::-webkit-details-marker { display: none; }
+  .more-list {
+    position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 220px;
+    display: flex; flex-direction: column; gap: 4px; padding: 6px;
+    background: #12151b; border: 1px solid #262b36; border-radius: 10px; box-shadow: 0 8px 24px #0008;
+  }
+  .more-list button { margin: 0; text-align: left; }
+  #lib-filters-btn.on { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  .chap .rd { color: #22c55e; width: 16px; }
+  .chap.here .t { color: #7aa2ff; font-weight: 600; }
+  .stat-bars { display: flex; align-items: flex-end; gap: 4px; height: 80px; margin: 8px 0 4px; }
+  .stat-bars span { flex: 1; background: #3b82f6; border-radius: 3px 3px 0 0; min-height: 2px; }
+  .stat-days { display: flex; gap: 4px; font-size: 10px; color: #6b7280; }
+  .stat-days span { flex: 1; text-align: center; }
+  .shelf-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid #20242d; }
+  .shelf-row .n { flex: 1; }
+  .shelf-row button { margin: 0; padding: 3px 9px; font-size: 12px; }
+
   /* ---- Mobile / small screens ---- */
   @media (max-width: 640px) {
+    .toolbar { gap: 6px; }
+    .toolbar select, .toolbar.filters input[type=text] { flex: 1 1 46%; min-width: 0; max-width: none; }
+    .toolbar.filters .check { flex: 1 1 46%; }
+    .chap-range { flex: 1 1 100%; }
+    .more-list { left: auto; right: 0; }
+    .novel-tools button { flex: 1 1 46%; }
     .topbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); }
     .topbar h1 { font-size: 15px; }
     #search-wrap { order: 3; flex: 1 1 100%; max-width: none; }
@@ -217,7 +263,7 @@ _READER_HTML = """<!DOCTYPE html>
   <h1>📖 LNCrawl Reader</h1>
   <a class="back hidden" id="nav-back">&larr; Back</a>
   <div class="spacer"></div>
-  <div id="search-wrap" style="flex:1;max-width:380px"><input id="search" type="text" placeholder="Search your library…" /></div>
+  <div id="search-wrap" style="flex:1;max-width:380px"><input id="search" type="text" placeholder="Search title, author, description, tags…" /></div>
   <a class="back" href="/tools" target="_blank" id="tools-link">Tools</a>
   <button id="fit-btn" class="hidden" title="Image fit mode">Fit: width</button>
   <button id="aa-btn" class="hidden" title="Reading settings">Aa</button>
@@ -263,6 +309,10 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="chapters-asc">Fewest chapters</option>
         <option value="author">Author A–Z</option>
         <option value="source">Source A–Z</option>
+        <option value="newch">New chapters first</option>
+        <option value="rating">My rating</option>
+        <option value="status">Status: ongoing first</option>
+        <option value="status-done">Status: completed first</option>
       </select>
       <select id="lib-kind" title="Media type">
         <option value="">All media</option>
@@ -272,13 +322,26 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="manhwa">Manhwa (Korean)</option>
         <option value="manhua">Manhua (Chinese)</option>
       </select>
-      <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
+      <button id="lib-filters-btn" title="Show or hide the filters">Filters</button>
+      <button id="lib-auto-btn" title="New chapters: automatic checks and notifications">🔔 New chapters</button>
       <button id="lib-bmks-btn" title="Every bookmark, across all novels">🔖 Bookmarks</button>
-      <button id="lib-select" title="Select novels to delete">☑ Select</button>
+      <details class="more-menu" id="lib-more">
+        <summary title="More actions">⋯ More</summary>
+        <div class="more-list">
+          <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
+          <button id="lib-fill" class="hidden" title="Re-read the details (status, genres, description) of novels that are missing them">✚ Fill in details</button>
+          <button id="lib-stats-btn" title="How much you have been reading">📊 Reading stats</button>
+          <button id="lib-shelves-btn" title="Rename, delete or reorder your shelves">📚 Manage shelves</button>
+          <button id="lib-backup" title="Save your positions, favorites, bookmarks, ratings, views and shelves to a file">⤓ Back up reading data</button>
+          <button id="lib-restore" title="Load a backup made here, adding it to what you have">⤒ Restore a backup</button>
+          <input id="lib-restore-file" type="file" accept="application/json,.json" class="hidden" />
+          <button id="lib-select" title="Select novels to delete">☑ Select</button>
+        </div>
+      </details>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
       <div id="lib-cats" class="tags"></div>
     </div>
-    <div class="toolbar filters">
+    <div class="toolbar filters hidden" id="lib-filters">
       <input id="lib-tag" type="text" list="lib-tag-list" autocomplete="off"
              placeholder="Tags: romance, fantasy, -harem" title="Show novels with every tag listed; put - before a tag to hide it" />
       <datalist id="lib-tag-list"></datalist>
@@ -290,6 +353,7 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="reading">Reading</option>
         <option value="finished">Finished</option>
       </select>
+      <select id="lib-shelf" title="Shelf"><option value="">All shelves</option></select>
       <select id="lib-state" title="Status">
         <option value="">Any status</option>
         <option value="completed">Completed</option>
@@ -299,14 +363,70 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="unknown">Status unknown</option>
       </select>
       <label class="check" title="Show only novels you starred"><input id="lib-favonly" type="checkbox" /> ★ Favorites only</label>
+      <span class="chap-range" title="Only novels with this many chapters">
+        <select id="lib-len" title="Length">
+          <option value="">Any length</option>
+          <option value="0-49">Under 50 chapters</option>
+          <option value="50-199">50–199 chapters</option>
+          <option value="200-499">200–499 chapters</option>
+          <option value="500-999">500–999 chapters</option>
+          <option value="1000-">1000+ chapters</option>
+          <option value="custom">Custom…</option>
+        </select>
+        <span id="lib-len-custom" class="hidden">
+          <input id="lib-len-min" type="number" min="0" placeholder="min" /> –
+          <input id="lib-len-max" type="number" min="0" placeholder="max" /> ch
+        </span>
+      </span>
+      <label class="check" title="Show only titles that appear more than once (the same story from different sources); open one and press Merge to combine them"><input id="lib-dupes" type="checkbox" /> Possible duplicates</label>
+      <label class="check" title="Hide Boys' Love novels and comics (BL, Yaoi, Shounen Ai, Danmei)"><input id="lib-nobl" type="checkbox" /> Hide BL</label>
       <label class="check" title="Hide machine-translated (MTL) novels"><input id="lib-nomtl" type="checkbox" /> Hide MTL</label>
       <button id="lib-clear" class="hidden" title="Clear every filter">✕ Clear filters</button>
+      <select id="lib-views" title="Apply a saved view"><option value="">Saved views</option></select>
+      <button id="lib-view-save" title="Save the current sort and filters under a name">💾 Save view</button>
+      <button id="lib-view-del" class="hidden" title="Delete the selected saved view">✕</button>
+    </div>
+    <div id="lib-stats" class="card hidden">
+      <div class="shelf-title">📊 Reading stats <span class="muted" id="lib-stats-note"></span></div>
+      <div id="lib-stats-body"></div>
+    </div>
+    <div id="lib-shelves" class="card hidden">
+      <div class="shelf-title">📚 Your shelves</div>
+      <div id="lib-shelves-list"></div>
+    </div>
+    <div id="lib-auto" class="card hidden">
+      <div class="shelf-title">🔔 New chapters</div>
+      <label class="check"><input id="auto-on" type="checkbox" /> Check for new chapters every day, even with the Reader closed</label>
+      <div class="toolbar" style="margin:8px 0 0">
+        <label for="auto-scope" style="margin:0">Check</label>
+        <select id="auto-scope">
+          <option value="both">Favorites and novels I'm reading</option>
+          <option value="favorites">Favorites only</option>
+          <option value="reading">Novels I'm reading</option>
+          <option value="all">Every novel in the library</option>
+        </select>
+        <label class="check"><input id="auto-dl" type="checkbox" /> Download new chapters too</label>
+        <label class="check"><input id="auto-notify" type="checkbox" /> Notify me in this browser</label>
+      </div>
+      <p class="muted" id="auto-note" style="margin:8px 0 0"></p>
     </div>
     <div id="lib-bmks" class="card hidden">
       <div class="shelf-title">🔖 Bookmarks <span class="muted" id="lib-bmks-count"></span></div>
       <div id="lib-bmks-list"></div>
     </div>
     <p class="muted" id="lib-status">Loading your library…</p>
+    <span id="lib-web-row" class="hidden">
+      <button id="lib-web-btn" title="Look for this on the sources the app can download from"></button>
+      <select id="lib-web-scope" title="Which sources to search">
+        <option value="mine">on the sources in my library</option>
+        <option value="all">on every source (slower)</option>
+      </select>
+    </span>
+    <div id="lib-web" class="card hidden">
+      <div class="shelf-title">🔎 From the sources <span class="muted" id="lib-web-status"></span>
+        <a id="lib-web-stop" class="see-all">Stop</a></div>
+      <div id="lib-web-list"></div>
+    </div>
     <div id="lib-list"></div>
   </div>
 
@@ -327,6 +447,16 @@ _READER_HTML = """<!DOCTYPE html>
     <button id="deep-btn" class="hidden" style="margin:0 0 12px 8px" title="Search other sites for the missing chapters and download them">🔍 Find missing on other sites</button>
     <button id="merge-btn" class="hidden" style="margin:0 0 12px 8px" title="Combine all copies of this title into the most complete one">⧉ Merge copies</button>
     <button id="del-btn" style="margin:0 0 12px 8px" title="Delete this novel from your library">🗑</button>
+    <div class="novel-tools">
+      <span id="rate-box" class="rate" title="Your rating"></span>
+      <button id="prog-done" class="secondary" title="Count this novel as read to the end">✓ Mark finished</button>
+      <button id="prog-unread" class="secondary" title="Forget where you were">↺ Mark unread</button>
+      <button id="prog-set" class="secondary" title="Say which chapter you are on (read elsewhere)">✎ Set chapter…</button>
+      <button id="shelf-btn" class="secondary" title="Put this novel on your shelves">📚 Shelves</button>
+      <button id="offline-btn" class="secondary" title="Keep chapters on this device to read without a connection">⬇ Save for offline</button>
+      <span id="offline-msg" class="muted"></span>
+    </div>
+    <div id="shelf-box" class="tags hidden"></div>
     <span class="muted hidden" id="heal-msg" style="margin-left:8px"></span>
     <div id="bmk-list"></div>
     <div id="chap-list"></div>
@@ -407,6 +537,7 @@ _READER_HTML = """<!DOCTYPE html>
     var scroll = (prev && typeof prev === "object" && prev.id === chapterId) ? (prev.scroll || 0) : 0;
     p[novelId] = { id: chapterId, serial: (serial != null ? serial : null), ts: Date.now(), scroll: scroll };
     localStorage.setItem(POS, JSON.stringify(p));
+    schedulePush();
   }
   function saveScroll(novelId, chapterId, frac) {
     var p = loadPos();
@@ -414,27 +545,264 @@ _READER_HTML = """<!DOCTYPE html>
     if (!e || typeof e === "string" || e.id !== chapterId) return;
     e.scroll = frac; e.ts = Date.now();
     localStorage.setItem(POS, JSON.stringify(p));
+    schedulePush();
   }
   function loadUpdates() { try { return JSON.parse(localStorage.getItem(UPD) || "{}"); } catch (e) { return {}; } }
-  function saveUpdates(m) { localStorage.setItem(UPD, JSON.stringify(m)); }
+  function saveUpdates(m) { localStorage.setItem(UPD, JSON.stringify(m)); touchSync("updates"); }
   function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS) || "{}"); } catch (e) { return {}; } }
-  function savePrefs(p) { localStorage.setItem(PREFS, JSON.stringify(p)); }
+  function savePrefs(p) { localStorage.setItem(PREFS, JSON.stringify(p)); touchSync("prefs"); }
   function loadFavs() { try { return JSON.parse(localStorage.getItem(FAV) || "[]"); } catch (e) { return []; } }
-  function saveFavs(a) { localStorage.setItem(FAV, JSON.stringify(a)); }
+  function saveFavs(a) {
+    var before = loadFavs();
+    localStorage.setItem(FAV, JSON.stringify(a));
+    var changes = {};
+    a.forEach(function (id) { if (before.indexOf(id) < 0) changes[id] = { on: true }; });
+    before.forEach(function (id) { if (a.indexOf(id) < 0) changes[id] = { on: false }; });
+    markItems("favitems", changes);
+  }
   function loadBmks() { try { return JSON.parse(localStorage.getItem(BMK) || "{}"); } catch (e) { return {}; } }
-  function saveBmks(m) { localStorage.setItem(BMK, JSON.stringify(m)); }
+  function bmkKey(novelId, b) { return novelId + "|" + b.id + "|" + b.ts; }
+  function flatBmks(m) {
+    var out = {};
+    Object.keys(m || {}).forEach(function (nid) {
+      (m[nid] || []).forEach(function (b) { out[bmkKey(nid, b)] = { novel: nid, b: b }; });
+    });
+    return out;
+  }
+  function saveBmks(m) {
+    var before = flatBmks(loadBmks()), after = flatBmks(m);
+    localStorage.setItem(BMK, JSON.stringify(m));
+    var changes = {};
+    Object.keys(after).forEach(function (k) { if (!before[k]) changes[k] = { on: true, novel: after[k].novel, b: after[k].b }; });
+    Object.keys(before).forEach(function (k) { if (!after[k]) changes[k] = { on: false }; });
+    markItems("bmkitems", changes);
+  }
   function loadView() { try { return JSON.parse(localStorage.getItem(VIEW) || "{}"); } catch (e) { return {}; } }
-  function saveView() {
-    localStorage.setItem(VIEW, JSON.stringify({
+  // The sort and every filter, as one object: what is remembered between
+  // visits, and what a saved view holds.
+  function currentView() {
+    return {
       sort: els["lib-sort"].value, kind: els["lib-kind"].value, cat: lib.cat,
       tag: els["lib-tag"].value, source: els["lib-source"].value,
       lang: els["lib-lang"].value, state: els["lib-state"].value, progress: els["lib-progress"].value,
-      favonly: els["lib-favonly"].checked, nomtl: els["lib-nomtl"].checked
-    }));
+      favonly: els["lib-favonly"].checked, dupes: els["lib-dupes"].checked, shelf: els["lib-shelf"].value,
+      nobl: els["lib-nobl"].checked, len: els["lib-len"].value, lenMin: els["lib-len-min"].value,
+      lenMax: els["lib-len-max"].value, nomtl: els["lib-nomtl"].checked
+    };
+  }
+  function applyView(v) {
+    v = v || {};
+    els["lib-sort"].value = v.sort || "recent";
+    els["lib-kind"].value = v.kind || "";
+    els["lib-tag"].value = v.tag || "";
+    els["lib-state"].value = v.state || "";
+    els["lib-progress"].value = v.progress || "";
+    els["lib-favonly"].checked = !!(v.favonly || v.cat === "__fav");
+    els["lib-dupes"].checked = !!v.dupes;
+    lib.pendingShelf = v.shelf || "";
+    if (lib.shelves) { els["lib-shelf"].value = v.shelf || ""; }
+    els["lib-nobl"].checked = !!v.nobl;
+    els["lib-nomtl"].checked = !!v.nomtl;
+    els["lib-len"].value = v.len || "";
+    els["lib-len-min"].value = v.lenMin || "";
+    els["lib-len-max"].value = v.lenMax || "";
+    els["lib-len-custom"].classList.toggle("hidden", els["lib-len"].value !== "custom");
+    lib.cat = (v.cat && v.cat !== "__fav") ? v.cat : "";
+    // source and language options exist only once the library has loaded
+    lib.pending = { source: v.source || "", lang: v.lang || "" };
+    if (lib.all.length) renderFilterOptions();
+  }
+  function saveView() { localStorage.setItem(VIEW, JSON.stringify(currentView())); }
+
+  // ---- Saved views ----
+  var VIEWS = "lncrawl_reader_views";  // { name: view }
+  function loadViews() { try { return JSON.parse(localStorage.getItem(VIEWS) || "{}"); } catch (e) { return {}; } }
+  function saveViews(m) { localStorage.setItem(VIEWS, JSON.stringify(m)); touchSync("views"); }
+
+  // ---- Sync with the server ----
+  // Positions, favorites, bookmarks and saved views live in this browser and are
+  // copied to the account, so every device reading from this server shares them.
+  // Positions merge novel by novel; the other sections go to whichever device
+  // changed them last, which is what the timestamps below record.
+  var SYNC_TS = "lncrawl_reader_sync_ts";  // { favs, bookmarks, views: last change ts }
+  var RATE = "lncrawl_reader_ratings";  // { novelId: 1-5 }
+  var AUTO = "lncrawl_reader_autoupdate";  // { enabled, scope, download, notify }
+  function loadRatings() { try { return JSON.parse(localStorage.getItem(RATE) || "{}"); } catch (e) { return {}; } }
+  function saveRatings(m) {
+    var before = loadRatings();
+    localStorage.setItem(RATE, JSON.stringify(m));
+    var changes = {};
+    Object.keys(m).forEach(function (id) { if (before[id] !== m[id]) changes[id] = { v: m[id] }; });
+    Object.keys(before).forEach(function (id) { if (!(id in m)) changes[id] = { v: 0 }; });
+    markItems("rateitems", changes);
+  }
+
+  // Favorites, bookmarks and ratings also live here as one entry per item, each
+  // with the time it last changed (a removal kept as "off"), and reading stats
+  // as one entry per device and day. The server merges these entry by entry, so
+  // changes to different items on two devices both survive.
+  var ITEMS = "lncrawl_reader_items";  // { favitems, bmkitems, rateitems, stats }
+  var KEYED = ["favitems", "bmkitems", "rateitems", "stats"];
+  function loadItems() {
+    var it; try { it = JSON.parse(localStorage.getItem(ITEMS) || "null"); } catch (e) { it = null; }
+    if (!it) {
+      // first run: what this device already has, dated as old as possible so any
+      // change made elsewhere wins over it
+      it = { favitems: {}, bmkitems: {}, rateitems: {}, stats: {} };
+      loadFavs().forEach(function (id) { it.favitems[id] = { on: true, ts: 1 }; });
+      var fb = flatBmks(loadBmks());
+      Object.keys(fb).forEach(function (k) { it.bmkitems[k] = { on: true, ts: 1, novel: fb[k].novel, b: fb[k].b }; });
+      var r = loadRatings();
+      Object.keys(r).forEach(function (id) { it.rateitems[id] = { v: r[id], ts: 1 }; });
+      localStorage.setItem(ITEMS, JSON.stringify(it));
+    }
+    KEYED.forEach(function (k) { it[k] = it[k] || {}; });
+    return it;
+  }
+  function markItems(section, changes) {
+    var keys = Object.keys(changes);
+    if (!keys.length) return;
+    var it = loadItems(), now = Date.now();
+    keys.forEach(function (k) { changes[k].ts = now; it[section][k] = changes[k]; });
+    localStorage.setItem(ITEMS, JSON.stringify(it));
+    schedulePush();
+  }
+  // Rebuild the plain lists the page reads from the item entries.
+  function applyItems(it) {
+    var favs = loadFavs().filter(function (id) { return it.favitems[id] ? it.favitems[id].on : true; });
+    Object.keys(it.favitems).forEach(function (id) {
+      if (it.favitems[id].on && favs.indexOf(id) < 0) favs.push(id);
+    });
+    localStorage.setItem(FAV, JSON.stringify(favs));
+    var bm = {};
+    Object.keys(it.bmkitems).forEach(function (k) {
+      var e = it.bmkitems[k];
+      if (e.on && e.novel && e.b) (bm[e.novel] = bm[e.novel] || []).push(e.b);
+    });
+    Object.keys(bm).forEach(function (nid) { bm[nid].sort(function (a, b) { return (a.ts || 0) - (b.ts || 0); }); });
+    localStorage.setItem(BMK, JSON.stringify(bm));
+    var rt = {};
+    Object.keys(it.rateitems).forEach(function (id) { if (it.rateitems[id].v) rt[id] = it.rateitems[id].v; });
+    localStorage.setItem(RATE, JSON.stringify(rt));
+  }
+  function loadAuto() { try { return JSON.parse(localStorage.getItem(AUTO) || "{}"); } catch (e) { return {}; } }
+  function saveAuto(m) { localStorage.setItem(AUTO, JSON.stringify(m)); touchSync("autoupdate"); }
+  var SECTIONS = {
+    prefs: { load: function () { return loadPrefs(); }, key: function () { return PREFS; } },
+    updates: { load: function () { return loadUpdates(); }, key: function () { return UPD; } },
+    autoupdate: { load: function () { return loadAuto(); }, key: function () { return AUTO; } },
+    views: { load: function () { return loadViews(); }, key: function () { return VIEWS; } }
+  };
+  function loadSyncTs() { try { return JSON.parse(localStorage.getItem(SYNC_TS) || "{}"); } catch (e) { return {}; } }
+  function touchSync(section) {
+    var t = loadSyncTs(); t[section] = Date.now();
+    localStorage.setItem(SYNC_TS, JSON.stringify(t));
+    schedulePush();
+  }
+  var pushTimer = null;
+  function schedulePush() {
+    if (!token()) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(pushState, 2500);
+  }
+  function statePayload() {
+    var t = loadSyncTs();
+    var out = { pos: {} };
+    var p = loadPos();
+    Object.keys(p).forEach(function (id) { if (p[id] && typeof p[id] === "object") out.pos[id] = p[id]; });
+    Object.keys(SECTIONS).forEach(function (name) {
+      out[name] = { data: SECTIONS[name].load(), ts: t[name] || 0 };
+    });
+    var it = loadItems();
+    KEYED.forEach(function (k) { out[k] = it[k]; });
+    return out;
+  }
+  function isEmpty(v) { return !v || (Array.isArray(v) ? !v.length : !Object.keys(v).length); }
+  function union(name, a, b) {
+    if (name === "favs") return a.concat(b.filter(function (x) { return a.indexOf(x) < 0; }));
+    var out = JSON.parse(JSON.stringify(b || {}));
+    Object.keys(a || {}).forEach(function (k) {
+      if (name === "bookmarks") {
+        var have = out[k] || [];
+        (a[k] || []).forEach(function (bm) {
+          if (!have.some(function (x) { return x.id === bm.id && x.ts === bm.ts; })) have.push(bm);
+        });
+        out[k] = have;
+      } else {
+        out[k] = a[k];
+      }
+    });
+    return out;
+  }
+  // Take in the server's copy. Returns true when this device has something the
+  // server lacks, so it should send its copy back.
+  function absorbState(server, first) {
+    if (!server || typeof server !== "object") return false;
+    var dirty = false;
+    var p = loadPos();
+    Object.keys(server.pos || {}).forEach(function (id) {
+      var mine = p[id] && typeof p[id] === "object" ? p[id] : null;
+      var theirs = server.pos[id];
+      if (!mine || (theirs.ts || 0) > (mine.ts || 0)) p[id] = theirs;
+    });
+    Object.keys(p).forEach(function (id) {
+      var theirs = (server.pos || {})[id];
+      if (p[id] && typeof p[id] === "object" && (!theirs || (p[id].ts || 0) > (theirs.ts || 0))) dirty = true;
+    });
+    localStorage.setItem(POS, JSON.stringify(p));
+    var it = loadItems();
+    KEYED.forEach(function (k) {
+      var theirs = server[k] || {};
+      Object.keys(theirs).forEach(function (key) {
+        var mine = it[k][key];
+        if (!mine || (theirs[key].ts || 0) > (mine.ts || 0)) it[k][key] = theirs[key];
+      });
+      Object.keys(it[k]).forEach(function (key) {
+        if (!theirs[key] || (it[k][key].ts || 0) > (theirs[key].ts || 0)) dirty = true;
+      });
+    });
+    localStorage.setItem(ITEMS, JSON.stringify(it));
+    applyItems(it);
+    var t = loadSyncTs();
+    Object.keys(SECTIONS).forEach(function (name) {
+      var theirs = server[name];
+      var mine = SECTIONS[name].load();
+      var mineTs = t[name] || 0;
+      if (!theirs || !("data" in theirs)) { if (!isEmpty(mine)) dirty = true; return; }
+      if (first && !mineTs && !isEmpty(mine)) {
+        // kept on this device before syncing existed: add it, lose nothing
+        localStorage.setItem(SECTIONS[name].key(), JSON.stringify(union(name, mine, theirs.data)));
+        t[name] = Date.now(); dirty = true;
+      } else if ((theirs.ts || 0) > mineTs) {
+        localStorage.setItem(SECTIONS[name].key(), JSON.stringify(theirs.data));
+        t[name] = theirs.ts;
+      } else if (mineTs > (theirs.ts || 0)) {
+        dirty = true;
+      }
+    });
+    localStorage.setItem(SYNC_TS, JSON.stringify(t));
+    return dirty;
+  }
+  function pushState() {
+    api("/settings/reader-state", { method: "PUT", body: JSON.stringify(statePayload()) })
+      .then(function (merged) { absorbState(merged, false); })
+      .catch(function () { /* offline: kept here and sent next time */ });
+  }
+  function syncState() {
+    return api("/settings/reader-state", { method: "GET" })
+      .then(function (server) {
+        if (absorbState(server, true)) pushState();
+        renderViews();
+        prefs = loadPrefs();  // another device may have changed the reading settings
+        applyPrefs();
+        renderAuto();
+        if (lib.all.length) { renderContinue(); renderLibrary(); }
+      })
+      .catch(function () { /* offline: this device's copy stays in use */ });
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -465,11 +833,31 @@ _READER_HTML = """<!DOCTYPE html>
   function normTitle(t) { return (t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
 
   // Load a cover through the authenticated endpoint and swap in an object URL.
-  function loadCover(img, novelId) {
+  // Covers load when their card scrolls into view and are kept, so a large
+  // library doesn't fetch every cover up front or again on each filter change.
+  var coverCache = {};
+  var coverWatch = ("IntersectionObserver" in window) ? new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      coverWatch.unobserve(e.target);
+      fetchCover(e.target, e.target.dataset.novel);
+    });
+  }, { rootMargin: "300px" }) : null;
+  function fetchCover(img, novelId) {
+    var hit = coverCache[novelId];
+    if (hit) { img.src = hit; img.classList.remove("hidden"); return; }
     fetch("/api/novel/" + novelId + "/cover", { headers: { "Authorization": "Bearer " + token() } })
       .then(function (r) { if (!r.ok) throw new Error("cover"); return r.blob(); })
-      .then(function (b) { img.src = URL.createObjectURL(b); img.classList.remove("hidden"); })
+      .then(function (b) {
+        coverCache[novelId] = URL.createObjectURL(b);
+        img.src = coverCache[novelId]; img.classList.remove("hidden");
+      })
       .catch(function () { /* leave placeholder */ });
+  }
+  function loadCover(img, novelId) {
+    if (coverCache[novelId] || !coverWatch) { fetchCover(img, novelId); return; }
+    img.dataset.novel = novelId;
+    coverWatch.observe(img);
   }
 
   // The server hands out at most 100 novels a request, so the library is read a
@@ -492,17 +880,25 @@ _READER_HTML = """<!DOCTYPE html>
     return page(0);
   }
 
-  function loadLibrary(q) {
+  // The whole library is loaded once and searched here, so a search can look at
+  // every field, forgive punctuation, and still leave the shelf and filters whole.
+  function loadLibrary() {
     els["lib-status"].textContent = "Loading your library…";
     els["lib-list"].innerHTML = "";
-    fetchAllNovels(q).then(function (items) {
+    api("/novels/latest-chapters").then(function (m) {
+      lib.latest = m || {};
+      if (lib.all.length) { renderLibrary(); notifyNew(); }
+    }).catch(function () { lib.latest = {}; });
+    loadShelves();
+    fetchAllNovels("").then(function (items) {
       lib.all = items;
-      // the shelf shows everything being read, not just what a search matched
-      if (!q) lib.everything = items;
+      lib.everything = items;
+      lib.hay = {};
       renderContinue();
       renderFilterOptions();
       renderCategories();
       renderLibrary();
+      if (lib.latest) notifyNew();
     }).catch(function (e) { els["lib-status"].textContent = "Couldn't load library: " + e.message; });
   }
 
@@ -602,7 +998,8 @@ _READER_HTML = """<!DOCTYPE html>
       function (l) { return LANG_NAMES[l] || l; }, pending.lang || els["lib-lang"].value);
     lib.pending = null;
     var tags = {};
-    lib.all.forEach(function (n) { (n.tags || []).forEach(function (t) { if (t) tags[t] = (tags[t] || 0) + 1; }); });
+    buildTagLabels();
+    lib.all.forEach(function (n) { tagsOf(n).forEach(function (t) { tags[t] = (tags[t] || 0) + 1; }); });
     els["lib-tag-list"].innerHTML = "";
     Object.keys(tags).sort(function (a, b) { return tags[b] - tags[a] || a.localeCompare(b); })
       .forEach(function (t) {
@@ -619,7 +1016,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   function matchesTags(n, terms) {
-    var tags = (n.tags || []).map(function (t) { return t.toLowerCase(); });
+    var tags = tagsOf(n).concat(n.tags || []).map(function (t) { return String(t).toLowerCase(); });
     var has = function (term) { return tags.some(function (t) { return t.indexOf(term) >= 0; }); };
     return terms.every(function (term) {
       if (term.charAt(0) === "-") return term.length === 1 || !has(term.slice(1).trim());
@@ -642,16 +1039,190 @@ _READER_HTML = """<!DOCTYPE html>
     return "reading";
   }
 
+  // Sort orders for status; a novel whose source never said comes last either way.
+  var ONGOING_FIRST = ["ongoing", "hiatus", "completed", "cancelled"];
+  var COMPLETED_FIRST = ["completed", "ongoing", "hiatus", "cancelled"];
+  function statusRank(n, order) {
+    var i = order.indexOf(statusOf(n));
+    return i < 0 ? order.length : i;
+  }
+
+  // Letters and digits only, lower case, accents dropped: "Solo Leveling:
+  // Ragnarok" and "solo leveling ragnarok" read the same.
+  function norm(s) {
+    return String(s || "").normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase()
+      .replace(/[^\\p{L}\\p{N}]+/gu, " ").trim();
+  }
+  function altTitles(n) { return (n.extra && n.extra.alt_titles) || []; }
+  // What a search looks through, per novel, worked out once per load.
+  function haystack(n) {
+    lib.hay = lib.hay || {};
+    var h = lib.hay[n.id];
+    if (!h) {
+      h = lib.hay[n.id] = {
+        title: norm([n.title].concat(altTitles(n)).join(" | ")),
+        author: norm(n.authors),
+        rest: norm([n.synopsis, (n.tags || []).join(" "), n.domain].join(" "))
+      };
+    }
+    return h;
+  }
+  // 0 = title, 1 = author, 2 = description, tags or source, -1 = no match.
+  // Every word must appear somewhere; "sololeveling" also finds "Solo Leveling".
+  function searchRank(n, words, joined) {
+    var h = haystack(n);
+    var all = h.title + " " + h.author + " " + h.rest;
+    var hit = words.every(function (w) { return all.indexOf(w) >= 0; }) ||
+      all.replace(/ /g, "").indexOf(joined) >= 0;
+    if (!hit) return -1;
+    if (words.every(function (w) { return h.title.indexOf(w) >= 0; }) ||
+        h.title.replace(/ /g, "").indexOf(joined) >= 0) return 0;
+    if (words.every(function (w) { return h.author.indexOf(w) >= 0; })) return 1;
+    return 2;
+  }
+  // Edit distance, giving up past `max` (cheap for short words).
+  function within(a, b, max) {
+    if (Math.abs(a.length - b.length) > max) return false;
+    var prev = [], i, j;
+    for (j = 0; j <= b.length; j++) prev[j] = j;
+    for (i = 1; i <= a.length; i++) {
+      var cur = [i], best = i;
+      for (j = 1; j <= b.length; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        if (cur[j] < best) best = cur[j];
+      }
+      if (best > max) return false;
+      prev = cur;
+    }
+    return prev[b.length] <= max;
+  }
+  // Like searchRank, but each word of four or more letters may be one letter
+  // off (two from eight letters) against a word of the title or author.
+  function fuzzyRank(n, words) {
+    var h = haystack(n);
+    var titleWords = h.title.split(" "), authorWords = h.author.split(" ");
+    var near = function (w, pool) {
+      if (w.length < 4) return pool.some(function (x) { return x.indexOf(w) >= 0; });
+      var max = w.length >= 8 ? 2 : 1;
+      return pool.some(function (x) { return x.indexOf(w) >= 0 || within(w, x, max); });
+    };
+    if (words.every(function (w) { return near(w, titleWords); })) return 0;
+    if (words.every(function (w) { return near(w, titleWords.concat(authorWords)); })) return 1;
+    return -1;
+  }
+
+  // The same story under the same title from different sources.
+  function dupKey(n) { return norm(n.title).replace(/^the /, "").replace(/ /g, ""); }
+
+  // Sources spell the same tag differently ("BL", "Boys' Love", "boys love";
+  // "Sci-fi", "Science Fiction"). Each is filed under one key and shown under
+  // the spelling the library uses most.
+  var TAG_SYNONYMS = {
+    bl: "boyslove", boylove: "boyslove", shounenai: "boyslove", shonenai: "boyslove",
+    gl: "girlslove", girllove: "girlslove", shoujoai: "girlslove", shojoai: "girlslove",
+    scifi: "sciencefiction", sf: "sciencefiction",
+    shonen: "shounen", shojo: "shoujo",
+    genderswap: "genderbender", rofan: "romancefantasy", romanticfantasy: "romancefantasy",
+    martialart: "martialarts", wuxia: "wuxia", xianxia: "xianxia",
+    sliceoflifes: "sliceoflife", webcomic: "webtoon", webtoonwebcomic: "webtoon",
+    adventures: "adventure", comedies: "comedy", dramas: "drama", romances: "romance"
+  };
+  function tagKey(t) {
+    var k = norm(t).replace(/ /g, "");
+    return TAG_SYNONYMS[k] || k;
+  }
+  function buildTagLabels() {
+    var seen = {};
+    lib.all.forEach(function (n) {
+      (n.tags || []).forEach(function (t) {
+        var k = tagKey(t);
+        if (!k) return;
+        var spell = seen[k] || (seen[k] = {});
+        spell[t] = (spell[t] || 0) + 1;
+      });
+    });
+    lib.tagLabel = {};
+    Object.keys(seen).forEach(function (k) {
+      // most used; on a tie, the one written with capitals ("Boys' Love", not "bl")
+      var caps = function (t) { return (t.match(/[A-Z]/g) || []).length > 0 ? 1 : 0; };
+      lib.tagLabel[k] = Object.keys(seen[k]).sort(function (a, b) {
+        return (seen[k][b] - seen[k][a]) || (caps(b) - caps(a)) || (b.length - a.length);
+      })[0];
+    });
+    lib.tagCache = {};
+  }
+  function tagsOf(n) {
+    lib.tagCache = lib.tagCache || {};
+    var hit = lib.tagCache[n.id];
+    if (hit) return hit;
+    var out = [];
+    (n.tags || []).forEach(function (t) {
+      var k = tagKey(t);
+      var label = (lib.tagLabel || {})[k] || t;
+      if (k && out.indexOf(label) < 0) out.push(label);
+    });
+    return (lib.tagCache[n.id] = out);
+  }
+
+  // Boys' Love goes by several names across sources. Tags are compared whole,
+  // letters only, so "BL" matches but "Blood" or "Black Clover" do not.
+  var BL_TAGS = ["bl", "boyslove", "boylove", "yaoi", "shounenai", "shonenai", "danmei", "bara"];
+  function isBL(n) {
+    return (n.tags || []).some(function (t) {
+      return BL_TAGS.indexOf(String(t).toLowerCase().replace(/[^a-z]/g, "")) >= 0;
+    });
+  }
+
+  // [min, max] chapters from the Length filter, or null when it is off
+  function chapterRange() {
+    var v = els["lib-len"].value;
+    if (!v) return null;
+    var lo = "", hi = "";
+    if (v === "custom") { lo = els["lib-len-min"].value; hi = els["lib-len-max"].value; }
+    else { var parts = v.split("-"); lo = parts[0]; hi = parts[1]; }
+    var min = lo === "" ? 0 : Math.max(0, parseInt(lo, 10) || 0);
+    var max = hi === "" ? Infinity : Math.max(0, parseInt(hi, 10) || 0);
+    if (!min && max === Infinity) return null;
+    return [min, max];
+  }
+
+  // How many filters are on, for the Filters button.
+  function activeFilterCount() {
+    return [els["lib-tag"].value.trim(), els["lib-source"].value, els["lib-lang"].value,
+      els["lib-progress"].value, els["lib-shelf"].value, els["lib-state"].value,
+      els["lib-favonly"].checked, !!chapterRange(), els["lib-dupes"].checked,
+      els["lib-nobl"].checked, els["lib-nomtl"].checked, lib.cat].filter(Boolean).length;
+  }
+  var FILTERS_OPEN = "lncrawl_reader_filters_open";
+  function renderFiltersButton() {
+    var n = activeFilterCount();
+    var open = !els["lib-filters"].classList.contains("hidden");
+    els["lib-filters-btn"].textContent = (open ? "▾ " : "▸ ") + "Filters" + (n ? " (" + n + ")" : "");
+    els["lib-filters-btn"].classList.toggle("on", n > 0);
+  }
+  els["lib-filters-btn"].addEventListener("click", function () {
+    var open = els["lib-filters"].classList.toggle("hidden") === false;
+    try { localStorage.setItem(FILTERS_OPEN, open ? "1" : ""); } catch (e) { /* private mode */ }
+    renderFiltersButton();
+  });
+  // the More menu closes once something in it is picked, or on a click elsewhere
+  els["lib-more"].addEventListener("click", function (e) {
+    if (e.target.tagName === "BUTTON") els["lib-more"].open = false;
+  });
+  document.addEventListener("click", function (e) {
+    if (els["lib-more"].open && !els["lib-more"].contains(e.target)) els["lib-more"].open = false;
+  });
+
   function filtersActive() {
     return !!(els["lib-kind"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
-      els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked ||
+      els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked || !!chapterRange() || !!els["lib-shelf"].value || els["lib-nobl"].checked || els["lib-dupes"].checked ||
       els["lib-lang"].value || els["lib-nomtl"].checked || lib.cat);
   }
 
   function renderCategories() {
     var counts = {};
     lib.all.forEach(function (n) {
-      (n.tags || []).forEach(function (t) { if (t) counts[t] = (counts[t] || 0) + 1; });
+      tagsOf(n).forEach(function (t) { counts[t] = (counts[t] || 0) + 1; });
     });
     var top = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; }).slice(0, 12);
     els["lib-cats"].innerHTML = "";
@@ -671,13 +1242,50 @@ _READER_HTML = """<!DOCTYPE html>
   function renderLibrary() {
     saveView();
     renderAllBookmarks();  // keeps the Bookmarks count current after reading
+    updateWebButton();
+    updateFillButton();
+    renderAuto();
+    renderFiltersButton();
     var items = lib.all.slice();
+    var q = els["search"].value;
+    var words = norm(q).split(" ").filter(Boolean);
+    var joined = words.join("");
+    var rank = {};
+    var fuzzy = false;
+    if (words.length) {
+      var exact = items.filter(function (n) {
+        var r = searchRank(n, words, joined);
+        rank[n.id] = r;
+        return r >= 0;
+      });
+      if (!exact.length) {
+        // nothing exact: allow a slip of the keyboard per word
+        exact = items.filter(function (n) {
+          var r = fuzzyRank(n, words);
+          rank[n.id] = r;
+          return r >= 0;
+        });
+        fuzzy = exact.length > 0;
+      }
+      items = exact;
+    }
+    var dupes = els["lib-dupes"].checked;
+    if (dupes) {
+      var count = {};
+      (lib.everything || lib.all).forEach(function (n) { var k = dupKey(n); count[k] = (count[k] || 0) + 1; });
+      items = items.filter(function (n) { return count[dupKey(n)] > 1; });
+    }
+    var shelf = els["lib-shelf"].value;
+    if (shelf) {
+      var onShelf = (lib.membership || {})[shelf] || [];
+      items = items.filter(function (n) { return onShelf.indexOf(n.id) >= 0; });
+    }
     if (els["lib-favonly"].checked) {
       var favs = loadFavs();
       items = items.filter(function (n) { return favs.indexOf(n.id) >= 0; });
     }
     if (lib.cat) {
-      items = items.filter(function (n) { return (n.tags || []).indexOf(lib.cat) >= 0; });
+      items = items.filter(function (n) { return tagsOf(n).indexOf(lib.cat) >= 0; });
     }
 
     var kind = els["lib-kind"].value;
@@ -693,6 +1301,14 @@ _READER_HTML = """<!DOCTYPE html>
     if (progress) items = items.filter(function (n) { return progressOf(n) === progress; });
     var state = els["lib-state"].value;
     if (state) items = items.filter(function (n) { return (statusOf(n) || "unknown") === state; });
+    var range = chapterRange();
+    if (range) {
+      items = items.filter(function (n) {
+        var c = n.chapter_count || 0;
+        return c >= range[0] && c <= range[1];
+      });
+    }
+    if (els["lib-nobl"].checked) items = items.filter(function (n) { return !isBL(n); });
     if (els["lib-nomtl"].checked) items = items.filter(function (n) { return !n.mtl; });
     els["lib-clear"].classList.toggle("hidden", !filtersActive());
 
@@ -705,6 +1321,12 @@ _READER_HTML = """<!DOCTYPE html>
     };
     var readAt = function (n) { var p = posOf(n.id); return (p && p.ts) || 0; };
     items.sort(function (a, b) {
+      // a search puts title matches first; possible duplicates sit together
+      if (words.length && rank[a.id] !== rank[b.id]) return rank[a.id] - rank[b.id];
+      if (dupes) {
+        var ka = dupKey(a), kb = dupKey(b);
+        if (ka !== kb) return ka < kb ? -1 : 1;
+      }
       var d = 0;
       if (sort === "title") d = byText(a, b, "title");
       else if (sort === "title-desc") d = -byText(a, b, "title");
@@ -715,23 +1337,57 @@ _READER_HTML = """<!DOCTYPE html>
       else if (sort === "read") d = readAt(b) - readAt(a);
       else if (sort === "author") d = byText(a, b, "authors");
       else if (sort === "source") d = byText(a, b, "domain");
+      else if (sort === "rating") d = (loadRatings()[b.id] || 0) - (loadRatings()[a.id] || 0);
+      else if (sort === "newch") d = ((lib.latest || {})[b.id] || 0) - ((lib.latest || {})[a.id] || 0);
+      else if (sort === "status") d = statusRank(a, ONGOING_FIRST) - statusRank(b, ONGOING_FIRST);
+      else if (sort === "status-done") d = statusRank(a, COMPLETED_FIRST) - statusRank(b, COMPLETED_FIRST);
       else d = (b.created_at || 0) - (a.created_at || 0);  // recent
       return d || byText(a, b, "title");
     });
 
     els["lib-list"].innerHTML = "";
     if (!items.length) {
-      els["lib-status"].textContent = lib.all.length ? "No matches." : "Your library is empty — download something first (Tools).";
+      els["lib-status"].textContent = lib.all.length
+        ? (words.length ? "Nothing in your library matches “" + q.trim() + "”." : "No matches.")
+        : "Your library is empty — download something first (Tools).";
       return;
     }
     els["lib-status"].textContent = items.length + " novel(s)" +
+      (words.length ? (fuzzy ? " close to “" + q.trim() + "” (no exact match)" : " matching “" + q.trim() + "”") : "") +
+      (dupes ? " · possible duplicates — open one and press Merge to combine them" : "") +
       (kind ? " · " + els["lib-kind"].selectedOptions[0].textContent : "") +
       (terms.length ? " · tags: " + terms.join(", ") : "") +
       (state ? " · " + els["lib-state"].selectedOptions[0].textContent : "") +
       (progress ? " · " + els["lib-progress"].selectedOptions[0].textContent : "") +
+      (range ? " · " + (range[1] === Infinity ? range[0] + "+" : range[0] + "–" + range[1]) + " chapters" : "") +
       (els["lib-favonly"].checked ? " · ★ Favorites" : "") +
       (lib.cat ? " · " + lib.cat : "");
-    items.forEach(function (n) {
+    // Cards are made a batch at a time as the list is scrolled, so a library of
+    // thousands stays quick to filter.
+    var token_ = lib.renderToken = (lib.renderToken || 0) + 1;
+    var shown = 0;
+    function more() {
+      if (token_ !== lib.renderToken) return;
+      items.slice(shown, shown + CARD_BATCH).forEach(buildCard);
+      shown = Math.min(items.length, shown + CARD_BATCH);
+      if (shown < items.length) {
+        var sentinel = document.createElement("div"); sentinel.className = "lib-more";
+        els["lib-list"].appendChild(sentinel);
+        if ("IntersectionObserver" in window) {
+          var io = new IntersectionObserver(function (entries) {
+            if (!entries[0].isIntersecting) return;
+            io.disconnect(); sentinel.remove(); more();
+          }, { rootMargin: "600px" });
+          io.observe(sentinel);
+        } else { sentinel.remove(); more(); }
+      }
+    }
+    more();
+  }
+
+  var CARD_BATCH = 60;
+  function buildCard(n) {
+    {
       var c = document.createElement("div");
       c.className = "card libcard";
 
@@ -750,6 +1406,11 @@ _READER_HTML = """<!DOCTYPE html>
         renderLibrary();
       });
       if (n.manga) { var bd = document.createElement("span"); bd.className = "badge"; bd.textContent = "Manga"; h.appendChild(bd); }
+      if (hasNewChapters(n)) {
+        var fb = document.createElement("span"); fb.className = "badge fresh";
+        fb.textContent = "● new chapters"; fb.title = "Chapters were added since you last read it";
+        h.appendChild(fb);
+      }
       var st8 = statusOf(n);
       if (st8 && st8 !== "ongoing") {
         var sb = document.createElement("span"); sb.className = "badge";
@@ -762,7 +1423,10 @@ _READER_HTML = """<!DOCTYPE html>
         nb.textContent = "+" + upd.found + " new"; h.appendChild(nb);
       }
       var m = document.createElement("div"); m.className = "meta";
-      m.textContent = [n.authors || "", (n.chapter_count || 0) + " chapters", n.domain || ""]
+      var newest = (lib.latest || {})[n.id];
+      var stars = loadRatings()[n.id];
+      m.textContent = [stars ? "★" + stars : "", n.authors || "", (n.chapter_count || 0) + " chapters", n.domain || "",
+        newest ? "new chapter " + timeAgo(newest) : ""]
         .filter(Boolean).join("  ·  ");
       h.insertBefore(star, h.firstChild);
       body.appendChild(h); body.appendChild(m);
@@ -786,10 +1450,20 @@ _READER_HTML = """<!DOCTYPE html>
         var d = document.createElement("p"); d.className = "desc";
         d.textContent = n.synopsis.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim();
         body.appendChild(d);
+        // long descriptions are cut to two lines; "more" reads the rest in place
+        if (d.textContent.length > 160) {
+          var more = document.createElement("span"); more.className = "desc-more"; more.textContent = "more";
+          more.addEventListener("click", function (e) {
+            e.stopPropagation();
+            var open = d.classList.toggle("open");
+            more.textContent = open ? "less" : "more";
+          });
+          body.appendChild(more);
+        }
       }
-      if (n.tags && n.tags.length) {
+      if (tagsOf(n).length) {
         var tg = document.createElement("div"); tg.className = "tags";
-        n.tags.slice(0, 5).forEach(function (t) {
+        tagsOf(n).slice(0, 5).forEach(function (t) {
           var chip = document.createElement("span"); chip.className = "chip"; chip.textContent = t;
           tg.appendChild(chip);
         });
@@ -805,7 +1479,7 @@ _READER_HTML = """<!DOCTYPE html>
         updateDelBtn();
       });
       els["lib-list"].appendChild(c);
-    });
+    }
   }
 
   // ---- Select mode: bulk delete ----
@@ -863,6 +1537,16 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-status"].scrollIntoView({ behavior: "smooth", block: "start" });
   });
   els["lib-favonly"].addEventListener("change", renderLibrary);
+  els["lib-dupes"].addEventListener("change", renderLibrary);
+  els["lib-shelf"].addEventListener("change", renderLibrary);
+  els["lib-nobl"].addEventListener("change", renderLibrary);
+  els["lib-len"].addEventListener("change", function () {
+    els["lib-len-custom"].classList.toggle("hidden", this.value !== "custom");
+    renderLibrary();
+  });
+  ["lib-len-min", "lib-len-max"].forEach(function (k) {
+    els[k].addEventListener("input", function () { clearTimeout(tagTimer); tagTimer = setTimeout(renderLibrary, 200); });
+  });
   els["lib-nomtl"].addEventListener("change", renderLibrary);
   var tagTimer = null;
   els["lib-tag"].addEventListener("input", function () {
@@ -871,7 +1555,9 @@ _READER_HTML = """<!DOCTYPE html>
   });
   els["lib-clear"].addEventListener("click", function () {
     els["lib-kind"].value = ""; els["lib-tag"].value = ""; els["lib-source"].value = "";
-    els["lib-lang"].value = ""; els["lib-state"].value = ""; els["lib-progress"].value = ""; els["lib-favonly"].checked = false; els["lib-nomtl"].checked = false; lib.cat = "";
+    els["lib-lang"].value = ""; els["lib-state"].value = ""; els["lib-progress"].value = ""; els["lib-favonly"].checked = false;
+    els["lib-len"].value = ""; els["lib-len-min"].value = ""; els["lib-len-max"].value = "";
+    els["lib-len-custom"].classList.add("hidden"); els["lib-nobl"].checked = false; els["lib-dupes"].checked = false; els["lib-shelf"].value = ""; els["lib-nomtl"].checked = false; lib.cat = "";
     renderCategories(); renderLibrary();
   });
 
@@ -879,27 +1565,31 @@ _READER_HTML = """<!DOCTYPE html>
   // (sequential on purpose — polite to the sources), and badge the ones that
   // gained chapters. Click again to stop mid-run.
   var checking = false;
-  els["lib-update"].addEventListener("click", function () {
-    var btn = this;
+  // Re-read each novel's details from its source, one at a time. Used by
+  // "Check updates" (every novel) and "Fill in details" (those missing some).
+  function refreshNovels(items, btn, idleText, doneText) {
     if (checking) { checking = false; return; }
-    if (!lib.all.length) return;
+    if (!items.length) return;
     checking = true;
-    btn.textContent = "■ Stop checking";
-    var items = lib.all.slice();
+    var other = btn === els["lib-update"] ? els["lib-fill"] : els["lib-update"];
+    other.disabled = true;
+    btn.textContent = "■ Stop";
     var updates = loadUpdates();
     var i = 0, found = 0;
     function finish() {
       checking = false;
-      btn.textContent = "⟳ Check updates";
+      other.disabled = false;
+      btn.textContent = idleText;
+      lib.hay = {};
+      renderFilterOptions();
+      renderCategories();
       renderLibrary();
-      els["lib-status"].textContent = found
-        ? ("Update check done — " + found + " novel(s) have new chapters.")
-        : "Update check done — no new chapters found.";
+      els["lib-status"].textContent = doneText(i, found);
     }
     function next() {
       if (!checking || i >= items.length) { finish(); return; }
       var n = items[i++];
-      els["lib-status"].textContent = "Checking " + i + "/" + items.length + ": " + (n.title || "");
+      els["lib-status"].textContent = "Refreshing " + i + "/" + items.length + ": " + (n.title || "");
       api("/novel/" + n.id + "/refresh", { method: "POST" }).then(function (r) {
         if (r && (r.chapter_count || 0) > (n.chapter_count || 0)) {
           found++;
@@ -914,6 +1604,628 @@ _READER_HTML = """<!DOCTYPE html>
       }).catch(function () { /* skip novels that fail to refresh */ }).then(next);
     }
     next();
+  }
+  els["lib-update"].addEventListener("click", function () {
+    refreshNovels(lib.all.slice(), this, "⟳ Check updates", function (done, found) {
+      return found ? "Update check done — " + found + " novel(s) have new chapters."
+        : "Update check done — no new chapters found.";
+    });
+  });
+
+  // Novels the filters can't place: no status, no genres or no description,
+  // usually because they were added before those were recorded.
+  function missingDetails(n) { return !statusOf(n) || !(n.tags && n.tags.length) || !n.synopsis; }
+  function updateFillButton() {
+    if (checking) return;
+    var n = lib.all.filter(missingDetails).length;
+    els["lib-fill"].classList.toggle("hidden", !n);
+    els["lib-fill"].textContent = "✚ Fill in details (" + n + ")";
+  }
+  els["lib-fill"].addEventListener("click", function () {
+    var items = lib.all.filter(missingDetails);
+    refreshNovels(items, this, "✚ Fill in details", function (done) {
+      var left = lib.all.filter(missingDetails).length;
+      return "Re-read the details of " + done + " novel(s)." +
+        (left ? " " + left + " still lack some — their sources don't provide them." : "");
+    });
+  });
+
+  // ---- Saved views ----
+  function renderViews(selected) {
+    var views = loadViews();
+    var sel = els["lib-views"];
+    sel.innerHTML = "";
+    var head = document.createElement("option"); head.value = "";
+    head.textContent = Object.keys(views).length ? "Saved views" : "No saved views";
+    sel.appendChild(head);
+    Object.keys(views).sort().forEach(function (name) {
+      var o = document.createElement("option"); o.value = name; o.textContent = name; sel.appendChild(o);
+    });
+    sel.value = selected && views[selected] ? selected : "";
+    els["lib-view-del"].classList.toggle("hidden", !sel.value);
+  }
+  els["lib-views"].addEventListener("change", function () {
+    var views = loadViews();
+    if (this.value && views[this.value]) {
+      applyView(views[this.value]);
+      renderCategories();
+      renderLibrary();
+    }
+    els["lib-view-del"].classList.toggle("hidden", !this.value);
+  });
+  els["lib-view-save"].addEventListener("click", function () {
+    var name = (prompt("Name this view (for example “Completed manhwa”):", els["lib-views"].value || "") || "").trim();
+    if (!name) return;
+    var views = loadViews();
+    views[name] = currentView();
+    saveViews(views);
+    renderViews(name);
+  });
+  els["lib-view-del"].addEventListener("click", function () {
+    var name = els["lib-views"].value;
+    if (!name || !confirm("Delete the saved view “" + name + "”?")) return;
+    var views = loadViews();
+    delete views[name];
+    saveViews(views);
+    renderViews("");
+  });
+
+  // ---- Search the sources ----
+  // When the library doesn't have it, look for it where it can be downloaded.
+  // Results only list what each source returns; nothing is added until picked.
+  var web = { job: null, timer: null, query: "" };
+  var JOB_STATES = ["PENDING", "RUNNING", "SUCCESS", "FAILED", "CANCELED", "PAUSED"];
+  function statusName(s) { return typeof s === "number" ? (JOB_STATES[s] || String(s)) : s; }
+  function updateWebButton() {
+    var q = els["search"].value.trim();
+    var btn = els["lib-web-btn"];
+    els["lib-web-row"].classList.toggle("hidden", q.length < 2);
+    var sel = els["lib-web-scope"];
+    if (sel.options.length <= 2) {
+      // and each source the library uses, to search just that one
+      var doms = {};
+      (lib.everything || lib.all).forEach(function (n) { if (n.domain) doms[n.domain] = 1; });
+      Object.keys(doms).sort().forEach(function (d) {
+        var o = document.createElement("option"); o.value = d; o.textContent = "on " + d + " only"; sel.appendChild(o);
+      });
+    }
+    btn.textContent = "🔎 Search the sources for “" + q + "”";
+  }
+  function stopWebSearch() {
+    clearTimeout(web.timer);
+    if (web.job) api("/job/" + web.job + "/cancel", { method: "POST" }).catch(function () {});
+    web.job = null;
+    els["lib-web-stop"].classList.add("hidden");
+  }
+  els["lib-web-stop"].addEventListener("click", function () {
+    stopWebSearch();
+    els["lib-web-status"].textContent = "· stopped";
+  });
+  els["lib-web-btn"].addEventListener("click", function () {
+    var q = els["search"].value.trim();
+    if (q.length < 2) return;
+    stopWebSearch();
+    web.query = q;
+    els["lib-web"].classList.remove("hidden");
+    els["lib-web-list"].innerHTML = "";
+    els["lib-web-status"].textContent = "· searching…";
+    var scope = els["lib-web-scope"].value;
+    var body = { query: q.slice(0, 50), results_only: true };
+    if (scope === "mine") {
+      var doms = {};
+      (lib.everything || lib.all).forEach(function (n) { if (n.domain) doms[n.domain] = 1; });
+      body.domains = Object.keys(doms);
+    } else if (scope !== "all") {
+      body.domain = scope;
+    }
+    api("/job/create/search-sources", {
+      method: "POST",
+      body: JSON.stringify(body)
+    }).then(function (job) {
+      web.job = job.id;
+      els["lib-web-stop"].classList.remove("hidden");
+      pollWeb();
+    }).catch(function (e) { els["lib-web-status"].textContent = "· couldn't search: " + e.message; });
+  });
+  function pollWeb() {
+    var id = web.job;
+    if (!id) return;
+    api("/job/" + id).then(function (job) {
+      if (web.job !== id) return;
+      renderWebResults((job.extra && job.extra.search_results) || []);
+      var running = statusName(job.status) === "PENDING" || statusName(job.status) === "RUNNING";
+      var n = els["lib-web-list"].children.length;
+      els["lib-web-status"].textContent = "· " + n + " found" +
+        (running ? " — searching " + (job.done || 0) + "/" + (job.total || "?") + " sources…" : "");
+      if (running) web.timer = setTimeout(pollWeb, 2000);
+      else { web.job = null; els["lib-web-stop"].classList.add("hidden"); }
+    }).catch(function () { web.timer = setTimeout(pollWeb, 4000); });
+  }
+  function renderWebResults(results) {
+    var have = {};
+    (lib.everything || lib.all).forEach(function (n) { have[n.url] = n; });
+    var box = els["lib-web-list"];
+    box.innerHTML = "";
+    results.slice(0, 60).forEach(function (r) {
+      var row = document.createElement("div"); row.className = "web-row";
+      var t = document.createElement("div"); t.className = "t";
+      var b = document.createElement("b"); b.textContent = r.title || r.url;
+      var m = document.createElement("span"); m.className = "muted";
+      var host = ""; try { host = new URL(r.url).hostname.replace(/^www\\./, ""); } catch (e) { host = ""; }
+      m.textContent = [host, r.info || ""].filter(Boolean).join(" · ");
+      t.appendChild(b); t.appendChild(m); row.appendChild(t);
+      var owned = have[r.url];
+      if (owned) {
+        var open = document.createElement("button"); open.className = "secondary"; open.textContent = "In library — open";
+        open.addEventListener("click", function () { openNovel(owned); });
+        row.appendChild(open);
+      } else {
+        var add = document.createElement("button"); add.textContent = "Add";
+        add.title = "Add its details to your library";
+        var full = document.createElement("button"); full.className = "secondary"; full.textContent = "Add & download";
+        full.title = "Add it and download every chapter";
+        add.addEventListener("click", function () { addFromWeb(r.url, false, row); });
+        full.addEventListener("click", function () { addFromWeb(r.url, true, row); });
+        row.appendChild(add); row.appendChild(full);
+      }
+      box.appendChild(row);
+    });
+  }
+  function addFromWeb(url, full, row) {
+    row.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+    var note = document.createElement("span"); note.className = "muted"; note.textContent = "adding…";
+    row.appendChild(note);
+    api("/job/create/fetch-novels", { method: "POST", body: JSON.stringify({ urls: [url], full: full }) })
+      .then(function (job) {
+        (function wait() {
+          api("/job/" + job.id).then(function (j) {
+            var st = statusName(j.status);
+            if (st === "PENDING" || st === "RUNNING") {
+              note.textContent = full ? "downloading… " + (j.done || 0) + "/" + (j.total || "?") : "adding…";
+              setTimeout(wait, 2500);
+              return;
+            }
+            note.textContent = st === "SUCCESS" ? "✓ added" : "failed" + (j.error ? ": " + String(j.error).split("\\n").pop() : "");
+            if (st === "SUCCESS") loadLibrary();
+          }).catch(function () { setTimeout(wait, 5000); });
+        })();
+      })
+      .catch(function (e) { note.textContent = "couldn't add: " + e.message; });
+  }
+
+  // ---- New chapters ----
+  // A novel has new chapters when one was added after you last read it.
+  function hasNewChapters(n) {
+    var pe = posOf(n.id);
+    var newest = (lib.latest || {})[n.id];
+    return !!(pe && pe.ts && newest && newest > pe.ts);
+  }
+  function watched(n, scope) {
+    if (scope === "all") return true;
+    var fav = isFav(n.id), reading = !!posOf(n.id);
+    if (scope === "favorites") return fav;
+    if (scope === "reading") return reading;
+    return fav || reading;
+  }
+  var NOTIFIED = "lncrawl_reader_notified";  // { novelId: newest chapter ts told about }
+  function renderAuto() {
+    var a = loadAuto();
+    els["auto-on"].checked = !!a.enabled;
+    els["auto-scope"].value = a.scope || "both";
+    els["auto-dl"].checked = !!a.download;
+    els["auto-notify"].checked = !!a.notify;
+    var fresh = lib.all.filter(function (n) { return hasNewChapters(n) && watched(n, a.scope || "both"); });
+    els["lib-auto-btn"].textContent = "🔔 New chapters" + (fresh.length ? " (" + fresh.length + ")" : "");
+    var st = lib.autoStatus || {};
+    var since = st.last ? lib.all.filter(function (n) { return ((lib.latest || {})[n.id] || 0) > st.last; }).length : 0;
+    els["auto-note"].textContent = (a.enabled
+      ? "The server checks these once a day" + (a.download ? " and downloads what it finds." : ".")
+      : "Off: use ⟳ Check updates to look now.") +
+      (st.last ? " Last check " + timeAgo(st.last) + " (" + (st.queued || 0) + " novel(s)); " +
+        since + " novel(s) got new chapters since." : (a.enabled ? " It hasn't run yet." : "")) +
+      (fresh.length ? " " + fresh.length + " novel(s) have chapters you haven't read." : "");
+    return fresh;
+  }
+  function notifyNew() {
+    var a = loadAuto();
+    if (!a.notify || !("Notification" in window) || Notification.permission !== "granted") return;
+    var told; try { told = JSON.parse(localStorage.getItem(NOTIFIED) || "{}"); } catch (e) { told = {}; }
+    var fresh = renderAuto().filter(function (n) { return (told[n.id] || 0) < (lib.latest[n.id] || 0); });
+    if (!fresh.length) return;
+    fresh.forEach(function (n) { told[n.id] = lib.latest[n.id]; });
+    localStorage.setItem(NOTIFIED, JSON.stringify(told));
+    var names = fresh.slice(0, 3).map(function (n) { return n.title; }).join(", ");
+    try {
+      new Notification("New chapters", {
+        body: names + (fresh.length > 3 ? " and " + (fresh.length - 3) + " more" : ""),
+        tag: "lncrawl-new-chapters"
+      });
+    } catch (e) { /* notifications blocked */ }
+  }
+  function saveAutoFromForm() {
+    saveAuto({
+      enabled: els["auto-on"].checked, scope: els["auto-scope"].value,
+      download: els["auto-dl"].checked, notify: els["auto-notify"].checked
+    });
+    renderAuto();
+  }
+  els["lib-auto-btn"].addEventListener("click", function () {
+    els["lib-auto"].classList.toggle("hidden");
+    renderAuto();
+    api("/settings/auto-update").then(function (st) { lib.autoStatus = st; renderAuto(); }).catch(function () {});
+  });
+  ["auto-on", "auto-scope", "auto-dl"].forEach(function (k) { els[k].addEventListener("change", saveAutoFromForm); });
+  els["auto-notify"].addEventListener("change", function () {
+    var box = this;
+    if (box.checked && "Notification" in window && Notification.permission !== "granted") {
+      Notification.requestPermission().then(function (p) {
+        if (p !== "granted") { box.checked = false; alert("Notifications are blocked for this site in your browser settings."); }
+        saveAutoFromForm(); notifyNew();
+      });
+      return;
+    }
+    if (box.checked && !("Notification" in window)) { box.checked = false; alert("This browser can't show notifications."); }
+    saveAutoFromForm();
+  });
+
+  // ---- Shelves (your own lists, kept on the server as libraries) ----
+  function loadShelves() {
+    return Promise.all([
+      api("/library/my/list").catch(function () { return []; }),
+      api("/library/my/membership").catch(function () { return {}; })
+    ]).then(function (r) {
+      lib.shelves = r[0] || [];
+      lib.membership = r[1] || {};
+      renderShelfFilter();
+      if (current.novel) renderShelfBox(current.novel);
+    });
+  }
+  // Shelves in the order you put them (kept with the synced reading settings).
+  function orderedShelves() {
+    var order = (prefs && prefs.shelfOrder) || [];
+    return (lib.shelves || []).slice().sort(function (a, b) {
+      var ia = order.indexOf(a.id), ib = order.indexOf(b.id);
+      if (ia < 0) ia = 1e6; if (ib < 0) ib = 1e6;
+      return ia - ib || a.name.localeCompare(b.name);
+    });
+  }
+  function renderShelvesPanel() {
+    var box = els["lib-shelves-list"];
+    box.innerHTML = "";
+    var list = orderedShelves();
+    if (!list.length) {
+      box.innerHTML = "<p class='muted'>No shelves yet. Open a novel and press 📚 Shelves → + New shelf.</p>";
+      return;
+    }
+    list.forEach(function (sh, i) {
+      var row = document.createElement("div"); row.className = "shelf-row";
+      var n = document.createElement("span"); n.className = "n";
+      n.textContent = sh.name + " (" + (((lib.membership || {})[sh.id]) || []).length + ")";
+      var up = document.createElement("button"); up.className = "secondary"; up.textContent = "↑"; up.disabled = i === 0;
+      var dn = document.createElement("button"); dn.className = "secondary"; dn.textContent = "↓"; dn.disabled = i === list.length - 1;
+      var rn = document.createElement("button"); rn.className = "secondary"; rn.textContent = "✎ Rename";
+      var del = document.createElement("button"); del.className = "secondary"; del.textContent = "🗑";
+      function move(by) {
+        var ids = list.map(function (x) { return x.id; });
+        var j = i + by; var tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp;
+        prefs.shelfOrder = ids; savePrefs(prefs);
+        renderShelvesPanel(); renderShelfFilter();
+      }
+      up.addEventListener("click", function () { move(-1); });
+      dn.addEventListener("click", function () { move(1); });
+      rn.addEventListener("click", function () {
+        var name = (prompt("Rename “" + sh.name + "” to:", sh.name) || "").trim();
+        if (!name || name === sh.name) return;
+        api("/library/" + sh.id, { method: "PATCH", body: JSON.stringify({ name: name }) })
+          .then(loadShelves).then(renderShelvesPanel)
+          .catch(function (e) { alert("Couldn't rename it: " + e.message); });
+      });
+      del.addEventListener("click", function () {
+        if (!confirm("Delete the shelf “" + sh.name + "”? The novels on it stay in your library.")) return;
+        api("/library/" + sh.id, { method: "DELETE" })
+          .then(loadShelves).then(renderShelvesPanel)
+          .catch(function (e) { alert("Couldn't delete it: " + e.message); });
+      });
+      row.appendChild(n); row.appendChild(up); row.appendChild(dn); row.appendChild(rn); row.appendChild(del);
+      box.appendChild(row);
+    });
+  }
+  els["lib-shelves-btn"].addEventListener("click", function () {
+    els["lib-shelves"].classList.toggle("hidden");
+    renderShelvesPanel();
+  });
+
+  function shelvesOf(novelId) {
+    return (lib.shelves || []).filter(function (s) { return ((lib.membership || {})[s.id] || []).indexOf(novelId) >= 0; });
+  }
+  function renderShelfFilter() {
+    var sel = els["lib-shelf"];
+    var keep = lib.pendingShelf || sel.value;
+    lib.pendingShelf = null;
+    sel.innerHTML = "";
+    var all = document.createElement("option"); all.value = ""; all.textContent = "All shelves"; sel.appendChild(all);
+    orderedShelves().forEach(function (s) {
+      var o = document.createElement("option"); o.value = s.id;
+      o.textContent = s.name + " (" + (((lib.membership || {})[s.id]) || []).length + ")";
+      sel.appendChild(o);
+    });
+    sel.value = (lib.shelves || []).some(function (s) { return s.id === keep; }) ? keep : "";
+    sel.classList.toggle("hidden", !(lib.shelves || []).length);
+  }
+  function renderShelfBox(novel) {
+    var box = els["shelf-box"];
+    box.innerHTML = "";
+    orderedShelves().forEach(function (s) {
+      var on = ((lib.membership || {})[s.id] || []).indexOf(novel.id) >= 0;
+      var chip = document.createElement("span"); chip.className = "chip" + (on ? " active" : "");
+      chip.textContent = (on ? "✓ " : "") + s.name;
+      chip.addEventListener("click", function () {
+        var path = on ? "/library/" + s.id + "/novels/" + novel.id : "/library/" + s.id + "/novel/" + novel.id;
+        api(path, { method: on ? "DELETE" : "PUT" }).then(loadShelves)
+          .catch(function (e) { alert("Couldn't change the shelf: " + e.message); });
+      });
+      box.appendChild(chip);
+    });
+    var add = document.createElement("span"); add.className = "chip"; add.textContent = "+ New shelf";
+    add.addEventListener("click", function () {
+      var name = (prompt("Name the new shelf (for example “Plan to read”):") || "").trim();
+      if (!name) return;
+      api("/library", { method: "POST", body: JSON.stringify({ name: name }) })
+        .then(function (shelf) { return api("/library/" + shelf.id + "/novel/" + novel.id, { method: "PUT" }); })
+        .then(loadShelves)
+        .catch(function (e) { alert("Couldn't make the shelf: " + e.message); });
+    });
+    box.appendChild(add);
+    var names = shelvesOf(novel.id).map(function (s) { return s.name; });
+    els["shelf-btn"].textContent = "📚 " + (names.length ? names.join(", ") : "Shelves");
+  }
+  els["shelf-btn"].addEventListener("click", function () {
+    els["shelf-box"].classList.toggle("hidden");
+    if (current.novel) renderShelfBox(current.novel);
+  });
+
+  // ---- Your rating ----
+  function renderRating(novel) {
+    var mine = loadRatings()[novel.id] || 0;
+    var box = els["rate-box"];
+    box.innerHTML = "";
+    for (var i = 1; i <= 5; i++) {
+      (function (v) {
+        var st = document.createElement("span"); st.textContent = "★";
+        st.className = v <= mine ? "on" : "";
+        st.title = v + " star" + (v > 1 ? "s" : "") + (v === mine ? " — click again to clear" : "");
+        st.addEventListener("click", function () {
+          var r = loadRatings();
+          if (r[novel.id] === v) delete r[novel.id]; else r[novel.id] = v;
+          saveRatings(r);
+          renderRating(novel);
+        });
+        box.appendChild(st);
+      })(i);
+    }
+  }
+
+  // ---- Progress by hand (for reading done elsewhere) ----
+  // The chapter at a position, found by its place in the list.
+  function chapterAt(novel, serial) {
+    var n = Math.max(1, Math.min(serial, novel.chapter_count || serial));
+    return api("/novel/" + novel.id + "/chapters?limit=1&offset=" + (n - 1)).then(function (res) {
+      return ((res && res.items) || [])[0] || null;
+    });
+  }
+  function setProgress(novel, serial, scroll) {
+    return chapterAt(novel, serial).then(function (ch) {
+      if (!ch) throw new Error("no such chapter");
+      var p = loadPos();
+      p[novel.id] = { id: ch.id, serial: ch.serial, ts: Date.now(), scroll: scroll };
+      localStorage.setItem(POS, JSON.stringify(p));
+      schedulePush();
+      openNovel(novel);
+    });
+  }
+  els["prog-done"].addEventListener("click", function () {
+    if (!current.novel) return;
+    setProgress(current.novel, current.novel.chapter_count || 1, 1)
+      .catch(function (e) { alert("Couldn't mark it finished: " + e.message); });
+  });
+  els["prog-unread"].addEventListener("click", function () {
+    if (!current.novel || !confirm("Forget your place in “" + current.novel.title + "”?")) return;
+    var p = loadPos(); delete p[current.novel.id];
+    localStorage.setItem(POS, JSON.stringify(p));
+    schedulePush();
+    openNovel(current.novel);
+  });
+  els["prog-set"].addEventListener("click", function () {
+    if (!current.novel) return;
+    var pe = posOf(current.novel.id);
+    var raw = prompt("Which chapter are you on? (1–" + (current.novel.chapter_count || "?") + ")", pe && pe.serial ? pe.serial : "");
+    var n = parseInt(raw || "", 10);
+    if (!n || n < 1) return;
+    setProgress(current.novel, n, 0).catch(function (e) { alert("Couldn't set it: " + e.message); });
+  });
+
+  // ---- Save for offline ----
+  // Chapters are fetched now and kept in the Reader's offline cache, the same
+  // one the service worker answers from with no connection, so they open later
+  // without one: the text, and a manga chapter's pages.
+  var OFFLINE_CACHE = "lncrawl-reader-v1";
+  function keep(url) {
+    return fetch(url, { headers: { "Authorization": "Bearer " + token() } }).then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      var copy = res.clone();
+      return caches.open(OFFLINE_CACHE).then(function (c) { return c.put(url, copy); }).then(function () { return res; });
+    });
+  }
+  els["offline-btn"].addEventListener("click", function () {
+    var novel = current.novel;
+    if (!novel) return;
+    if (!("caches" in window)) { alert("This browser can't keep pages for offline reading."); return; }
+    var pe = posOf(novel.id);
+    var from = pe && pe.serial ? pe.serial : 1;
+    var raw = prompt("How many chapters to keep, starting at chapter " + from + "? (a number, or “all”)", "20");
+    if (!raw) return;
+    var want = /^all$/i.test(raw.trim()) ? Infinity : parseInt(raw, 10);
+    if (!want || want < 1) return;
+    var msg = els["offline-msg"], btn = this, kept = 0, ids = [];
+    btn.disabled = true;
+    msg.textContent = "Finding chapters…";
+    keep("/api/novel/" + novel.id).catch(function () {});
+    (function page(offset) {
+      return api("/novel/" + novel.id + "/chapters?limit=100&offset=" + offset).then(function (res) {
+        var items = (res && res.items) || [];
+        keep("/api/novel/" + novel.id + "/chapters?limit=100&offset=" + offset).catch(function () {});
+        items.forEach(function (ch) { if (ch.is_available && ids.length < want) ids.push(ch.id); });
+        if (items.length === 100 && ids.length < want) return page(offset + 100);
+      });
+    })(Math.max(0, from - 1)).then(function () {
+      var i = 0;
+      function next() {
+        if (i >= ids.length) {
+          btn.disabled = false;
+          msg.textContent = "✓ " + kept + " chapter(s) saved on this device.";
+          return;
+        }
+        var id = ids[i++];
+        msg.textContent = "Saving " + i + "/" + ids.length + "…";
+        keep("/api/chapter/" + id + "/read?auto_fetch=false")
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            kept++;
+            var body = (data && (data.content || data.body)) || JSON.stringify(data || {});
+            var imgs = body.match(/images\\/([0-9a-fA-F]+)\\.jpg/g) || [];
+            return Promise.all(imgs.map(function (m) {
+              return keep("/api/chapter/image/" + m.slice(7, -4)).catch(function () {});
+            }));
+          })
+          .catch(function () { /* skip a chapter that fails */ })
+          .then(next);
+      }
+      next();
+    }).catch(function (e) { btn.disabled = false; msg.textContent = "Couldn't save: " + e.message; });
+  });
+
+  // ---- Back up and restore ----
+  els["lib-backup"].addEventListener("click", function () {
+    var byId = {}; (lib.everything || lib.all).forEach(function (n) { byId[n.id] = n; });
+    var shelves = orderedShelves().map(function (sh) {
+      return {
+        name: sh.name,
+        novels: (((lib.membership || {})[sh.id]) || []).map(function (id) {
+          var n = byId[id] || {}; return { id: id, url: n.url || "", title: n.title || "" };
+        })
+      };
+    });
+    var data = { app: "lncrawl-reader", version: 1, saved: new Date().toISOString(), state: statePayload(), shelves: shelves };
+    var blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "reader-backup-" + new Date().toISOString().slice(0, 10) + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+  });
+  els["lib-restore"].addEventListener("click", function () { els["lib-restore-file"].click(); });
+  els["lib-restore-file"].addEventListener("change", function () {
+    var file = this.files && this.files[0];
+    this.value = "";
+    if (!file) return;
+    file.text().then(function (text) {
+      var data = JSON.parse(text);
+      if (!data || data.app !== "lncrawl-reader" || !data.state) throw new Error("not a Reader backup");
+      // added to what is here: newer entries win, nothing here is dropped
+      absorbState(data.state, true);
+      var byUrl = {}, byId = {};
+      (lib.everything || lib.all).forEach(function (n) { byUrl[n.url] = n.id; byId[n.id] = n.id; });
+      var shelves = data.shelves || [];
+      return shelves.reduce(function (chain, sh) {
+        return chain.then(function () {
+          var have = (lib.shelves || []).filter(function (x) { return x.name === sh.name; })[0];
+          var made = have ? Promise.resolve(have) : api("/library", { method: "POST", body: JSON.stringify({ name: sh.name }) });
+          return made.then(function (shelf) {
+            var on = ((lib.membership || {})[shelf.id]) || [];
+            return (sh.novels || []).reduce(function (c2, nv) {
+              var id = byId[nv.id] || byUrl[nv.url];
+              if (!id || on.indexOf(id) >= 0) return c2;
+              return c2.then(function () { return api("/library/" + shelf.id + "/novel/" + id, { method: "PUT" }).catch(function () {}); });
+            }, Promise.resolve());
+          });
+        });
+      }, Promise.resolve()).then(function () { return shelves.length; });
+    }).then(function (n) {
+      pushState();
+      prefs = loadPrefs(); applyPrefs(); renderViews();
+      loadLibrary();
+      alert("Backup restored" + (n ? " (with " + n + " shelf/shelves)" : "") + ".");
+    }).catch(function (e) { alert("Couldn't restore it: " + e.message); });
+  });
+
+  // ---- Reading stats ----
+  // Chapters opened and time spent in the reader, per day, kept per device and
+  // added up across devices.
+  var DEVICE = "lncrawl_reader_device";
+  function deviceId() {
+    var d = localStorage.getItem(DEVICE);
+    if (!d) { d = Math.random().toString(36).slice(2, 10); localStorage.setItem(DEVICE, d); }
+    return d;
+  }
+  function dayKey(t) { var d = new Date(t || Date.now()); return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2); }
+  function addStat(chapters, ms) {
+    var it = loadItems();
+    var key = deviceId() + "|" + dayKey();
+    var e = it.stats[key] || { chapters: 0, ms: 0 };
+    e.chapters += chapters; e.ms += ms; e.ts = Date.now();
+    it.stats[key] = e;
+    localStorage.setItem(ITEMS, JSON.stringify(it));
+    schedulePush();
+  }
+  setInterval(function () {
+    if (document.visibilityState === "visible" && !els["view-reader"].classList.contains("hidden")) addStat(0, 30000);
+  }, 30000);
+  function statsByDay() {
+    var days = {};
+    var st = loadItems().stats;
+    Object.keys(st).forEach(function (k) {
+      var day = k.split("|")[1];
+      var d = days[day] || (days[day] = { chapters: 0, ms: 0 });
+      d.chapters += st[k].chapters || 0; d.ms += st[k].ms || 0;
+    });
+    return days;
+  }
+  function renderStats() {
+    var days = statsByDay();
+    var sum = function (n) {
+      var c = 0, ms = 0;
+      for (var i = 0; i < n; i++) { var d = days[dayKey(Date.now() - i * 864e5)]; if (d) { c += d.chapters; ms += d.ms; } }
+      return { c: c, ms: ms };
+    };
+    var hours = function (ms) { return ms >= 36e5 ? (ms / 36e5).toFixed(1) + " h" : Math.round(ms / 6e4) + " min"; };
+    var all = { c: 0, ms: 0 };
+    Object.keys(days).forEach(function (k) { all.c += days[k].chapters; all.ms += days[k].ms; });
+    var streak = 0;
+    while (days[dayKey(Date.now() - streak * 864e5)] && days[dayKey(Date.now() - streak * 864e5)].chapters) streak++;
+    var w = sum(7), m = sum(30);
+    var body = els["lib-stats-body"];
+    body.innerHTML = "";
+    var line = document.createElement("p");
+    line.textContent = "This week: " + w.c + " chapters · " + hours(w.ms) + "   ·   Last 30 days: " + m.c +
+      " chapters · " + hours(m.ms) + "   ·   All time: " + all.c + " chapters · " + hours(all.ms) +
+      "   ·   Streak: " + streak + " day" + (streak === 1 ? "" : "s");
+    body.appendChild(line);
+    var bars = document.createElement("div"); bars.className = "stat-bars";
+    var labels = document.createElement("div"); labels.className = "stat-days";
+    var counts = [];
+    for (var i = 13; i >= 0; i--) counts.push({ t: Date.now() - i * 864e5, c: (days[dayKey(Date.now() - i * 864e5)] || {}).chapters || 0 });
+    var max = Math.max.apply(null, counts.map(function (x) { return x.c; }).concat([1]));
+    counts.forEach(function (x) {
+      var b = document.createElement("span"); b.style.height = Math.round(100 * x.c / max) + "%";
+      b.title = dayKey(x.t) + ": " + x.c + " chapter(s)"; bars.appendChild(b);
+      var l = document.createElement("span"); l.textContent = new Date(x.t).getDate(); labels.appendChild(l);
+    });
+    body.appendChild(bars); body.appendChild(labels);
+    els["lib-stats-note"].textContent = "· chapters opened per day, last 14 days, all your devices";
+  }
+  els["lib-stats-btn"].addEventListener("click", function () {
+    els["lib-stats"].classList.toggle("hidden");
+    renderStats();
   });
 
   // ---- Novel ----
@@ -1061,6 +2373,9 @@ _READER_HTML = """<!DOCTYPE html>
 
     renderFavBtn(novel);
     renderBookmarks(novel);
+    renderRating(novel);
+    els["shelf-box"].classList.add("hidden");
+    renderShelfBox(novel);
 
     // offer merging only when another copy of the same title is in the library
     var copies = lib.all.filter(function (n) { return normTitle(n.title) === normTitle(novel.title); });
@@ -1088,7 +2403,15 @@ _READER_HTML = """<!DOCTYPE html>
         row.className = "chap" + (ch.is_available ? "" : " unavail");
         var n = document.createElement("span"); n.className = "n"; n.textContent = "#" + ch.serial;
         var t = document.createElement("span"); t.className = "t"; t.textContent = ch.title || ("Chapter " + ch.serial);
-        row.appendChild(n); row.appendChild(t);
+        // read up to where you are: earlier chapters ticked, yours marked
+        var rd = document.createElement("span"); rd.className = "rd";
+        var here = posOf(current.novel.id);
+        if (here && here.serial) {
+          var done = ch.serial < here.serial || (ch.serial === here.serial && (here.scroll || 0) >= 0.9);
+          if (done) { rd.textContent = "✓"; rd.title = "Read"; }
+          if (ch.serial === here.serial) { row.className += " here"; row.title = "You are here"; if (!done) rd.textContent = "▶"; }
+        }
+        row.appendChild(rd); row.appendChild(n); row.appendChild(t);
         if (ch.is_available) row.addEventListener("click", function () { openChapter(ch.id); });
         else { gaps = true; var u = document.createElement("span"); u.className = "muted"; u.textContent = "not downloaded"; row.appendChild(u); }
         els["chap-list"].appendChild(row);
@@ -1225,6 +2548,7 @@ _READER_HTML = """<!DOCTYPE html>
       applyFit();
       current.chapterId = chapterId;
       savePos(novel.id, chapterId, ch.serial);
+      addStat(1, 0);
       // resume mid-chapter where reading stopped (savePos keeps the saved
       // fraction when re-opening the same chapter, resets it on a new one);
       // an explicit scrollTo (from a bookmark) wins
@@ -1571,8 +2895,7 @@ _READER_HTML = """<!DOCTYPE html>
   var searchTimer = null;
   els["search"].addEventListener("input", function () {
     clearTimeout(searchTimer);
-    var q = this.value.trim();
-    searchTimer = setTimeout(function () { loadLibrary(q); }, 300);
+    searchTimer = setTimeout(renderLibrary, 150);
   });
   document.addEventListener("keydown", function (e) {
     if (els["view-reader"].classList.contains("hidden")) return;
@@ -1613,19 +2936,13 @@ _READER_HTML = """<!DOCTYPE html>
     if (toolsLink) toolsLink.href = "/tools" + (token() ? ("?authToken=" + encodeURIComponent(token())) : "");
     applyFont();
     applyPrefs();
-    var v = loadView();
-    if (v.sort) els["lib-sort"].value = v.sort;
-    if (v.kind) els["lib-kind"].value = v.kind;
-    if (v.tag) els["lib-tag"].value = v.tag;
-    if (v.nomtl) els["lib-nomtl"].checked = true;
-    if (v.state) els["lib-state"].value = v.state;
-    if (v.progress) els["lib-progress"].value = v.progress;
-    if (v.favonly || v.cat === "__fav") els["lib-favonly"].checked = true;
-    lib.pending = { source: v.source || "", lang: v.lang || "" };
-    if (v.cat && v.cat !== "__fav") lib.cat = v.cat;
+    applyView(loadView());
+    renderViews();
+    if (localStorage.getItem(FILTERS_OPEN)) els["lib-filters"].classList.remove("hidden");
+    renderFiltersButton();
     if (!token()) { show("auth"); return; }
     api("/auth/me", { method: "GET" })
-      .then(function () { show("view-library"); loadLibrary(""); })
+      .then(function () { show("view-library"); loadLibrary(); syncState(); })
       .catch(function () { localStorage.removeItem(KEY); show("auth"); });
   }
   start();

@@ -27,6 +27,9 @@ class SearchSourceHandler(BatchHandler):
         results = self._get_search_results(query, domain)
         if not results:
             return
+        # a search to pick from (the Reader's) lists results without adding them
+        if self.job.extra.get("results_only"):
+            return
         if not ctx.tier.search_can_fetch_novel_metadata(self.user):
             return
 
