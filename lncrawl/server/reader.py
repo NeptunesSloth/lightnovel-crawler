@@ -85,6 +85,8 @@ _READER_HTML = """<!DOCTYPE html>
   .chip.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
   .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
   .toolbar.filters input[type=text] { flex: 1 1 220px; max-width: 360px; margin: 0; }
+  .chap-range { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+  .chap-range input[type=number] { width: 68px; margin: 0; padding: 6px 8px; }
   .toolbar .check { display: flex; align-items: center; gap: 5px; font-size: 13px; margin: 0; cursor: pointer; }
   select {
     padding: 7px 10px; border-radius: 8px; border: 1px solid #303644;
@@ -303,6 +305,22 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="unknown">Status unknown</option>
       </select>
       <label class="check" title="Show only novels you starred"><input id="lib-favonly" type="checkbox" /> ★ Favorites only</label>
+      <span class="chap-range" title="Only novels with this many chapters">
+        <select id="lib-len" title="Length">
+          <option value="">Any length</option>
+          <option value="0-49">Under 50 chapters</option>
+          <option value="50-199">50–199 chapters</option>
+          <option value="200-499">200–499 chapters</option>
+          <option value="500-999">500–999 chapters</option>
+          <option value="1000-">1000+ chapters</option>
+          <option value="custom">Custom…</option>
+        </select>
+        <span id="lib-len-custom" class="hidden">
+          <input id="lib-len-min" type="number" min="0" placeholder="min" /> –
+          <input id="lib-len-max" type="number" min="0" placeholder="max" /> ch
+        </span>
+      </span>
+      <label class="check" title="Hide Boys' Love novels and comics (BL, Yaoi, Shounen Ai, Danmei)"><input id="lib-nobl" type="checkbox" /> Hide BL</label>
       <label class="check" title="Hide machine-translated (MTL) novels"><input id="lib-nomtl" type="checkbox" /> Hide MTL</label>
       <button id="lib-clear" class="hidden" title="Clear every filter">✕ Clear filters</button>
     </div>
@@ -433,12 +451,13 @@ _READER_HTML = """<!DOCTYPE html>
       sort: els["lib-sort"].value, kind: els["lib-kind"].value, cat: lib.cat,
       tag: els["lib-tag"].value, source: els["lib-source"].value,
       lang: els["lib-lang"].value, state: els["lib-state"].value, progress: els["lib-progress"].value,
-      favonly: els["lib-favonly"].checked, nomtl: els["lib-nomtl"].checked
+      favonly: els["lib-favonly"].checked,
+      nobl: els["lib-nobl"].checked, len: els["lib-len"].value, lenMin: els["lib-len-min"].value, lenMax: els["lib-len-max"].value, nomtl: els["lib-nomtl"].checked
     }));
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -654,9 +673,31 @@ _READER_HTML = """<!DOCTYPE html>
     return i < 0 ? order.length : i;
   }
 
+  // Boys' Love goes by several names across sources. Tags are compared whole,
+  // letters only, so "BL" matches but "Blood" or "Black Clover" do not.
+  var BL_TAGS = ["bl", "boyslove", "boylove", "yaoi", "shounenai", "shonenai", "danmei", "bara"];
+  function isBL(n) {
+    return (n.tags || []).some(function (t) {
+      return BL_TAGS.indexOf(String(t).toLowerCase().replace(/[^a-z]/g, "")) >= 0;
+    });
+  }
+
+  // [min, max] chapters from the Length filter, or null when it is off
+  function chapterRange() {
+    var v = els["lib-len"].value;
+    if (!v) return null;
+    var lo = "", hi = "";
+    if (v === "custom") { lo = els["lib-len-min"].value; hi = els["lib-len-max"].value; }
+    else { var parts = v.split("-"); lo = parts[0]; hi = parts[1]; }
+    var min = lo === "" ? 0 : Math.max(0, parseInt(lo, 10) || 0);
+    var max = hi === "" ? Infinity : Math.max(0, parseInt(hi, 10) || 0);
+    if (!min && max === Infinity) return null;
+    return [min, max];
+  }
+
   function filtersActive() {
     return !!(els["lib-kind"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
-      els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked ||
+      els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked || !!chapterRange() || els["lib-nobl"].checked ||
       els["lib-lang"].value || els["lib-nomtl"].checked || lib.cat);
   }
 
@@ -705,6 +746,14 @@ _READER_HTML = """<!DOCTYPE html>
     if (progress) items = items.filter(function (n) { return progressOf(n) === progress; });
     var state = els["lib-state"].value;
     if (state) items = items.filter(function (n) { return (statusOf(n) || "unknown") === state; });
+    var range = chapterRange();
+    if (range) {
+      items = items.filter(function (n) {
+        var c = n.chapter_count || 0;
+        return c >= range[0] && c <= range[1];
+      });
+    }
+    if (els["lib-nobl"].checked) items = items.filter(function (n) { return !isBL(n); });
     if (els["lib-nomtl"].checked) items = items.filter(function (n) { return !n.mtl; });
     els["lib-clear"].classList.toggle("hidden", !filtersActive());
 
@@ -743,6 +792,7 @@ _READER_HTML = """<!DOCTYPE html>
       (terms.length ? " · tags: " + terms.join(", ") : "") +
       (state ? " · " + els["lib-state"].selectedOptions[0].textContent : "") +
       (progress ? " · " + els["lib-progress"].selectedOptions[0].textContent : "") +
+      (range ? " · " + (range[1] === Infinity ? range[0] + "+" : range[0] + "–" + range[1]) + " chapters" : "") +
       (els["lib-favonly"].checked ? " · ★ Favorites" : "") +
       (lib.cat ? " · " + lib.cat : "");
     items.forEach(function (n) {
@@ -887,6 +937,14 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-status"].scrollIntoView({ behavior: "smooth", block: "start" });
   });
   els["lib-favonly"].addEventListener("change", renderLibrary);
+  els["lib-nobl"].addEventListener("change", renderLibrary);
+  els["lib-len"].addEventListener("change", function () {
+    els["lib-len-custom"].classList.toggle("hidden", this.value !== "custom");
+    renderLibrary();
+  });
+  ["lib-len-min", "lib-len-max"].forEach(function (k) {
+    els[k].addEventListener("input", function () { clearTimeout(tagTimer); tagTimer = setTimeout(renderLibrary, 200); });
+  });
   els["lib-nomtl"].addEventListener("change", renderLibrary);
   var tagTimer = null;
   els["lib-tag"].addEventListener("input", function () {
@@ -895,7 +953,9 @@ _READER_HTML = """<!DOCTYPE html>
   });
   els["lib-clear"].addEventListener("click", function () {
     els["lib-kind"].value = ""; els["lib-tag"].value = ""; els["lib-source"].value = "";
-    els["lib-lang"].value = ""; els["lib-state"].value = ""; els["lib-progress"].value = ""; els["lib-favonly"].checked = false; els["lib-nomtl"].checked = false; lib.cat = "";
+    els["lib-lang"].value = ""; els["lib-state"].value = ""; els["lib-progress"].value = ""; els["lib-favonly"].checked = false;
+    els["lib-len"].value = ""; els["lib-len-min"].value = ""; els["lib-len-max"].value = "";
+    els["lib-len-custom"].classList.add("hidden"); els["lib-nobl"].checked = false; els["lib-nomtl"].checked = false; lib.cat = "";
     renderCategories(); renderLibrary();
   });
 
@@ -1645,6 +1705,11 @@ _READER_HTML = """<!DOCTYPE html>
     if (v.state) els["lib-state"].value = v.state;
     if (v.progress) els["lib-progress"].value = v.progress;
     if (v.favonly || v.cat === "__fav") els["lib-favonly"].checked = true;
+    if (v.nobl) els["lib-nobl"].checked = true;
+    if (v.len) els["lib-len"].value = v.len;
+    if (v.lenMin) els["lib-len-min"].value = v.lenMin;
+    if (v.lenMax) els["lib-len-max"].value = v.lenMax;
+    els["lib-len-custom"].classList.toggle("hidden", els["lib-len"].value !== "custom");
     lib.pending = { source: v.source || "", lang: v.lang || "" };
     if (v.cat && v.cat !== "__fav") lib.cat = v.cat;
     if (!token()) { show("auth"); return; }
