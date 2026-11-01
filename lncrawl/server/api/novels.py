@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Path, Query, Security
 from fastapi.responses import FileResponse
+import sqlmodel as sq
 
 from ...context import ctx
 from ...dao import ActivityType, Artifact, Chapter, Job, LanguageCode, Novel, User, Volume
@@ -65,6 +66,26 @@ def list_novels(
 )
 def list_sources() -> Dict[str, int]:
     return ctx.novels.list_domains()
+
+
+@router.get(
+    "s/latest-chapters",
+    summary="When each novel last gained a chapter, as {novel_id: timestamp}",
+)
+def latest_chapters() -> Dict[str, int]:
+    """The newest chapter's creation time per novel, in one grouped query.
+
+    A chapter row is created when an update first finds it, so this is when the
+    novel last got something new to read; the novel's own ``updated_at`` moves
+    on every refresh, new chapters or not.
+    """
+    with ctx.db.session() as sess:
+        rows = sess.exec(
+            sq.select(Chapter.novel_id, sq.func.max(Chapter.created_at)).group_by(
+                sq.col(Chapter.novel_id)
+            )
+        ).all()
+    return {novel_id: int(ts or 0) for novel_id, ts in rows}
 
 
 @router.get("s/storage", summary="Disk usage of the downloaded library and exports")

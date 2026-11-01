@@ -1,12 +1,15 @@
+import json
 import socket
-from typing import Dict
+from typing import Any, Dict
 
 from fastapi import APIRouter, Body, Request, Security
 from fastapi.responses import Response
 
 from ...context import ctx
 from ...dao import NotificationItem, User
+from ...exceptions import ServerErrors
 from ...server.models import PutNotificationRequest, UpdateRequest
+from ...services import reader_state
 from ..security import ensure_user
 
 # The root router
@@ -63,3 +66,33 @@ def put_notification_settings(
     )
     ctx.users.update(user.id, request)
     return True
+
+
+@router.get("/reader-state", summary="The Reader's saved state for this user, across devices")
+def get_reader_state(user: User = Security(ensure_user)) -> Dict[str, Any]:
+    with ctx.db.session() as sess:
+        current = sess.get(User, user.id)
+        return dict((current.extra or {}).get("reader_state") or {}) if current else {}
+
+
+@router.put(
+    "/reader-state",
+    summary="Merge this device's Reader state into the saved one and return the result",
+)
+def put_reader_state(
+    user: User = Security(ensure_user),
+    body: Dict[str, Any] = Body(default={}),
+) -> Dict[str, Any]:
+    if len(json.dumps(body)) > reader_state.MAX_STATE_BYTES:
+        raise ServerErrors.invalid_input.with_extra("Reader state is too large")
+    with ctx.db.session() as sess:
+        current = sess.get(User, user.id)
+        if not current:
+            raise ServerErrors.unauthorized
+        extra = dict(current.extra or {})
+        merged = reader_state.merge(extra.get("reader_state") or {}, body)
+        extra["reader_state"] = merged
+        current.extra = extra
+        sess.add(current)
+        sess.commit()
+        return merged

@@ -109,6 +109,10 @@ class MangaDexCrawler(LegacyCrawler):
             tags.append(rating.title())
         self.novel_tags = list(dict.fromkeys(t for t in tags if t))
         self.novel_status = attrs.get("status") or None
+        # every other name it goes by (romanized, original script, translations),
+        # so a search by any of them finds it
+        alt_titles = [v for alt in attrs.get("altTitles") or [] for v in alt.values() if v]
+        self.novel_alt_titles = [t for t in dict.fromkeys(alt_titles) if t != self.novel_title]
 
         # Fetch the chapter list (paginated), keeping one entry per chapter number
         seen = set()

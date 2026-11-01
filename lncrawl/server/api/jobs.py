@@ -338,9 +338,11 @@ def search_sources(
     body: SearchSourceRequest = Body(),
 ) -> Job:
     if body.domain:
-        return ctx.jobs.search_single_source(user, body.query, body.domain)
+        return ctx.jobs.search_single_source(
+            user, body.query, body.domain, results_only=body.results_only
+        )
     else:
-        return ctx.jobs.search_all_sources(user, body.query)
+        return ctx.jobs.search_all_sources(user, body.query, results_only=body.results_only)
 
 
 @router.post(

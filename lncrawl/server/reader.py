@@ -104,6 +104,12 @@ _READER_HTML = """<!DOCTYPE html>
     width: 104px; height: 148px; object-fit: cover; border-radius: 6px; display: block;
     background: #0b0d11; border: 1px solid #262b36;
   }
+  #lib-web-btn { margin: 0 0 10px; }
+  .web-row { display: flex; align-items: center; gap: 8px; padding: 7px 4px; border-bottom: 1px solid #20242d; font-size: 13px; }
+  .web-row .t { flex: 1; min-width: 0; }
+  .web-row .t b { color: #e6e6e6; }
+  .web-row .t .muted { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .web-row button { padding: 4px 10px; font-size: 12px; margin: 0; }
   .shelf-title .see-all { float: right; font-size: 12px; color: #7aa2ff; cursor: pointer; }
   .shelf .mini .mm { font-size: 11px; color: #8b93a1; margin-top: 2px; }
   .shelf .mini .mt {
@@ -221,7 +227,7 @@ _READER_HTML = """<!DOCTYPE html>
   <h1>📖 LNCrawl Reader</h1>
   <a class="back hidden" id="nav-back">&larr; Back</a>
   <div class="spacer"></div>
-  <div id="search-wrap" style="flex:1;max-width:380px"><input id="search" type="text" placeholder="Search your library…" /></div>
+  <div id="search-wrap" style="flex:1;max-width:380px"><input id="search" type="text" placeholder="Search title, author, description, tags…" /></div>
   <a class="back" href="/tools" target="_blank" id="tools-link">Tools</a>
   <button id="fit-btn" class="hidden" title="Image fit mode">Fit: width</button>
   <button id="aa-btn" class="hidden" title="Reading settings">Aa</button>
@@ -267,6 +273,7 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="chapters-asc">Fewest chapters</option>
         <option value="author">Author A–Z</option>
         <option value="source">Source A–Z</option>
+        <option value="newch">New chapters first</option>
         <option value="status">Status: ongoing first</option>
         <option value="status-done">Status: completed first</option>
       </select>
@@ -279,6 +286,7 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="manhua">Manhua (Chinese)</option>
       </select>
       <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
+      <button id="lib-fill" class="hidden" title="Re-read the details (status, genres, description) of novels that are missing them">✚ Fill in details</button>
       <button id="lib-bmks-btn" title="Every bookmark, across all novels">🔖 Bookmarks</button>
       <button id="lib-select" title="Select novels to delete">☑ Select</button>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
@@ -320,15 +328,25 @@ _READER_HTML = """<!DOCTYPE html>
           <input id="lib-len-max" type="number" min="0" placeholder="max" /> ch
         </span>
       </span>
+      <label class="check" title="Show only titles that appear more than once (the same story from different sources); open one and press Merge to combine them"><input id="lib-dupes" type="checkbox" /> Possible duplicates</label>
       <label class="check" title="Hide Boys' Love novels and comics (BL, Yaoi, Shounen Ai, Danmei)"><input id="lib-nobl" type="checkbox" /> Hide BL</label>
       <label class="check" title="Hide machine-translated (MTL) novels"><input id="lib-nomtl" type="checkbox" /> Hide MTL</label>
       <button id="lib-clear" class="hidden" title="Clear every filter">✕ Clear filters</button>
+      <select id="lib-views" title="Apply a saved view"><option value="">Saved views</option></select>
+      <button id="lib-view-save" title="Save the current sort and filters under a name">💾 Save view</button>
+      <button id="lib-view-del" class="hidden" title="Delete the selected saved view">✕</button>
     </div>
     <div id="lib-bmks" class="card hidden">
       <div class="shelf-title">🔖 Bookmarks <span class="muted" id="lib-bmks-count"></span></div>
       <div id="lib-bmks-list"></div>
     </div>
     <p class="muted" id="lib-status">Loading your library…</p>
+    <button id="lib-web-btn" class="hidden" title="Look for this on the sources the app can download from"></button>
+    <div id="lib-web" class="card hidden">
+      <div class="shelf-title">🔎 From the sources <span class="muted" id="lib-web-status"></span>
+        <a id="lib-web-stop" class="see-all">Stop</a></div>
+      <div id="lib-web-list"></div>
+    </div>
     <div id="lib-list"></div>
   </div>
 
@@ -429,6 +447,7 @@ _READER_HTML = """<!DOCTYPE html>
     var scroll = (prev && typeof prev === "object" && prev.id === chapterId) ? (prev.scroll || 0) : 0;
     p[novelId] = { id: chapterId, serial: (serial != null ? serial : null), ts: Date.now(), scroll: scroll };
     localStorage.setItem(POS, JSON.stringify(p));
+    schedulePush();
   }
   function saveScroll(novelId, chapterId, frac) {
     var p = loadPos();
@@ -436,28 +455,159 @@ _READER_HTML = """<!DOCTYPE html>
     if (!e || typeof e === "string" || e.id !== chapterId) return;
     e.scroll = frac; e.ts = Date.now();
     localStorage.setItem(POS, JSON.stringify(p));
+    schedulePush();
   }
   function loadUpdates() { try { return JSON.parse(localStorage.getItem(UPD) || "{}"); } catch (e) { return {}; } }
   function saveUpdates(m) { localStorage.setItem(UPD, JSON.stringify(m)); }
   function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS) || "{}"); } catch (e) { return {}; } }
   function savePrefs(p) { localStorage.setItem(PREFS, JSON.stringify(p)); }
   function loadFavs() { try { return JSON.parse(localStorage.getItem(FAV) || "[]"); } catch (e) { return []; } }
-  function saveFavs(a) { localStorage.setItem(FAV, JSON.stringify(a)); }
+  function saveFavs(a) { localStorage.setItem(FAV, JSON.stringify(a)); touchSync("favs"); }
   function loadBmks() { try { return JSON.parse(localStorage.getItem(BMK) || "{}"); } catch (e) { return {}; } }
-  function saveBmks(m) { localStorage.setItem(BMK, JSON.stringify(m)); }
+  function saveBmks(m) { localStorage.setItem(BMK, JSON.stringify(m)); touchSync("bookmarks"); }
   function loadView() { try { return JSON.parse(localStorage.getItem(VIEW) || "{}"); } catch (e) { return {}; } }
-  function saveView() {
-    localStorage.setItem(VIEW, JSON.stringify({
+  // The sort and every filter, as one object: what is remembered between
+  // visits, and what a saved view holds.
+  function currentView() {
+    return {
       sort: els["lib-sort"].value, kind: els["lib-kind"].value, cat: lib.cat,
       tag: els["lib-tag"].value, source: els["lib-source"].value,
       lang: els["lib-lang"].value, state: els["lib-state"].value, progress: els["lib-progress"].value,
-      favonly: els["lib-favonly"].checked,
-      nobl: els["lib-nobl"].checked, len: els["lib-len"].value, lenMin: els["lib-len-min"].value, lenMax: els["lib-len-max"].value, nomtl: els["lib-nomtl"].checked
-    }));
+      favonly: els["lib-favonly"].checked, dupes: els["lib-dupes"].checked,
+      nobl: els["lib-nobl"].checked, len: els["lib-len"].value, lenMin: els["lib-len-min"].value,
+      lenMax: els["lib-len-max"].value, nomtl: els["lib-nomtl"].checked
+    };
+  }
+  function applyView(v) {
+    v = v || {};
+    els["lib-sort"].value = v.sort || "recent";
+    els["lib-kind"].value = v.kind || "";
+    els["lib-tag"].value = v.tag || "";
+    els["lib-state"].value = v.state || "";
+    els["lib-progress"].value = v.progress || "";
+    els["lib-favonly"].checked = !!(v.favonly || v.cat === "__fav");
+    els["lib-dupes"].checked = !!v.dupes;
+    els["lib-nobl"].checked = !!v.nobl;
+    els["lib-nomtl"].checked = !!v.nomtl;
+    els["lib-len"].value = v.len || "";
+    els["lib-len-min"].value = v.lenMin || "";
+    els["lib-len-max"].value = v.lenMax || "";
+    els["lib-len-custom"].classList.toggle("hidden", els["lib-len"].value !== "custom");
+    lib.cat = (v.cat && v.cat !== "__fav") ? v.cat : "";
+    // source and language options exist only once the library has loaded
+    lib.pending = { source: v.source || "", lang: v.lang || "" };
+    if (lib.all.length) renderFilterOptions();
+  }
+  function saveView() { localStorage.setItem(VIEW, JSON.stringify(currentView())); }
+
+  // ---- Saved views ----
+  var VIEWS = "lncrawl_reader_views";  // { name: view }
+  function loadViews() { try { return JSON.parse(localStorage.getItem(VIEWS) || "{}"); } catch (e) { return {}; } }
+  function saveViews(m) { localStorage.setItem(VIEWS, JSON.stringify(m)); touchSync("views"); }
+
+  // ---- Sync with the server ----
+  // Positions, favorites, bookmarks and saved views live in this browser and are
+  // copied to the account, so every device reading from this server shares them.
+  // Positions merge novel by novel; the other sections go to whichever device
+  // changed them last, which is what the timestamps below record.
+  var SYNC_TS = "lncrawl_reader_sync_ts";  // { favs, bookmarks, views: last change ts }
+  var SECTIONS = {
+    favs: { load: function () { return loadFavs(); }, key: function () { return FAV; } },
+    bookmarks: { load: function () { return loadBmks(); }, key: function () { return BMK; } },
+    views: { load: function () { return loadViews(); }, key: function () { return VIEWS; } }
+  };
+  function loadSyncTs() { try { return JSON.parse(localStorage.getItem(SYNC_TS) || "{}"); } catch (e) { return {}; } }
+  function touchSync(section) {
+    var t = loadSyncTs(); t[section] = Date.now();
+    localStorage.setItem(SYNC_TS, JSON.stringify(t));
+    schedulePush();
+  }
+  var pushTimer = null;
+  function schedulePush() {
+    if (!token()) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(pushState, 2500);
+  }
+  function statePayload() {
+    var t = loadSyncTs();
+    var out = { pos: {} };
+    var p = loadPos();
+    Object.keys(p).forEach(function (id) { if (p[id] && typeof p[id] === "object") out.pos[id] = p[id]; });
+    Object.keys(SECTIONS).forEach(function (name) {
+      out[name] = { data: SECTIONS[name].load(), ts: t[name] || 0 };
+    });
+    return out;
+  }
+  function isEmpty(v) { return !v || (Array.isArray(v) ? !v.length : !Object.keys(v).length); }
+  function union(name, a, b) {
+    if (name === "favs") return a.concat(b.filter(function (x) { return a.indexOf(x) < 0; }));
+    var out = JSON.parse(JSON.stringify(b || {}));
+    Object.keys(a || {}).forEach(function (k) {
+      if (name === "bookmarks") {
+        var have = out[k] || [];
+        (a[k] || []).forEach(function (bm) {
+          if (!have.some(function (x) { return x.id === bm.id && x.ts === bm.ts; })) have.push(bm);
+        });
+        out[k] = have;
+      } else {
+        out[k] = a[k];
+      }
+    });
+    return out;
+  }
+  // Take in the server's copy. Returns true when this device has something the
+  // server lacks, so it should send its copy back.
+  function absorbState(server, first) {
+    if (!server || typeof server !== "object") return false;
+    var dirty = false;
+    var p = loadPos();
+    Object.keys(server.pos || {}).forEach(function (id) {
+      var mine = p[id] && typeof p[id] === "object" ? p[id] : null;
+      var theirs = server.pos[id];
+      if (!mine || (theirs.ts || 0) > (mine.ts || 0)) p[id] = theirs;
+    });
+    Object.keys(p).forEach(function (id) {
+      var theirs = (server.pos || {})[id];
+      if (p[id] && typeof p[id] === "object" && (!theirs || (p[id].ts || 0) > (theirs.ts || 0))) dirty = true;
+    });
+    localStorage.setItem(POS, JSON.stringify(p));
+    var t = loadSyncTs();
+    Object.keys(SECTIONS).forEach(function (name) {
+      var theirs = server[name];
+      var mine = SECTIONS[name].load();
+      var mineTs = t[name] || 0;
+      if (!theirs || !("data" in theirs)) { if (!isEmpty(mine)) dirty = true; return; }
+      if (first && !mineTs && !isEmpty(mine)) {
+        // kept on this device before syncing existed: add it, lose nothing
+        localStorage.setItem(SECTIONS[name].key(), JSON.stringify(union(name, mine, theirs.data)));
+        t[name] = Date.now(); dirty = true;
+      } else if ((theirs.ts || 0) > mineTs) {
+        localStorage.setItem(SECTIONS[name].key(), JSON.stringify(theirs.data));
+        t[name] = theirs.ts;
+      } else if (mineTs > (theirs.ts || 0)) {
+        dirty = true;
+      }
+    });
+    localStorage.setItem(SYNC_TS, JSON.stringify(t));
+    return dirty;
+  }
+  function pushState() {
+    api("/settings/reader-state", { method: "PUT", body: JSON.stringify(statePayload()) })
+      .then(function (merged) { absorbState(merged, false); })
+      .catch(function () { /* offline: kept here and sent next time */ });
+  }
+  function syncState() {
+    return api("/settings/reader-state", { method: "GET" })
+      .then(function (server) {
+        if (absorbState(server, true)) pushState();
+        renderViews();
+        if (lib.all.length) { renderContinue(); renderLibrary(); }
+      })
+      .catch(function () { /* offline: this device's copy stays in use */ });
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -515,13 +665,17 @@ _READER_HTML = """<!DOCTYPE html>
     return page(0);
   }
 
-  function loadLibrary(q) {
+  // The whole library is loaded once and searched here, so a search can look at
+  // every field, forgive punctuation, and still leave the shelf and filters whole.
+  function loadLibrary() {
     els["lib-status"].textContent = "Loading your library…";
     els["lib-list"].innerHTML = "";
-    fetchAllNovels(q).then(function (items) {
+    api("/novels/latest-chapters").then(function (m) { lib.latest = m || {}; if (lib.all.length) renderLibrary(); })
+      .catch(function () { lib.latest = {}; });
+    fetchAllNovels("").then(function (items) {
       lib.all = items;
-      // the shelf shows everything being read, not just what a search matched
-      if (!q) lib.everything = items;
+      lib.everything = items;
+      lib.hay = {};
       renderContinue();
       renderFilterOptions();
       renderCategories();
@@ -673,6 +827,42 @@ _READER_HTML = """<!DOCTYPE html>
     return i < 0 ? order.length : i;
   }
 
+  // Letters and digits only, lower case, accents dropped: "Solo Leveling:
+  // Ragnarok" and "solo leveling ragnarok" read the same.
+  function norm(s) {
+    return String(s || "").normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase()
+      .replace(/[^\\p{L}\\p{N}]+/gu, " ").trim();
+  }
+  function altTitles(n) { return (n.extra && n.extra.alt_titles) || []; }
+  // What a search looks through, per novel, worked out once per load.
+  function haystack(n) {
+    lib.hay = lib.hay || {};
+    var h = lib.hay[n.id];
+    if (!h) {
+      h = lib.hay[n.id] = {
+        title: norm([n.title].concat(altTitles(n)).join(" | ")),
+        author: norm(n.authors),
+        rest: norm([n.synopsis, (n.tags || []).join(" "), n.domain].join(" "))
+      };
+    }
+    return h;
+  }
+  // 0 = title, 1 = author, 2 = description, tags or source, -1 = no match.
+  // Every word must appear somewhere; "sololeveling" also finds "Solo Leveling".
+  function searchRank(n, words, joined) {
+    var h = haystack(n);
+    var all = h.title + " " + h.author + " " + h.rest;
+    var hit = words.every(function (w) { return all.indexOf(w) >= 0; }) ||
+      all.replace(/ /g, "").indexOf(joined) >= 0;
+    if (!hit) return -1;
+    if (words.every(function (w) { return h.title.indexOf(w) >= 0; }) ||
+        h.title.replace(/ /g, "").indexOf(joined) >= 0) return 0;
+    if (words.every(function (w) { return h.author.indexOf(w) >= 0; })) return 1;
+    return 2;
+  }
+  // The same story under the same title from different sources.
+  function dupKey(n) { return norm(n.title).replace(/^the /, "").replace(/ /g, ""); }
+
   // Boys' Love goes by several names across sources. Tags are compared whole,
   // letters only, so "BL" matches but "Blood" or "Black Clover" do not.
   var BL_TAGS = ["bl", "boyslove", "boylove", "yaoi", "shounenai", "shonenai", "danmei", "bara"];
@@ -697,7 +887,7 @@ _READER_HTML = """<!DOCTYPE html>
 
   function filtersActive() {
     return !!(els["lib-kind"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
-      els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked || !!chapterRange() || els["lib-nobl"].checked ||
+      els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked || !!chapterRange() || els["lib-nobl"].checked || els["lib-dupes"].checked ||
       els["lib-lang"].value || els["lib-nomtl"].checked || lib.cat);
   }
 
@@ -724,7 +914,26 @@ _READER_HTML = """<!DOCTYPE html>
   function renderLibrary() {
     saveView();
     renderAllBookmarks();  // keeps the Bookmarks count current after reading
+    updateWebButton();
+    updateFillButton();
     var items = lib.all.slice();
+    var q = els["search"].value;
+    var words = norm(q).split(" ").filter(Boolean);
+    var joined = words.join("");
+    var rank = {};
+    if (words.length) {
+      items = items.filter(function (n) {
+        var r = searchRank(n, words, joined);
+        rank[n.id] = r;
+        return r >= 0;
+      });
+    }
+    var dupes = els["lib-dupes"].checked;
+    if (dupes) {
+      var count = {};
+      (lib.everything || lib.all).forEach(function (n) { var k = dupKey(n); count[k] = (count[k] || 0) + 1; });
+      items = items.filter(function (n) { return count[dupKey(n)] > 1; });
+    }
     if (els["lib-favonly"].checked) {
       var favs = loadFavs();
       items = items.filter(function (n) { return favs.indexOf(n.id) >= 0; });
@@ -766,6 +975,12 @@ _READER_HTML = """<!DOCTYPE html>
     };
     var readAt = function (n) { var p = posOf(n.id); return (p && p.ts) || 0; };
     items.sort(function (a, b) {
+      // a search puts title matches first; possible duplicates sit together
+      if (words.length && rank[a.id] !== rank[b.id]) return rank[a.id] - rank[b.id];
+      if (dupes) {
+        var ka = dupKey(a), kb = dupKey(b);
+        if (ka !== kb) return ka < kb ? -1 : 1;
+      }
       var d = 0;
       if (sort === "title") d = byText(a, b, "title");
       else if (sort === "title-desc") d = -byText(a, b, "title");
@@ -776,6 +991,7 @@ _READER_HTML = """<!DOCTYPE html>
       else if (sort === "read") d = readAt(b) - readAt(a);
       else if (sort === "author") d = byText(a, b, "authors");
       else if (sort === "source") d = byText(a, b, "domain");
+      else if (sort === "newch") d = ((lib.latest || {})[b.id] || 0) - ((lib.latest || {})[a.id] || 0);
       else if (sort === "status") d = statusRank(a, ONGOING_FIRST) - statusRank(b, ONGOING_FIRST);
       else if (sort === "status-done") d = statusRank(a, COMPLETED_FIRST) - statusRank(b, COMPLETED_FIRST);
       else d = (b.created_at || 0) - (a.created_at || 0);  // recent
@@ -784,10 +1000,14 @@ _READER_HTML = """<!DOCTYPE html>
 
     els["lib-list"].innerHTML = "";
     if (!items.length) {
-      els["lib-status"].textContent = lib.all.length ? "No matches." : "Your library is empty — download something first (Tools).";
+      els["lib-status"].textContent = lib.all.length
+        ? (words.length ? "Nothing in your library matches “" + q.trim() + "”." : "No matches.")
+        : "Your library is empty — download something first (Tools).";
       return;
     }
     els["lib-status"].textContent = items.length + " novel(s)" +
+      (words.length ? " matching “" + q.trim() + "”" : "") +
+      (dupes ? " · possible duplicates — open one and press Merge to combine them" : "") +
       (kind ? " · " + els["lib-kind"].selectedOptions[0].textContent : "") +
       (terms.length ? " · tags: " + terms.join(", ") : "") +
       (state ? " · " + els["lib-state"].selectedOptions[0].textContent : "") +
@@ -826,7 +1046,9 @@ _READER_HTML = """<!DOCTYPE html>
         nb.textContent = "+" + upd.found + " new"; h.appendChild(nb);
       }
       var m = document.createElement("div"); m.className = "meta";
-      m.textContent = [n.authors || "", (n.chapter_count || 0) + " chapters", n.domain || ""]
+      var newest = (lib.latest || {})[n.id];
+      m.textContent = [n.authors || "", (n.chapter_count || 0) + " chapters", n.domain || "",
+        newest ? "new chapter " + timeAgo(newest) : ""]
         .filter(Boolean).join("  ·  ");
       h.insertBefore(star, h.firstChild);
       body.appendChild(h); body.appendChild(m);
@@ -937,6 +1159,7 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-status"].scrollIntoView({ behavior: "smooth", block: "start" });
   });
   els["lib-favonly"].addEventListener("change", renderLibrary);
+  els["lib-dupes"].addEventListener("change", renderLibrary);
   els["lib-nobl"].addEventListener("change", renderLibrary);
   els["lib-len"].addEventListener("change", function () {
     els["lib-len-custom"].classList.toggle("hidden", this.value !== "custom");
@@ -955,7 +1178,7 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-kind"].value = ""; els["lib-tag"].value = ""; els["lib-source"].value = "";
     els["lib-lang"].value = ""; els["lib-state"].value = ""; els["lib-progress"].value = ""; els["lib-favonly"].checked = false;
     els["lib-len"].value = ""; els["lib-len-min"].value = ""; els["lib-len-max"].value = "";
-    els["lib-len-custom"].classList.add("hidden"); els["lib-nobl"].checked = false; els["lib-nomtl"].checked = false; lib.cat = "";
+    els["lib-len-custom"].classList.add("hidden"); els["lib-nobl"].checked = false; els["lib-dupes"].checked = false; els["lib-nomtl"].checked = false; lib.cat = "";
     renderCategories(); renderLibrary();
   });
 
@@ -963,27 +1186,31 @@ _READER_HTML = """<!DOCTYPE html>
   // (sequential on purpose — polite to the sources), and badge the ones that
   // gained chapters. Click again to stop mid-run.
   var checking = false;
-  els["lib-update"].addEventListener("click", function () {
-    var btn = this;
+  // Re-read each novel's details from its source, one at a time. Used by
+  // "Check updates" (every novel) and "Fill in details" (those missing some).
+  function refreshNovels(items, btn, idleText, doneText) {
     if (checking) { checking = false; return; }
-    if (!lib.all.length) return;
+    if (!items.length) return;
     checking = true;
-    btn.textContent = "■ Stop checking";
-    var items = lib.all.slice();
+    var other = btn === els["lib-update"] ? els["lib-fill"] : els["lib-update"];
+    other.disabled = true;
+    btn.textContent = "■ Stop";
     var updates = loadUpdates();
     var i = 0, found = 0;
     function finish() {
       checking = false;
-      btn.textContent = "⟳ Check updates";
+      other.disabled = false;
+      btn.textContent = idleText;
+      lib.hay = {};
+      renderFilterOptions();
+      renderCategories();
       renderLibrary();
-      els["lib-status"].textContent = found
-        ? ("Update check done — " + found + " novel(s) have new chapters.")
-        : "Update check done — no new chapters found.";
+      els["lib-status"].textContent = doneText(i, found);
     }
     function next() {
       if (!checking || i >= items.length) { finish(); return; }
       var n = items[i++];
-      els["lib-status"].textContent = "Checking " + i + "/" + items.length + ": " + (n.title || "");
+      els["lib-status"].textContent = "Refreshing " + i + "/" + items.length + ": " + (n.title || "");
       api("/novel/" + n.id + "/refresh", { method: "POST" }).then(function (r) {
         if (r && (r.chapter_count || 0) > (n.chapter_count || 0)) {
           found++;
@@ -998,7 +1225,176 @@ _READER_HTML = """<!DOCTYPE html>
       }).catch(function () { /* skip novels that fail to refresh */ }).then(next);
     }
     next();
+  }
+  els["lib-update"].addEventListener("click", function () {
+    refreshNovels(lib.all.slice(), this, "⟳ Check updates", function (done, found) {
+      return found ? "Update check done — " + found + " novel(s) have new chapters."
+        : "Update check done — no new chapters found.";
+    });
   });
+
+  // Novels the filters can't place: no status, no genres or no description,
+  // usually because they were added before those were recorded.
+  function missingDetails(n) { return !statusOf(n) || !(n.tags && n.tags.length) || !n.synopsis; }
+  function updateFillButton() {
+    if (checking) return;
+    var n = lib.all.filter(missingDetails).length;
+    els["lib-fill"].classList.toggle("hidden", !n);
+    els["lib-fill"].textContent = "✚ Fill in details (" + n + ")";
+  }
+  els["lib-fill"].addEventListener("click", function () {
+    var items = lib.all.filter(missingDetails);
+    refreshNovels(items, this, "✚ Fill in details", function (done) {
+      var left = lib.all.filter(missingDetails).length;
+      return "Re-read the details of " + done + " novel(s)." +
+        (left ? " " + left + " still lack some — their sources don't provide them." : "");
+    });
+  });
+
+  // ---- Saved views ----
+  function renderViews(selected) {
+    var views = loadViews();
+    var sel = els["lib-views"];
+    sel.innerHTML = "";
+    var head = document.createElement("option"); head.value = "";
+    head.textContent = Object.keys(views).length ? "Saved views" : "No saved views";
+    sel.appendChild(head);
+    Object.keys(views).sort().forEach(function (name) {
+      var o = document.createElement("option"); o.value = name; o.textContent = name; sel.appendChild(o);
+    });
+    sel.value = selected && views[selected] ? selected : "";
+    els["lib-view-del"].classList.toggle("hidden", !sel.value);
+  }
+  els["lib-views"].addEventListener("change", function () {
+    var views = loadViews();
+    if (this.value && views[this.value]) {
+      applyView(views[this.value]);
+      renderCategories();
+      renderLibrary();
+    }
+    els["lib-view-del"].classList.toggle("hidden", !this.value);
+  });
+  els["lib-view-save"].addEventListener("click", function () {
+    var name = (prompt("Name this view (for example “Completed manhwa”):", els["lib-views"].value || "") || "").trim();
+    if (!name) return;
+    var views = loadViews();
+    views[name] = currentView();
+    saveViews(views);
+    renderViews(name);
+  });
+  els["lib-view-del"].addEventListener("click", function () {
+    var name = els["lib-views"].value;
+    if (!name || !confirm("Delete the saved view “" + name + "”?")) return;
+    var views = loadViews();
+    delete views[name];
+    saveViews(views);
+    renderViews("");
+  });
+
+  // ---- Search the sources ----
+  // When the library doesn't have it, look for it where it can be downloaded.
+  // Results only list what each source returns; nothing is added until picked.
+  var web = { job: null, timer: null, query: "" };
+  var JOB_STATES = ["PENDING", "RUNNING", "SUCCESS", "FAILED", "CANCELED", "PAUSED"];
+  function statusName(s) { return typeof s === "number" ? (JOB_STATES[s] || String(s)) : s; }
+  function updateWebButton() {
+    var q = els["search"].value.trim();
+    var btn = els["lib-web-btn"];
+    btn.classList.toggle("hidden", q.length < 2);
+    btn.textContent = "🔎 Search the sources for “" + q + "”";
+  }
+  function stopWebSearch() {
+    clearTimeout(web.timer);
+    if (web.job) api("/job/" + web.job + "/cancel", { method: "POST" }).catch(function () {});
+    web.job = null;
+    els["lib-web-stop"].classList.add("hidden");
+  }
+  els["lib-web-stop"].addEventListener("click", function () {
+    stopWebSearch();
+    els["lib-web-status"].textContent = "· stopped";
+  });
+  els["lib-web-btn"].addEventListener("click", function () {
+    var q = els["search"].value.trim();
+    if (q.length < 2) return;
+    stopWebSearch();
+    web.query = q;
+    els["lib-web"].classList.remove("hidden");
+    els["lib-web-list"].innerHTML = "";
+    els["lib-web-status"].textContent = "· searching…";
+    api("/job/create/search-sources", {
+      method: "POST",
+      body: JSON.stringify({ query: q.slice(0, 50), results_only: true })
+    }).then(function (job) {
+      web.job = job.id;
+      els["lib-web-stop"].classList.remove("hidden");
+      pollWeb();
+    }).catch(function (e) { els["lib-web-status"].textContent = "· couldn't search: " + e.message; });
+  });
+  function pollWeb() {
+    var id = web.job;
+    if (!id) return;
+    api("/job/" + id).then(function (job) {
+      if (web.job !== id) return;
+      renderWebResults((job.extra && job.extra.search_results) || []);
+      var running = statusName(job.status) === "PENDING" || statusName(job.status) === "RUNNING";
+      var n = els["lib-web-list"].children.length;
+      els["lib-web-status"].textContent = "· " + n + " found" +
+        (running ? " — searching " + (job.done || 0) + "/" + (job.total || "?") + " sources…" : "");
+      if (running) web.timer = setTimeout(pollWeb, 2000);
+      else { web.job = null; els["lib-web-stop"].classList.add("hidden"); }
+    }).catch(function () { web.timer = setTimeout(pollWeb, 4000); });
+  }
+  function renderWebResults(results) {
+    var have = {};
+    (lib.everything || lib.all).forEach(function (n) { have[n.url] = n; });
+    var box = els["lib-web-list"];
+    box.innerHTML = "";
+    results.slice(0, 60).forEach(function (r) {
+      var row = document.createElement("div"); row.className = "web-row";
+      var t = document.createElement("div"); t.className = "t";
+      var b = document.createElement("b"); b.textContent = r.title || r.url;
+      var m = document.createElement("span"); m.className = "muted";
+      var host = ""; try { host = new URL(r.url).hostname.replace(/^www\\./, ""); } catch (e) { host = ""; }
+      m.textContent = [host, r.info || ""].filter(Boolean).join(" · ");
+      t.appendChild(b); t.appendChild(m); row.appendChild(t);
+      var owned = have[r.url];
+      if (owned) {
+        var open = document.createElement("button"); open.className = "secondary"; open.textContent = "In library — open";
+        open.addEventListener("click", function () { openNovel(owned); });
+        row.appendChild(open);
+      } else {
+        var add = document.createElement("button"); add.textContent = "Add";
+        add.title = "Add its details to your library";
+        var full = document.createElement("button"); full.className = "secondary"; full.textContent = "Add & download";
+        full.title = "Add it and download every chapter";
+        add.addEventListener("click", function () { addFromWeb(r.url, false, row); });
+        full.addEventListener("click", function () { addFromWeb(r.url, true, row); });
+        row.appendChild(add); row.appendChild(full);
+      }
+      box.appendChild(row);
+    });
+  }
+  function addFromWeb(url, full, row) {
+    row.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+    var note = document.createElement("span"); note.className = "muted"; note.textContent = "adding…";
+    row.appendChild(note);
+    api("/job/create/fetch-novels", { method: "POST", body: JSON.stringify({ urls: [url], full: full }) })
+      .then(function (job) {
+        (function wait() {
+          api("/job/" + job.id).then(function (j) {
+            var st = statusName(j.status);
+            if (st === "PENDING" || st === "RUNNING") {
+              note.textContent = full ? "downloading… " + (j.done || 0) + "/" + (j.total || "?") : "adding…";
+              setTimeout(wait, 2500);
+              return;
+            }
+            note.textContent = st === "SUCCESS" ? "✓ added" : "failed" + (j.error ? ": " + String(j.error).split("\\n").pop() : "");
+            if (st === "SUCCESS") loadLibrary();
+          }).catch(function () { setTimeout(wait, 5000); });
+        })();
+      })
+      .catch(function (e) { note.textContent = "couldn't add: " + e.message; });
+  }
 
   // ---- Novel ----
   var current = { novel: null, chapters: [], offset: 0 };
@@ -1655,8 +2051,7 @@ _READER_HTML = """<!DOCTYPE html>
   var searchTimer = null;
   els["search"].addEventListener("input", function () {
     clearTimeout(searchTimer);
-    var q = this.value.trim();
-    searchTimer = setTimeout(function () { loadLibrary(q); }, 300);
+    searchTimer = setTimeout(renderLibrary, 150);
   });
   document.addEventListener("keydown", function (e) {
     if (els["view-reader"].classList.contains("hidden")) return;
@@ -1697,24 +2092,11 @@ _READER_HTML = """<!DOCTYPE html>
     if (toolsLink) toolsLink.href = "/tools" + (token() ? ("?authToken=" + encodeURIComponent(token())) : "");
     applyFont();
     applyPrefs();
-    var v = loadView();
-    if (v.sort) els["lib-sort"].value = v.sort;
-    if (v.kind) els["lib-kind"].value = v.kind;
-    if (v.tag) els["lib-tag"].value = v.tag;
-    if (v.nomtl) els["lib-nomtl"].checked = true;
-    if (v.state) els["lib-state"].value = v.state;
-    if (v.progress) els["lib-progress"].value = v.progress;
-    if (v.favonly || v.cat === "__fav") els["lib-favonly"].checked = true;
-    if (v.nobl) els["lib-nobl"].checked = true;
-    if (v.len) els["lib-len"].value = v.len;
-    if (v.lenMin) els["lib-len-min"].value = v.lenMin;
-    if (v.lenMax) els["lib-len-max"].value = v.lenMax;
-    els["lib-len-custom"].classList.toggle("hidden", els["lib-len"].value !== "custom");
-    lib.pending = { source: v.source || "", lang: v.lang || "" };
-    if (v.cat && v.cat !== "__fav") lib.cat = v.cat;
+    applyView(loadView());
+    renderViews();
     if (!token()) { show("auth"); return; }
     api("/auth/me", { method: "GET" })
-      .then(function () { show("view-library"); loadLibrary(""); })
+      .then(function () { show("view-library"); loadLibrary(); syncState(); })
       .catch(function () { localStorage.removeItem(KEY); show("auth"); });
   }
   start();

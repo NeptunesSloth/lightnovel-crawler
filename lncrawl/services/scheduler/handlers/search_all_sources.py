@@ -38,4 +38,5 @@ class SearchAllSourcesHandler(BatchHandler):
                 query,
                 domain,
                 parent_id=self.job.id,
+                results_only=bool(self.job.extra.get("results_only")),
             )

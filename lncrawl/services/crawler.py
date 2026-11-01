@@ -168,6 +168,10 @@ class CrawlerService:
             )
             if status:
                 extra["status"] = status
+            # other names the novel goes by, for searching the library
+            alt_titles = model.get("alt_titles") or model.get("novel_alt_titles")
+            if isinstance(alt_titles, list) and alt_titles:
+                extra["alt_titles"] = [str(t) for t in alt_titles if t][:50]
             novel.extra = extra
 
             # save updates
