@@ -74,6 +74,8 @@ _READER_HTML = """<!DOCTYPE html>
     color: #aab2c0; font-size: 13px; margin: 5px 0 0;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   }
+  .libcard .desc.open { display: block; -webkit-line-clamp: unset; }
+  .libcard .desc-more { color: #7aa2ff; font-size: 12px; cursor: pointer; }
   .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
   .chip {
     font-size: 11px; color: #aab2c0; background: #20242d; border: 1px solid #2a2f3a;
@@ -263,6 +265,8 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="chapters-asc">Fewest chapters</option>
         <option value="author">Author A–Z</option>
         <option value="source">Source A–Z</option>
+        <option value="status">Status: ongoing first</option>
+        <option value="status-done">Status: completed first</option>
       </select>
       <select id="lib-kind" title="Media type">
         <option value="">All media</option>
@@ -642,6 +646,14 @@ _READER_HTML = """<!DOCTYPE html>
     return "reading";
   }
 
+  // Sort orders for status; a novel whose source never said comes last either way.
+  var ONGOING_FIRST = ["ongoing", "hiatus", "completed", "cancelled"];
+  var COMPLETED_FIRST = ["completed", "ongoing", "hiatus", "cancelled"];
+  function statusRank(n, order) {
+    var i = order.indexOf(statusOf(n));
+    return i < 0 ? order.length : i;
+  }
+
   function filtersActive() {
     return !!(els["lib-kind"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
       els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked ||
@@ -715,6 +727,8 @@ _READER_HTML = """<!DOCTYPE html>
       else if (sort === "read") d = readAt(b) - readAt(a);
       else if (sort === "author") d = byText(a, b, "authors");
       else if (sort === "source") d = byText(a, b, "domain");
+      else if (sort === "status") d = statusRank(a, ONGOING_FIRST) - statusRank(b, ONGOING_FIRST);
+      else if (sort === "status-done") d = statusRank(a, COMPLETED_FIRST) - statusRank(b, COMPLETED_FIRST);
       else d = (b.created_at || 0) - (a.created_at || 0);  // recent
       return d || byText(a, b, "title");
     });
@@ -786,6 +800,16 @@ _READER_HTML = """<!DOCTYPE html>
         var d = document.createElement("p"); d.className = "desc";
         d.textContent = n.synopsis.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim();
         body.appendChild(d);
+        // long descriptions are cut to two lines; "more" reads the rest in place
+        if (d.textContent.length > 160) {
+          var more = document.createElement("span"); more.className = "desc-more"; more.textContent = "more";
+          more.addEventListener("click", function (e) {
+            e.stopPropagation();
+            var open = d.classList.toggle("open");
+            more.textContent = open ? "less" : "more";
+          });
+          body.appendChild(more);
+        }
       }
       if (n.tags && n.tags.length) {
         var tg = document.createElement("div"); tg.className = "tags";

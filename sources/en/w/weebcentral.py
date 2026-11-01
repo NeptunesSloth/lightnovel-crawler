@@ -74,6 +74,13 @@ class WeebCentralCrawler(LegacyCrawler):
         if soup.select_one("a[href*='adult=True']"):
             tags.append("Adult")
         self.novel_tags = list(dict.fromkeys(tags))
+        # the series description sits in the paragraph after its heading
+        for heading in soup.select("strong"):
+            if heading.get_text(strip=True) == "Description":
+                paragraph = heading.find_next("p")
+                if paragraph:
+                    self.novel_synopsis = paragraph.get_text(strip=True)
+                break
         status = soup.select_one("a[href*='included_status=']")
         self.novel_status = from_page(soup) or (status.get_text(strip=True) if status else None)
 
