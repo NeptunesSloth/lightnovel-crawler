@@ -244,6 +244,7 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
     if (!j.is_done && j.status === "RUNNING") {
       var now = (ex.active_novels && ex.active_novels.length) ? ex.active_novels
         : (ex.current_title ? [{ title: ex.current_title, done: ex.current_chapters || 0, total: ex.current_total_chapters || 0 }] : []);
+      now = now.slice().sort(function (a, b) { return String(a.title).localeCompare(String(b.title)); });
       now.forEach(function (a) {
         c.appendChild(el("div", "line", "▸ " + a.title + (a.total ? " — chapter " + a.done + " of " + a.total : "")));
       });
@@ -255,6 +256,10 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
       if (ex.chapters_per_min) pace.push(ex.chapters_per_min + " chapters/min");
       if (ex.eta_seconds != null && ex.eta_seconds >= 0) pace.push("about " + span(ex.eta_seconds) + " left at this pace");
       if (pace.length) c.appendChild(el("div", "line", pace.join(" · ")));
+      var cuts = ex.slowdowns || {}, why = [];
+      if (cuts.refused) why.push(cuts.refused + "× because the site refused requests");
+      if (cuts.slow) why.push(cuts.slow + "× because many requests timed out");
+      if (why.length) c.appendChild(el("div", "line warn", "Slowed down " + why.join(", ") + " in the last 10 minutes."));
       if (ex.last_fail_title && ex.last_fail_reason) {
         c.appendChild(el("div", "line warn", "Last issue: " + ex.last_fail_title + " — " + ex.last_fail_reason));
       }

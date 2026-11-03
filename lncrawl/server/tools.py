@@ -683,13 +683,25 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var left = timeLeft(ex.eta_seconds);
     if (left) out += " · ~" + left + " left at this pace";
     if (ex.chapters_per_min) out += " (" + ex.chapters_per_min + " ch/min)";
-    var others = (ex.active_novels || []).filter(function (a) { return a.title !== ex.current_title; });
-    if (others.length) {
-      out += " · also: " + others.map(function (a) {
-        return a.title + (a.total ? " " + a.done + "/" + a.total : "");
-      }).join(", ");
-    }
+    var cuts = ex.slowdowns || {};
+    var why = [];
+    if (cuts.refused) why.push(cuts.refused + "× because the site refused requests");
+    if (cuts.slow) why.push(cuts.slow + "× because many requests timed out");
+    if (why.length) out += " · slowed " + why.join(", ") + " in the last 10 min";
     return out;
+  }
+
+  // The novels downloading now, always in the same order, so the line reads
+  // the same from one update to the next instead of swapping places.
+  function nowNote(ex) {
+    var list = (ex.active_novels || []).slice();
+    if (!list.length && ex.current_title) {
+      list = [{ title: ex.current_title, done: ex.current_chapters || 0, total: ex.current_total_chapters || 0 }];
+    }
+    list.sort(function (a, b) { return String(a.title).localeCompare(String(b.title)); });
+    return list.map(function (a) {
+      return a.title + (a.total ? " — ch " + a.done + "/" + a.total : "");
+    }).join(" · ");
   }
 
   // A browser notification when a long job ends, if the user allowed them.
@@ -745,10 +757,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
         } else if (status === "RUNNING" && ex.phase === "solving-challenge") {
           log("Site is blocking requests — solving the Cloudflare challenge in a browser…", "log-info");
         } else if (status === "RUNNING" && ex.phase === "downloading" && ex.current_title) {
-          var ch = ex.current_total_chapters ? " — ch " + (ex.current_chapters || 0) + "/" + ex.current_total_chapters : "";
           var resumed = ex.resumed ? " · " + ex.resumed + " reused from last run" : "";
-          var cached = ex.current_reused_chapters ? " · " + ex.current_reused_chapters + " cached chapters" : "";
-          log("Filling chapter gaps " + job.done + "/" + job.total + ": " + ex.current_title + ch + cached + rateNote(ex) + resumed + paceNote(ex), "log-info");
+          log("Downloading " + job.done + "/" + job.total + ": " + nowNote(ex) + rateNote(ex) + resumed + paceNote(ex), "log-info");
           if (ex.last_fail_title && ex.last_fail_reason) {
             pollExport._lastFailure = pollExport._lastFailure || {};
             var failureKey = ex.last_fail_title + ":" + ex.last_fail_reason + ":" + (ex.last_fail_detail || "");

@@ -58,25 +58,50 @@ class PaceTests(unittest.TestCase):
         pace.report(refused())
         self.assertEqual(pace.rate, 0.5)
 
-    def test_slowness_only_trims_and_broken_pages_change_nothing(self) -> None:
+    def finish(self, pace: PaceController, seconds: float, per_second: float, slow_every: int = 0):
+        """Requests finishing at ``per_second`` for ``seconds``; every Nth one times out."""
+        timeout = CrawlTimeoutError("Chapter request timed out after 60 seconds")
+        for i in range(int(seconds * per_second)):
+            self.clock.now += 1 / per_second
+            pace.report(timeout if slow_every and i % slow_every == 0 else None)
+
+    def test_an_odd_slow_page_no_longer_holds_the_speed_down(self) -> None:
+        # what the NovelFire export did: about 1 request in 20 timed out, and
+        # the rate sat near 0.7/s for days
+        pace = self.pace(0.7)
+        self.finish(pace, 600, 2, slow_every=20)
+        self.assertEqual(pace.rate, export_pace.RPS_MAX)
+        self.assertEqual(pace.slowdowns(), {})
+
+    def test_a_site_where_many_requests_time_out_is_eased_off(self) -> None:
         pace = self.pace(2.0)
-        pace.report(CrawlTimeoutError("Chapter request timed out after 60 seconds"))
+        self.finish(pace, 31, 2, slow_every=2)  # half of them time out
         self.assertEqual(pace.rate, 1.7)
-        self.clock.now += 100
-        pace.report(ValueError("Chapter has no content"))
-        self.assertEqual(pace.rate, 1.7)
+        self.assertEqual(pace.slowdowns(), {"slow": 1})
+
+    def test_broken_pages_change_nothing(self) -> None:
+        pace = self.pace(2.0)
+        for _ in range(50):
+            self.clock.now += 1
+            pace.report(ValueError("Chapter has no content"))
+        self.assertEqual(pace.rate, 2.0)
 
     def test_speed_comes_back_with_successes(self) -> None:
         pace = self.pace(0.2)
-        for _ in range(export_pace.RAISE_AFTER * 20):
-            pace.report()
+        self.finish(pace, 1200, 1)
         self.assertEqual(pace.rate, export_pace.RPS_MAX)
         self.assertGreater(len(self.changes), 5)
 
+    def test_a_refusal_is_reported_as_the_reason_for_a_slowdown(self) -> None:
+        pace = self.pace(2.0)
+        pace.report(refused())
+        self.assertEqual(pace.slowdowns(), {"refused": 1})
+        self.clock.now += export_pace.CUTS_WINDOW + 1
+        self.assertEqual(pace.slowdowns(), {})
+
     def test_never_faster_than_the_rate_asked_for(self) -> None:
         pace = self.pace(1.0, ceiling=1.5)
-        for _ in range(export_pace.RAISE_AFTER * 10):
-            pace.report()
+        self.finish(pace, 600, 1)
         self.assertEqual(pace.rate, 1.5)
 
     def test_fixed_rate_is_left_alone(self) -> None:
