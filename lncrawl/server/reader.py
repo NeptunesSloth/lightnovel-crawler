@@ -265,6 +265,7 @@ _READER_HTML = """<!DOCTYPE html>
   <a class="back hidden" id="nav-back">&larr; Back</a>
   <div class="spacer"></div>
   <div id="search-wrap" style="flex:1;max-width:380px"><input id="search" type="text" placeholder="Search title, author, description, tags…" /></div>
+  <a class="back" href="/downloads" target="_blank" id="downloads-link" title="Every download: progress, pause, resume">⤓ Downloads</a>
   <a class="back" href="/tools" target="_blank" id="tools-link">Tools</a>
   <button id="fit-btn" class="hidden" title="Image fit mode">Fit: width</button>
   <button id="aa-btn" class="hidden" title="Reading settings">Aa</button>

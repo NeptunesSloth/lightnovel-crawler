@@ -1,5 +1,5 @@
 import re
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Path, Query, Security
 from fastapi.responses import FileResponse
@@ -61,6 +61,11 @@ def list_jobs(
         priority=priority,
         parent_job_id=parent_job_id,
     )
+
+
+@router.get("s/downloads", summary="Every download: running, paused and queued, then recent")
+def list_downloads(user: User = Security(ensure_user)) -> List[Dict[str, Any]]:
+    return ctx.jobs.list_downloads(user)
 
 
 def _current_proxy_config() -> ProxyConfig:
@@ -172,6 +177,27 @@ def cancel_job(
     who = "user" if user.id == user_id else "admin"
     ctx.scheduler.stop_job(job_id)
     ctx.jobs.cancel(job_id, who)
+    return True
+
+
+@router.post("/{job_id}/pause", summary="Pause a site download where it is")
+def pause_job(
+    user: User = Security(ensure_user),
+    job_id: str = Path(),
+) -> bool:
+    ctx.jobs.verify_access(user, job_id)
+    ctx.jobs.pause(job_id)
+    ctx.scheduler.stop_job(job_id)
+    return True
+
+
+@router.post("/{job_id}/resume", summary="Resume a paused site download")
+def resume_job(
+    user: User = Security(ensure_user),
+    job_id: str = Path(),
+) -> bool:
+    ctx.jobs.verify_access(user, job_id)
+    ctx.jobs.resume(job_id)
     return True
 
 

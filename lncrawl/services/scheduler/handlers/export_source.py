@@ -529,7 +529,7 @@ class ExportSourceHandler(BaseHandler):
                 status = ctx.jobs.get(self.job.id).status
             except Exception:
                 status = None
-            if status != JobStatus.FAILED:
+            if status not in (JobStatus.FAILED, JobStatus.PAUSED):
                 extra = self.job.extra or {}
                 done = extra.get("done_novels") or self.job.done or 0
                 total = extra.get("total_novels") or self.job.total or 0

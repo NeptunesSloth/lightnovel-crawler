@@ -942,6 +942,92 @@ class JobService:
             ctx.logger.info(f"Requeued {count} stale running job(s) on startup")
         return count
 
+    # Jobs that put things in the library, shown together on the Downloads page.
+    DOWNLOAD_TYPES = (
+        JobType.EXPORT_SOURCE,
+        JobType.DISCOVER_SOURCE,
+        JobType.FULL_NOVEL,
+        JobType.FULL_NOVEL_BATCH,
+        JobType.NOVEL,
+        JobType.NOVEL_BATCH,
+        JobType.FETCH_MISSING,
+        JobType.FETCH_LATEST,
+        JobType.IMPORT_ARCHIVE,
+    )
+    # Job details too big to send every few seconds: long URL lists and results.
+    _BULKY_EXTRA = ("urls", "discovered", "search_results", "novels", "items")
+
+    def list_downloads(self, user: User, recent: int = 25) -> List[dict]:
+        """Every download still going (paused and queued included), then recent ones.
+
+        One flat list for the Downloads page: top-level jobs only, newest last
+        among the active ones, with bulky details reduced to counts.
+        """
+        with ctx.db.session() as sess:
+            base = sq.select(Job).where(
+                sq.col(Job.parent_job_id).is_(None),
+                sq.col(Job.type).in_(self.DOWNLOAD_TYPES),
+            )
+            if user.role not in (UserRole.ADMIN, UserRole.LOCAL):
+                base = base.where(Job.user_id == user.id)
+            active = sess.exec(
+                base.where(sq.col(Job.is_done).is_(False)).order_by(sq.asc(Job.created_at))
+            ).all()
+            finished = sess.exec(
+                base.where(sq.col(Job.is_done).is_(True))
+                .order_by(sq.desc(Job.updated_at))
+                .limit(recent)
+            ).all()
+        rows = []
+        for job in list(active) + list(finished):
+            extra = dict(job.extra or {})
+            for key in self._BULKY_EXTRA:
+                value = extra.pop(key, None)
+                if isinstance(value, list):
+                    extra[f"{key}_count"] = len(value)
+            rows.append(
+                {
+                    "id": job.id,
+                    "type": int(job.type),
+                    "status": job.status.name,
+                    "title": job.job_title,
+                    "done": job.done,
+                    "total": job.total,
+                    "error": job.error,
+                    "created_at": job.created_at,
+                    "updated_at": job.updated_at,
+                    "started_at": job.started_at,
+                    "finished_at": job.finished_at,
+                    "is_done": job.is_done,
+                    "extra": extra,
+                }
+            )
+        return rows
+
+    def pause(self, job_id: str) -> None:
+        """Hold a bulk download where it is; resume() picks it up from its checkpoint.
+
+        A paused job is never picked by the scheduler and is left alone by the
+        clean-up of stuck jobs and by restarts, so it stays paused until resumed.
+        """
+        job = self.get(job_id)
+        if job.type != JobType.EXPORT_SOURCE:
+            raise ServerErrors.forbidden.with_extra("Only site downloads can be paused")
+        if job.is_done:
+            return
+        with ctx.db.session() as sess:
+            self._update(sess, job_id, status=JobStatus.PAUSED)
+            sess.commit()
+
+    def resume(self, job_id: str) -> None:
+        """Put a paused download back in the queue (it continues where it stopped)."""
+        job = self.get(job_id)
+        if job.status != JobStatus.PAUSED:
+            return
+        with ctx.db.session() as sess:
+            self._update(sess, job_id, status=job_pending_literal)
+            sess.commit()
+
     def cancel(self, job_id: str, who: str = "admin") -> None:
         with ctx.db.session() as sess:
             self._cancel_down(sess, job_id, True)

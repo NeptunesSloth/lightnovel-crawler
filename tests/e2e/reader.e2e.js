@@ -215,6 +215,58 @@ async function clearFilters(page) {
   check("no errors on the Tools page", T.errors.length === 0, T.errors);
   await T.close();
 
+  console.log("Downloads page");
+  const D = await browser.newPage({ viewport: { width: 390, height: 900 } });
+  D.errors = [];
+  D.on("pageerror", (e) => D.errors.push(e.message));
+  const now = Date.now();
+  let jobs = [
+    { id: "r1", type: 53, status: "RUNNING", title: "Download 2 novel(s) → a.com", done: 3, total: 10, is_done: false,
+      created_at: now - 7200e3, started_at: now - 7000e3, updated_at: now - 5e3,
+      extra: { domain: "a.com", total_novels: 10, done_novels: 3, phase: "downloading", requests_per_sec: 1.5, chapters_per_min: 42,
+        eta_seconds: 5400, active_novels: [{ title: "Omniscient Reader", done: 120, total: 551 }, { title: "Solo Leveling", done: 3, total: 270 }] } },
+    { id: "w1", type: 53, status: "RUNNING", title: "Export all novels → b.com", done: 1, total: 4, is_done: false,
+      created_at: now - 3600e3, updated_at: now - 30e3,
+      extra: { domain: "b.com", total_novels: 4, done_novels: 1, phase: "retry-waiting", quiet_rounds: 2, resume_at: now + 3600e3 } },
+    { id: "p1", type: 53, status: "PAUSED", title: "Download all novels → c.com", done: 0, total: 1, is_done: false,
+      created_at: now - 600e3, updated_at: now - 60e3, extra: { domain: "c.com" } },
+    { id: "f1", type: 53, status: "FAILED", title: "Export all novels → d.com", done: 0, total: 1, is_done: true,
+      created_at: now - 90000e3, started_at: now - 90000e3, finished_at: now - 86000e3, updated_at: now - 86000e3,
+      error: "Traceback...\nDiscovery found no novels on 'd.com'", extra: { domain: "d.com" } },
+    { id: "s1", type: 53, status: "SUCCESS", title: "Download 40 novel(s) → e.com", done: 40, total: 40, is_done: true,
+      created_at: now - 50000e3, started_at: now - 50000e3, finished_at: now - 40000e3, updated_at: now - 40000e3,
+      extra: { domain: "e.com", library_only: true, complete: 38, incomplete: 2, total_novels: 40 } },
+  ];
+  const calls = [];
+  await D.route("**/api/jobs/downloads", (r) => r.fulfill({ json: jobs }));
+  await D.route(/\/api\/job\/\w+\/(pause|resume|cancel|replay)$/, (r) => {
+    calls.push(r.request().url().split("/api/job/")[1]);
+    if (/p1\/resume/.test(r.request().url())) jobs = jobs.map((j) => j.id === "p1" ? Object.assign({}, j, { status: "PENDING" }) : j);
+    r.fulfill({ json: true });
+  });
+  await D.goto(BASE + "/reader"); await D.evaluate((t) => localStorage.setItem("lncrawl_token", t), TOKEN);
+  await D.goto(BASE + "/downloads"); await D.waitForSelector(".card[data-id='r1']");
+  const text = (id) => D.textContent(`.card[data-id='${id}']`);
+  check("the summary counts what is going on", /1 downloading/.test(await D.textContent("#summary")) && /1 paused/.test(await D.textContent("#summary")), await D.textContent("#summary"));
+  const r1 = await text("r1");
+  check("a running download shows both novels, speed and time left", /Omniscient Reader — chapter 120 of 551/.test(r1) && /Solo Leveling/.test(r1) && /42 chapters\/min/.test(r1) && /1h 30m left/.test(r1) && /3 of 10 novels/.test(r1), r1);
+  check("a resting one says why and when it carries on", /got nothing new.*carries on at/.test(await text("w1")));
+  check("a failed one shows the reason, not the traceback", /Discovery found no novels/.test(await text("f1")) && !/Traceback/.test(await text("f1")));
+  check("a finished library download offers Read and Retry for partials", /2 partial/.test(await text("s1")) && /Read/.test(await text("s1")) && /Retry/.test(await text("s1")));
+  await D.click(".card[data-id='r1'] button:has-text('Pause')");
+  await D.click(".card[data-id='p1'] button:has-text('Resume')"); await D.waitForTimeout(800);
+  check("pause and resume reach the server", calls.includes("r1/pause") && calls.includes("p1/resume"), calls);
+  check("a resumed one shows as queued", /Queued/.test(await text("p1")));
+  D.once("dialog", (d) => d.accept());
+  await D.click(".card[data-id='w1'] button:has-text('Stop')"); await D.waitForTimeout(500);
+  check("stop asks first, then stops", calls.includes("w1/cancel"), calls);
+  await D.uncheck("#show-done");
+  check("finished ones can be hidden", await D.isHidden(".card[data-id='s1']"));
+  const dOverflow = await D.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  check("the Downloads page fits a phone", dOverflow <= 1, dOverflow);
+  check("no errors on the Downloads page", D.errors.length === 0, D.errors);
+  await D.close();
+
   console.log("Phone");
   await A.setViewportSize({ width: 390, height: 800 }); await A.waitForTimeout(300);
   const overflow = await A.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

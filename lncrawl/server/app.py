@@ -12,6 +12,7 @@ from ..assets.version import get_version
 from ..context import ctx
 from ..exceptions import ServerErrors, get_exception_handlers
 from .api import router as api
+from .downloads import router as downloads_router
 from .middleware.staticfiles import CustomStaticFiles, StaticFilesGuard
 from .reader import router as reader_router
 from .tools import router as tools_router
@@ -107,6 +108,7 @@ app.include_router(api, prefix="/api")
 # Standalone power-user tools page and in-app reader (kept outside the web build
 # dir so the web-sync workflow never overwrites them). Before the SPA catch-all.
 app.include_router(tools_router)
+app.include_router(downloads_router)
 app.include_router(reader_router)
 
 # Mount static files

@@ -109,6 +109,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
 <div class="wrap">
   <a id="back-link" href="/" class="back">&larr; Back to app</a>
   <a id="reader-link" href="/reader" target="_blank" class="back" style="margin-left:14px" title="Opens in its own window so this page keeps watching your export">📖 Open Reader</a>
+  <a href="/downloads" target="_blank" class="back" style="margin-left:14px" title="Every download in one place: progress, pause, resume, stop">⤓ Downloads</a>
   <h1>LNCrawl Tools</h1>
   <p class="sub">Lightweight power-user actions wired straight to the REST API.</p>
 
@@ -944,7 +945,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
       (body.until_done ? " — it keeps going until everything is in, so you can leave it." : " …"), "log-info");
     api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })
       .then(function (job) {
-        log("Download started (job " + String(job.id).slice(0, 8) + "). Closing this page doesn't stop it.", "log-ok");
+        log("Download started (job " + String(job.id).slice(0, 8) + "). Closing this page doesn't stop it — " +
+          "follow, pause or resume it on the Downloads page.", "log-ok");
         pollExport(job.id);
       })
       .catch(function (e) { log("Export failed: " + e.message, "log-err"); })

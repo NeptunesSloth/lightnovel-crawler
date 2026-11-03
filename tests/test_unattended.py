@@ -256,3 +256,82 @@ class KeepAwakeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DownloadsPageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        fixture = test_novel_repair.NovelRepairTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.ctx = fixture.ctx
+        self.user = fixture.user
+
+    def export_job(self, domain: str = "a.com", **extra) -> Job:
+        return self.ctx.jobs._create(self.user, JobType.EXPORT_SOURCE, {"domain": domain, **extra})
+
+    def test_a_paused_download_is_not_started_until_resumed(self) -> None:
+        job = self.export_job()
+        self.ctx.jobs.pause(job.id)
+        self.assertEqual(self.ctx.jobs.get(job.id).status, JobStatus.PAUSED)
+        self.assertIsNone(self.ctx.jobs._pending(False))
+        self.ctx.jobs.resume(job.id)
+        picked = self.ctx.jobs._pending(False)
+        assert picked is not None
+        self.assertEqual(picked.id, job.id)
+
+    def test_pausing_a_running_download_leaves_it_paused_and_quiet(self) -> None:
+        job = self.export_job("novelfire.net", urls=["https://novelfire.net/book/example"])
+        self.ctx.jobs.pause(job.id)
+        signal = Event()
+        signal.set()  # what Pause does to the worker
+        handler = ExportSourceHandler(self.ctx.jobs.get(job.id), signal)
+        with (
+            patch(f"{MODULE}.ctx", self.ctx),
+            patch.object(ExportSourceHandler, "_notify_finish") as notify,
+            patch.object(
+                ExportSourceHandler, "_run_once", side_effect=export_source.AbortedException()
+            ),
+        ):
+            self.assertFalse(handler.process())
+        self.assertEqual(self.ctx.jobs.get(job.id).status, JobStatus.PAUSED)
+        notify.assert_not_called()
+
+    def test_only_site_downloads_can_be_paused(self) -> None:
+        other = self.ctx.jobs._create(self.user, JobType.FETCH_MISSING, {"novel_id": "novel"})
+        with self.assertRaises(Exception):
+            self.ctx.jobs.pause(other.id)
+
+    def test_the_list_shows_active_first_without_bulky_details(self) -> None:
+        finished = self.export_job("b.com", urls=["https://b.com/1"] * 3000)
+        with self.ctx.db.session() as sess:
+            self.ctx.jobs._success(sess, finished.id)
+            sess.commit()
+        running = self.export_job("a.com", urls=["https://a.com/1", "https://a.com/2"])
+        self.ctx.jobs._create(self.user, JobType.SEARCH_SOURCE, {"query": "x", "domain": "a.com"})
+        rows = self.ctx.jobs.list_downloads(self.user)
+        self.assertEqual([row["id"] for row in rows], [running.id, finished.id])
+        self.assertNotIn("urls", rows[0]["extra"])
+        self.assertEqual(rows[0]["extra"]["urls_count"], 2)
+        self.assertEqual(rows[1]["extra"]["urls_count"], 3000)
+        self.assertEqual(rows[0]["status"], "PENDING")
+        self.assertTrue(rows[1]["is_done"])
+
+
+class DownloadsApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        fixture = test_novel_repair.NovelRepairTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.ctx = fixture.ctx
+        self.user = fixture.user
+        self.client = fixture.client
+        self.ctx.scheduler = SimpleNamespace(stop_job=lambda job_id: None)
+
+    def test_pause_resume_and_list_over_the_api(self) -> None:
+        job = self.ctx.jobs._create(self.user, JobType.EXPORT_SOURCE, {"domain": "a.com"})
+        self.assertEqual(self.client.post(f"/api/job/{job.id}/pause").status_code, 200)
+        rows = self.client.get("/api/jobs/downloads")
+        self.assertEqual(rows.status_code, 200)
+        self.assertEqual(rows.json()[0]["status"], "PAUSED")
+        self.assertEqual(self.client.post(f"/api/job/{job.id}/resume").status_code, 200)
+        self.assertEqual(self.ctx.jobs.get(job.id).status, JobStatus.PENDING)
