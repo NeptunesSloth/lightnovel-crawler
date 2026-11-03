@@ -64,7 +64,7 @@ MAX_RETRY_BACKOFF = 300.0
 # active even with polite mode off — the floor is just 0 in that case.
 ADAPTIVE_STEP = 8.0  # seconds added per failed novel (doubled when it looks throttled)
 ADAPTIVE_MAX = 60.0  # never wait more than this between novels
-ADAPTIVE_DECAY = 0.7  # multiply the delay by this after each success
+ADAPTIVE_DECAY = 0.5  # multiply the delay by this after each novel that went fine
 
 # How many chapters/images may be in flight at once, whether or not a rate was
 # asked for. The rate is held by the task queue's limiter, which hands out send
@@ -807,6 +807,7 @@ class ExportSourceHandler(BaseHandler):
                     ],
                     eta_seconds=eta,
                     chapters_per_min=round(self.pace.pace() * 60, 1),
+                    slowdowns=self.pace.slowdowns(),
                 )
 
             def _process(novel_url: str, lane: int, next_pending: List[str]) -> None:
@@ -977,10 +978,18 @@ class ExportSourceHandler(BaseHandler):
                         # partial novel's chapters already told the controller.
                         if file is None and kind:
                             self.pace.report(reason=reason_text)
-                        bump = ADAPTIVE_STEP * (2 if kind == "refused" else 1)
-                        pacing["delay"] = min(
-                            ADAPTIVE_MAX, max(pacing["delay"], floor_delay) + bump
-                        )
+                        # Only the site pushing back (refusals, timeouts) earns a
+                        # longer pause between novels. A novel that is just
+                        # missing some chapters says nothing about the site;
+                        # it used to add 8s each time, which on a big export left
+                        # every lane waiting the full minute after every novel.
+                        if kind:
+                            bump = ADAPTIVE_STEP * (2 if kind == "refused" else 1)
+                            pacing["delay"] = min(
+                                ADAPTIVE_MAX, max(pacing["delay"], floor_delay) + bump
+                            )
+                        else:
+                            pacing["delay"] = max(floor_delay, pacing["delay"] * ADAPTIVE_DECAY)
                         # surface the reason live so the UI shows *why*, not just "ch 0"
                         reason = _classify_error(reason_text)
                         self._set_extra(
