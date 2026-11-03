@@ -76,7 +76,9 @@ async function clearFilters(page) {
   await A.route("**/api/job/job1", (r) => { polls++; r.fulfill({ json: { id: "job1", status: polls > 1 ? 2 : 1, done: 1, total: 1, extra: { search_results: [
     { title: "Zzzz Novel", url: "https://x.org/zzzz", info: "Ch 3" },
     { title: "Omniscient Reader", url: "https://c.com/n/4", info: "" }] } } }); });
-  await A.click("#lib-web-btn"); await A.waitForTimeout(4500);
+  await A.click("#lib-web-btn");
+  // the first poll can queue behind cover images, so wait for the result, not a clock
+  await A.waitForFunction(() => document.querySelectorAll("#lib-web-list .web-row").length === 2, null, { timeout: 20000 }).catch(() => {});
   check("library sources only are searched", sent && sent.results_only && Array.isArray(sent.domains) && sent.domains.includes("a.com") && !sent.domain, sent);
   const rows = await A.$$eval("#lib-web-list .web-row", (r) => r.map((x) => x.innerText));
   check("results list, owned ones marked", rows.length === 2 && /In library/.test(rows[1]),
@@ -104,6 +106,34 @@ async function clearFilters(page) {
   await A.selectOption("#lib-views", "Done A-Z");
   check("a saved view comes back", JSON.stringify(await titles(A)) === '["Na Honjaman Level-Up","Omniscient Reader"]');
   await A.selectOption("#lib-views", ""); await clearFilters(A);
+
+  console.log("Novels with only their details");
+  await A.check("#lib-noch"); await A.waitForTimeout(300);
+  check("No chapters yet leaves out a downloaded novel", /75 novel/.test(await status(A)) && !(await titles(A)).includes("Reading Now"), await status(A));
+  await A.uncheck("#lib-noch");
+  await search(A, "omniscient");
+  check("a details-only novel is marked", /details only/.test(await A.$eval("#lib-list .libcard", (c) => c.innerText)));
+  let fetchBody = null;
+  await A.route("**/api/job/create/fetch-novels", (r) => { fetchBody = JSON.parse(r.request().postData()); r.fulfill({ json: { id: "job2", status: 2, extra: {} } }); });
+  await A.route("**/api/job/job2", (r) => r.fulfill({ json: { id: "job2", status: 2, extra: {} } }));
+  await A.click("#lib-more summary"); await A.click("#lib-select");
+  await A.click("#lib-list .libcard >> nth=0");
+  A.once("dialog", (d) => d.accept());
+  await A.click("#lib-getsel"); await A.waitForTimeout(600);
+  check("selected novels get their chapters", fetchBody && fetchBody.full === true && fetchBody.urls.length === 1 && /c\.com\/n\/4/.test(fetchBody.urls[0]), fetchBody);
+  check("select mode ends after starting it", await A.isHidden("#lib-getsel"));
+  fetchBody = null;
+  await A.click("#lib-list .libcard >> nth=0"); await A.waitForSelector("#getch-btn:not(.hidden)");
+  A.once("dialog", (d) => d.accept());
+  await A.click("#getch-btn"); await A.waitForTimeout(600);
+  check("the novel page downloads its chapters", fetchBody && fetchBody.urls.length === 1, fetchBody);
+  await A.click("#nav-back");
+  await A.waitForFunction(() => /novel\(s\)/.test(document.getElementById("lib-status").textContent));
+  await A.click("#lib-more summary");
+  check("More offers every details-only novel", /75 details-only/.test(await A.textContent("#lib-getch")), await A.textContent("#lib-getch"));
+  await A.click("#lib-more summary");
+  await A.unroute("**/api/job/create/fetch-novels");
+  await search(A, "");
 
   console.log("New chapters, novel page and progress");
   await search(A, "reading now");

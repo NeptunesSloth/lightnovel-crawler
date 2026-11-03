@@ -156,6 +156,10 @@ class BrowserTemplate(CrawlerTemplate):
                 if ctx.logger.has_exception:
                     raise
                 raise RuntimeError("Browser is disabled in the configuration")
+            from ..webdriver import BROWSER_PAGES_SUPPORTED, BROWSER_PAGES_UNSUPPORTED
+
+            if not BROWSER_PAGES_SUPPORTED:
+                raise RuntimeError(BROWSER_PAGES_UNSUPPORTED)
 
             ctx.logger.info(
                 f"Initializing browser. Headless={ctx.config.crawler.use_headless_mode}"

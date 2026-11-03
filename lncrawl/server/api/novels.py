@@ -88,6 +88,26 @@ def latest_chapters() -> Dict[str, int]:
     return {novel_id: int(ts or 0) for novel_id, ts in rows}
 
 
+@router.get(
+    "s/downloaded-counts",
+    summary="How many chapters each novel has downloaded, as {novel_id: count}",
+)
+def downloaded_counts() -> Dict[str, int]:
+    """Downloaded chapters per novel, in one grouped query.
+
+    A novel missing from the result has none: a discovery that added only the
+    details, or a download that never got going. The Reader marks those so
+    their chapters can be fetched.
+    """
+    with ctx.db.session() as sess:
+        rows = sess.exec(
+            sq.select(Chapter.novel_id, sq.func.count())
+            .where(sq.col(Chapter.is_done).is_(True))
+            .group_by(sq.col(Chapter.novel_id))
+        ).all()
+    return {novel_id: int(count or 0) for novel_id, count in rows}
+
+
 @router.get("s/storage", summary="Disk usage of the downloaded library and exports")
 def novels_storage() -> Dict[str, Any]:
     novels_dir = ctx.files.resolve("novels")

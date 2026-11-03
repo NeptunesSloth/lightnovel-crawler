@@ -95,6 +95,18 @@ class TaskManager:
         self._submit = self._executor.submit
         setattr(self._executor, "submit", self.submit_task)
 
+    def use_limiter(self, limiter: Optional[RateLimiter]) -> None:
+        """Send through ``limiter`` from now on (None: no cap), keeping the pool.
+
+        Unlike init_executor nothing queued is cancelled, so a download can be
+        sped up or slowed down mid-way, and several task managers can share one
+        limiter to stay under a single rate together.
+        """
+        if limiter is not None:
+            self._limiter = limiter
+        elif hasattr(self, "_limiter"):
+            del self._limiter
+
     def submit_task(self, fn: Callable[..., T], *args, **kwargs) -> Future[T]:
         """Submits a callable to be executed with the given arguments.
 

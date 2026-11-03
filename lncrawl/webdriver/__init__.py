@@ -1,11 +1,22 @@
 import logging
 import os
+import sys
 import threading
 from typing import List, Optional
 
 from ..context import ctx
 
 logger = logging.getLogger(__name__)
+
+# nodriver, which drives the browser for JavaScript-rendered sources, is written
+# for Python 3.10+ and fails to even import on 3.9. On 3.9 those sources are
+# switched off with this message instead of crashing part-way through a job.
+BROWSER_PAGES_SUPPORTED: bool = sys.version_info >= (3, 10)
+BROWSER_PAGES_UNSUPPORTED: str = (
+    "Sources that open pages in a browser need Python 3.10 or newer, and this app is "
+    f"running on Python {sys.version_info[0]}.{sys.version_info[1]}. Those sources are "
+    "skipped; reinstall with Python 3.10+ to use them. Everything else works."
+)
 
 _warmup_lock = threading.Lock()
 _warmed_up = False
@@ -80,7 +91,7 @@ def warmup_nodriver() -> None:
     is a cached no-op, so the half-initialized-package crash can't occur.
     """
     global _warmed_up
-    if _warmed_up:
+    if _warmed_up or not BROWSER_PAGES_SUPPORTED:
         return
     with _warmup_lock:
         if _warmed_up:
@@ -97,6 +108,8 @@ def create_new(
     **kwargs,
 ):
     """Create a new nodriver browser instance."""
+    if not BROWSER_PAGES_SUPPORTED:
+        raise RuntimeError(BROWSER_PAGES_UNSUPPORTED)
     # Safety net: finish importing nodriver/cdp before this browser is built, in
     # case the single-threaded startup warmup didn't run (e.g. CLI path).
     warmup_nodriver()

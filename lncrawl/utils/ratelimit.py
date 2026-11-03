@@ -38,6 +38,13 @@ class RateLimiter(object):
         self._next_at = 0.0
         self._closed = False
 
+    def set_rate(self, ratelimit: float) -> None:
+        """Change the rate from the next call on, without stopping anyone waiting."""
+        if ratelimit <= 0:
+            raise ValueError("ratelimit should be a non-zero positive number")
+        with self._lock:
+            self.period = 1 / ratelimit
+
     def _now(self) -> float:
         return time.monotonic()
 

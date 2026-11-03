@@ -127,6 +127,13 @@ class ExportSourceRequest(BaseModel):
         description="Automatically lower the request rate when blocking is detected and raise it "
         "back when clear, so the run finds the fastest rate that isn't blocked",
     )
+    parallel_novels: int = Field(
+        default=2,
+        ge=1,
+        le=4,
+        description="How many novels to download at the same time; they share one request "
+        "rate, so this fills the gaps one novel leaves rather than asking the site for more",
+    )
     update_only: bool = Field(
         default=False,
         description="Re-check novels finished in a prior run for newly released chapters and "

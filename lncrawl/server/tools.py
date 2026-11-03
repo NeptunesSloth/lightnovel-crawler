@@ -135,7 +135,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <label for="src-url">Source URL</label>
     <input id="src-url" type="text" placeholder="https://novelsource.example/" />
     <div class="row checkbox">
-      <input id="src-full" type="checkbox" />
+      <input id="src-full" type="checkbox" checked />
       <label for="src-full" style="margin:0">Also download every chapter (otherwise only each novel's details are added)</label>
     </div>
     <div class="row">
@@ -195,6 +195,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <div style="flex:1">
           <label for="exp-rps">Requests/sec</label>
           <input id="exp-rps" type="text" inputmode="decimal" placeholder="polite = 1" />
+        </div>
+        <div style="flex:1">
+          <label for="exp-lanes">Novels at once</label>
+          <select id="exp-lanes"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
         </div>
       </div>
       <div class="row checkbox">
@@ -524,6 +528,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
           log("  Added the details of " + (ex.discovered ? ex.discovered.length : job.total) + " novel(s). No chapters were downloaded — tick " +
             "“Also download every chapter” to fetch them too.", "log-info");
         }
+        if (ex.tier_capped && !isActive(status)) {
+          log("  Found " + ex.tier_found + " novels; your account adds up to " + ex.tier_capped +
+            " per discovery, so the first " + ex.tier_capped + " were added.", "log-info");
+        }
         if (status === "SUCCESS" && ex.discovery_capped) {
           log("  ⚠ Discovery stopped at its 10 minute cap, so this is only part of the catalogue.", "log-info");
         }
@@ -538,6 +546,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
         }
         if (status === "FAILED" && job.error) {
           log(label + " failed: " + job.error, "log-err");
+        }
+        if (label === "Discover") {
+          notifyEnd("Discovery " + (status === "SUCCESS" ? "finished" : status.toLowerCase()),
+            (ex.discovered ? ex.discovered.length : job.total) + " novel(s)" +
+            (status === "FAILED" && job.error ? " — " + String(job.error).split("\\n").pop() : ""));
         }
         if (onEnd) onEnd(status);
       })
@@ -592,6 +605,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var url = document.getElementById("src-url").value.trim();
     var full = document.getElementById("src-full").checked;
     if (!url) { log("Enter a source URL.", "log-err"); return; }
+    askToNotify();
     busy(btn, true);
     log("Queuing discovery for " + url + " …", "log-info");
     api("/job/create/discover-source", { method: "POST", body: JSON.stringify({ url: url, full: full }) })
@@ -637,6 +651,43 @@ _TOOLS_HTML = """<!DOCTYPE html>
     return bits.length ? " [" + bits.join(", ") + "]" : "";
   }
 
+  function timeLeft(seconds) {
+    if (seconds == null || seconds < 0) return "";
+    var m = Math.round(seconds / 60);
+    if (m < 1) return "under a minute";
+    if (m < 60) return m + " min";
+    var h = Math.floor(m / 60), d = Math.floor(h / 24);
+    if (d >= 1) return d + "d " + (h % 24) + "h";
+    return h + "h " + (m % 60) + "m";
+  }
+
+  // "~2h 10m left at this pace", plus the other novels downloading alongside
+  function paceNote(ex) {
+    var out = "";
+    var left = timeLeft(ex.eta_seconds);
+    if (left) out += " · ~" + left + " left at this pace";
+    if (ex.chapters_per_min) out += " (" + ex.chapters_per_min + " ch/min)";
+    var others = (ex.active_novels || []).filter(function (a) { return a.title !== ex.current_title; });
+    if (others.length) {
+      out += " · also: " + others.map(function (a) {
+        return a.title + (a.total ? " " + a.done + "/" + a.total : "");
+      }).join(", ");
+    }
+    return out;
+  }
+
+  // A browser notification when a long job ends, if the user allowed them.
+  function askToNotify() {
+    try {
+      if (window.Notification && Notification.permission === "default") Notification.requestPermission();
+    } catch (e) {}
+  }
+  function notifyEnd(title, body) {
+    try {
+      if (window.Notification && Notification.permission === "granted") new Notification(title, { body: body });
+    } catch (e) {}
+  }
+
   // Only one export runs at a time, so a queued one is waiting on another. Name
   // it, and point Stop at it, so a queue that never moves can be cleared from here.
   function explainQueued(id) {
@@ -678,7 +729,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           var ch = ex.current_total_chapters ? " — ch " + (ex.current_chapters || 0) + "/" + ex.current_total_chapters : "";
           var resumed = ex.resumed ? " · " + ex.resumed + " reused from last run" : "";
           var cached = ex.current_reused_chapters ? " · " + ex.current_reused_chapters + " cached chapters" : "";
-          log("Filling chapter gaps " + job.done + "/" + job.total + ": " + ex.current_title + ch + cached + rateNote(ex) + resumed, "log-info");
+          log("Filling chapter gaps " + job.done + "/" + job.total + ": " + ex.current_title + ch + cached + rateNote(ex) + resumed + paceNote(ex), "log-info");
           if (ex.last_fail_title && ex.last_fail_reason) {
             pollExport._lastFailure = pollExport._lastFailure || {};
             var failureKey = ex.last_fail_title + ":" + ex.last_fail_reason + ":" + (ex.last_fail_detail || "");
@@ -692,7 +743,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           // a manga's pages come after its chapters and can take far longer
           log("Downloading pages " + job.done + "/" + job.total + ": " + ex.current_title +
             " — image " + (ex.current_images || 0) + "/" + (ex.current_total_images || 0) +
-            rateNote(ex), "log-info");
+            rateNote(ex) + paceNote(ex), "log-info");
         } else if (status === "RUNNING" && ex.phase === "waiting-between-novels") {
           log("Waiting " + (ex.adaptive_delay || 0) + " seconds before the next novel after source errors; downloaded chapters are retained.", "log-info");
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
@@ -713,6 +764,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           if (extra.failed) parts.push(extra.failed + " failed");
           log("Export done: " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".",
             extra.failed ? "log-info" : "log-ok");
+          notifyEnd("Export finished", (extra.domain || "Export") + ": " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".");
           if (extra.discovery_capped) {
             log("  ⚠ Discovery stopped at its time cap, so this is only part of the source's " +
               "catalogue. Raise “Max discovery (min)” in Advanced options and run it again — " +
@@ -733,6 +785,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
           }
           log("Export ended: " + status + (job.error ? " — " + job.error : "") +
             ". Use the Resume last button to pick up where it left off.", "log-err");
+          notifyEnd(status === "FAILED" ? "Export failed" : "Export stopped",
+            (ex.domain || "Export") + " — " + (status === "FAILED" ? String(job.error || "").split("\\n").pop() :
+              "stopped after " + job.done + " of " + job.total + " novels") + ". Resume picks up where it left off.");
         }
       })
       .catch(function (e) {
@@ -836,6 +891,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     body.auto_tune = document.getElementById("exp-autotune").checked;
     body.update_only = document.getElementById("exp-update").checked;
     body.use_sitemap = document.getElementById("exp-sitemap").checked;
+    body.parallel_novels = parseInt(document.getElementById("exp-lanes").value, 10) || 2;
     return body;
   }
 
@@ -844,6 +900,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var btn = this;
     var body = buildExportBody();
     if (!body) return;
+    askToNotify();
     busy(btn, true);
     log("Starting full export of " + body.url + " (this can take a while) …", "log-info");
     api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })

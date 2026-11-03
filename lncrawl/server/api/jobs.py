@@ -381,6 +381,7 @@ def export_source(
         auto_tune=body.auto_tune,
         update_only=body.update_only,
         use_sitemap=body.use_sitemap,
+        parallel_novels=body.parallel_novels,
         urls=[str(u) for u in body.urls] if body.urls else None,
     )
 

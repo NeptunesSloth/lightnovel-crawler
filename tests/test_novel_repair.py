@@ -71,7 +71,9 @@ class NovelRepairTests(unittest.TestCase):
                 future.set_exception(error)
             return future
 
-        self.source.taskman = SimpleNamespace(init_executor=MagicMock(), submit_task=submit)
+        self.source.taskman = SimpleNamespace(
+            init_executor=MagicMock(), use_limiter=MagicMock(), submit_task=submit
+        )
         self.ctx.sources.get_source = MagicMock(
             return_value=SimpleNamespace(url="https://novelfire.net/")
         )

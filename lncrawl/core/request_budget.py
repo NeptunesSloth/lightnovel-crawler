@@ -16,6 +16,7 @@ class CrawlTimeoutError(TimeoutError):
 class RequestBudget:
     seconds: float
     signal: Optional[Event] = None
+    label: str = "Chapter request"
 
     def __post_init__(self) -> None:
         self.deadline = monotonic() + self.seconds
@@ -28,7 +29,7 @@ class RequestBudget:
             raise AbortedException("Crawl cancelled")
         remaining = self.deadline - monotonic()
         if remaining <= 0:
-            raise CrawlTimeoutError(f"Chapter request timed out after {self.seconds:g} seconds")
+            raise CrawlTimeoutError(f"{self.label} timed out after {self.seconds:g} seconds")
         return remaining
 
 
@@ -40,9 +41,11 @@ def current_budget() -> Optional[RequestBudget]:
 
 
 @contextmanager
-def request_budget(signal: Optional[Event], seconds: float = 60) -> Iterator[RequestBudget]:
+def request_budget(
+    signal: Optional[Event], seconds: float = 60, label: str = "Chapter request"
+) -> Iterator[RequestBudget]:
     existing = current_budget()
-    budget = existing or RequestBudget(seconds, signal)
+    budget = existing or RequestBudget(seconds, signal, label)
     token = _budget.set(budget)
     try:
         budget.remaining()

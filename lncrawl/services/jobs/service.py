@@ -767,6 +767,7 @@ class JobService:
         urls: Optional[List[str]] = None,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
+        parallel_novels: int = 2,
         **data: Any,
     ) -> Job:
         domain = ctx.sources.get_domain(url)
@@ -786,6 +787,7 @@ class JobService:
         data["auto_tune"] = bool(auto_tune)
         data["update_only"] = bool(update_only)
         data["use_sitemap"] = bool(use_sitemap)
+        data["parallel_novels"] = max(1, min(4, int(parallel_novels)))
         if limit:
             data["limit"] = int(limit)
         # When specific novels are picked, export exactly those (skip discovery)
