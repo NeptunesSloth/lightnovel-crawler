@@ -885,7 +885,7 @@ class JobService:
             result = sess.exec(
                 sq.update(Job)
                 .where(sq.col(Job.status) == JobStatus.RUNNING)
-                .values(status=job_pending_literal)
+                .values(status=job_pending_literal, updated_at=current_timestamp())
             )
             sess.commit()
             count = getattr(result, "rowcount", 0) or 0
@@ -1051,7 +1051,12 @@ class JobService:
             )
             return sess.exec(stmt.limit(1)).first()
 
+    # Job rows are changed with bulk UPDATE statements, which the ORM's
+    # before_update hook never sees, so each one stamps updated_at itself. That
+    # keeps updated_at meaning "last activity", which the scrubber relies on to
+    # tell a stuck job from one that is simply long.
     def _update(self, sess: Session, job_id: str, **values) -> None:
+        values.setdefault("updated_at", current_timestamp())
         sess.exec(
             sq.update(Job)
             .where(
@@ -1102,6 +1107,7 @@ class JobService:
                 is_done=sa_is_done,
                 started_at=sa_started_at,
                 finished_at=sa_finished_at,
+                updated_at=now,
             )
         )
 
@@ -1120,6 +1126,7 @@ class JobService:
                 error="Canceled by one of the parent",
                 started_at=sq.func.coalesce(Job.started_at, now),
                 finished_at=sq.func.coalesce(Job.finished_at, now),
+                updated_at=now,
             )
         )
 
@@ -1159,10 +1166,11 @@ class JobService:
         if root and not root.is_done:
             return False
 
-        self.cancel(job.id)
+        who = "the app: the job it belonged to had already ended"
+        self.cancel(job.id, who)
         if root:
             if root.status == JobStatus.CANCELED:
-                self.cancel(root.id)
+                self.cancel(root.id, who)
             else:
                 with ctx.db.session() as sess:
                     self._cancel_down(sess, root.id, False)
@@ -1185,7 +1193,11 @@ class JobService:
             else:
                 extra.update(updates)
 
-            sess.exec(sq.update(Job).where(sq.col(Job.id) == job_id).values(extra=extra))
+            sess.exec(
+                sq.update(Job)
+                .where(sq.col(Job.id) == job_id)
+                .values(extra=extra, updated_at=current_timestamp())
+            )
             sess.commit()
 
             if isinstance(job, Job):

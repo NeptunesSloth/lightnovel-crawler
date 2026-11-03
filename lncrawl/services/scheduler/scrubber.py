@@ -150,6 +150,11 @@ class Scrubber:
                 ctx.jobs.delete(job_id)
 
     def cancel_long_jobs(self):
+        """Cancel jobs that stopped making progress: running, but untouched for 16 hours.
+
+        Every change to a job (progress, status, its live details) moves its
+        updated_at, so this catches a stuck job, never a long one still working.
+        """
         now = current_timestamp()
         with ctx.db.session() as sess:
             job_ids = sess.exec(
@@ -165,7 +170,7 @@ class Scrubber:
             for job_id in job_ids:
                 if self.signal.is_set():
                     return
-                ctx.jobs.cancel(job_id)
+                ctx.jobs.cancel(job_id, "the app: no progress for 16 hours")
 
     def check_reader_updates(self):
         """Readers' daily new-chapter checks, for those who turned them on."""
