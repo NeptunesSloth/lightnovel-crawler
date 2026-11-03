@@ -56,7 +56,7 @@ class NovelRepairTests(unittest.TestCase):
         self.assertEqual(job.extra["urls"], ["https://novelfire.net/book/example"])
         self.source.taskman.init_executor.assert_called_once()
 
-    def export_novel(self, discover: bool = False, **options) -> Job:
+    def export_novel(self, discover: bool = False, check_discovery: bool = True, **options) -> Job:
         with self.ctx.db.session() as session:
             novel = session.get(Novel, "novel")
             novel.synopsis = "A known novel."
@@ -91,7 +91,8 @@ class NovelRepairTests(unittest.TestCase):
             patch.object(self.ctx.crawler, "discover_novels", return_value=[url]) as discovery,
         ):
             run_job(job, Event())
-            self.assertEqual(discovery.call_count, int(discover))
+            if check_discovery:
+                self.assertEqual(discovery.call_count, int(discover))
         return self.ctx.jobs.get(job.id)
 
     def test_export_reuses_zip_after_individual_ebook_and_chapters_are_removed(self) -> None:
@@ -241,7 +242,8 @@ class NovelRepairTests(unittest.TestCase):
             session.commit()
         self.ctx = SimpleNamespace(
             config=SimpleNamespace(
-                app=SimpleNamespace(app_dir=root), crawler=SimpleNamespace(ignore_images=True)
+                app=SimpleNamespace(app_dir=root),
+                crawler=SimpleNamespace(ignore_images=True, runner_concurrency=5),
             ),
             db=SimpleNamespace(session=lambda: Session(self.engine, expire_on_commit=False)),
             users=SimpleNamespace(get=lambda user_id: self.user),

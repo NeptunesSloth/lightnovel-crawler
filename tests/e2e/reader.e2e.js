@@ -114,13 +114,13 @@ async function clearFilters(page) {
   await search(A, "omniscient");
   check("a details-only novel is marked", /details only/.test(await A.$eval("#lib-list .libcard", (c) => c.innerText)));
   let fetchBody = null;
-  await A.route("**/api/job/create/fetch-novels", (r) => { fetchBody = JSON.parse(r.request().postData()); r.fulfill({ json: { id: "job2", status: 2, extra: {} } }); });
+  await A.route("**/api/job/create/bulk-download", (r) => { fetchBody = JSON.parse(r.request().postData()); r.fulfill({ json: [{ id: "job2", status: 2, extra: {} }] }); });
   await A.route("**/api/job/job2", (r) => r.fulfill({ json: { id: "job2", status: 2, extra: {} } }));
   await A.click("#lib-more summary"); await A.click("#lib-select");
   await A.click("#lib-list .libcard >> nth=0");
   A.once("dialog", (d) => d.accept());
   await A.click("#lib-getsel"); await A.waitForTimeout(600);
-  check("selected novels get their chapters", fetchBody && fetchBody.full === true && fetchBody.urls.length === 1 && /c\.com\/n\/4/.test(fetchBody.urls[0]), fetchBody);
+  check("selected novels get their chapters", fetchBody && fetchBody.urls.length === 1 && /c\.com\/n\/4/.test(fetchBody.urls[0]), fetchBody);
   check("select mode ends after starting it", await A.isHidden("#lib-getsel"));
   fetchBody = null;
   await A.click("#lib-list .libcard >> nth=0"); await A.waitForSelector("#getch-btn:not(.hidden)");
@@ -132,7 +132,7 @@ async function clearFilters(page) {
   await A.click("#lib-more summary");
   check("More offers every details-only novel", /75 details-only/.test(await A.textContent("#lib-getch")), await A.textContent("#lib-getch"));
   await A.click("#lib-more summary");
-  await A.unroute("**/api/job/create/fetch-novels");
+  await A.unroute("**/api/job/create/bulk-download");
   await search(A, "");
 
   console.log("New chapters, novel page and progress");
@@ -194,6 +194,26 @@ async function clearFilters(page) {
   await A.reload(); await A.waitForTimeout(2500);
   const aFavs = await A.evaluate(() => JSON.parse(localStorage.getItem("lncrawl_reader_favs") || "[]"));
   check("changes from both devices survive", [IDS["Filler 01"], IDS["Filler 02"], IDS["Omniscient Reader"]].every((id) => aFavs.includes(id)), aFavs);
+
+  console.log("Tools: download a whole site");
+  const T = await browser.newPage();
+  T.errors = [];
+  T.on("pageerror", (e) => T.errors.push(e.message));
+  await T.goto(BASE + "/tools?authToken=" + encodeURIComponent(TOKEN));
+  await T.waitForTimeout(800);
+  let started = null;
+  await T.route("**/api/job/create/export-source", (r) => { started = JSON.parse(r.request().postData()); r.fulfill({ json: { id: "job3", status: 0, extra: {} } }); });
+  await T.route("**/api/job/job3", (r) => r.fulfill({ json: { id: "job3", status: 1, done: 0, total: 1, extra: { domain: "a.com", phase: "cooling-down", cool_reason: "stalled", resume_at: Date.now() + 300000 } } }));
+  check("the e-book format stays out of the way", await T.isHidden("#exp-zip-opts"));
+  check("advanced options are folded away", await T.isHidden("#exp-retries"));
+  await T.fill("#exp-url", "https://a.com/");
+  await T.click("#export-btn"); await T.waitForTimeout(1500);
+  check("it starts as an until-done library download", started && started.library_only === true && started.until_done === true, started);
+  check("a pause says why and until when", /Pausing — downloads stopped responding.* at /.test(await T.textContent("body")));
+  await T.selectOption("#exp-make", "zip");
+  check("choosing e-books shows the format", await T.isVisible("#exp-zip-opts"));
+  check("no errors on the Tools page", T.errors.length === 0, T.errors);
+  await T.close();
 
   console.log("Phone");
   await A.setViewportSize({ width: 390, height: 800 }); await A.waitForTimeout(300);

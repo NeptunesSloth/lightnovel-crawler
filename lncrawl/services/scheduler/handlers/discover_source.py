@@ -30,9 +30,13 @@ class DiscoverSourceHandler(BatchHandler):
         if not self.job.is_running:
             self._set_running()
 
-        # Once the fetch batch is queued, only wait for the children to finish.
+        # Once the downloads are queued, only wait for the children to finish.
         for child in self.children:
-            if child.type in (JobType.NOVEL_BATCH, JobType.FULL_NOVEL_BATCH):
+            if child.type in (
+                JobType.NOVEL_BATCH,
+                JobType.FULL_NOVEL_BATCH,
+                JobType.EXPORT_SOURCE,
+            ):
                 return
 
         urls = self._discover_novels(domain)
@@ -47,12 +51,12 @@ class DiscoverSourceHandler(BatchHandler):
 
         if self.signal.is_set():
             raise AbortedException()
-        ctx.jobs.fetch_many_novels(
-            self.user,
-            *urls,
-            full=bool(self.job.extra.get("full")),
-            parent_id=self.job.id,
-        )
+        if self.job.extra.get("full"):
+            # Every chapter: the bulk download engine, which tunes its speed to
+            # the site, recovers from blocks and hangs, and resumes after a restart.
+            ctx.jobs.bulk_download(self.user, urls, parent_id=self.job.id)
+            return
+        ctx.jobs.fetch_many_novels(self.user, *urls, parent_id=self.job.id)
 
     def _discover_novels(self, domain: str) -> List[str]:
         # Resume from a previous run instead of hitting the network again.

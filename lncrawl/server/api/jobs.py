@@ -1,5 +1,5 @@
 import re
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Body, Path, Query, Security
 from fastapi.responses import FileResponse
@@ -9,6 +9,7 @@ from ...dao import Job, JobPriority, JobStatus, JobType, User
 from ...exceptions import ServerErrors
 from ...utils.file_tools import safe_filename
 from ..models import (
+    BulkDownloadRequest,
     DiscoverSourceRequest,
     ExportSourceRequest,
     FetchChaptersRequest,
@@ -209,6 +210,17 @@ def fetch_novels(
 
 
 @router.post(
+    "/create/bulk-download",
+    summary="Download every chapter of many novels, unattended, one job per site",
+)
+def bulk_download(
+    user: User = Security(ensure_user),
+    body: BulkDownloadRequest = Body(),
+) -> List[Job]:
+    return ctx.jobs.bulk_download(user, [str(url) for url in body.urls])
+
+
+@router.post(
     "/create/fetch-volumes", summary="Create a job to fetch all chapter contents for the volumes"
 )
 def fetch_volumes(
@@ -382,6 +394,8 @@ def export_source(
         update_only=body.update_only,
         use_sitemap=body.use_sitemap,
         parallel_novels=body.parallel_novels,
+        until_done=body.until_done,
+        library_only=body.library_only,
         urls=[str(u) for u in body.urls] if body.urls else None,
     )
 

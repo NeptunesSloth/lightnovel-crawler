@@ -129,33 +129,26 @@ _TOOLS_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card">
-    <h2>Discover all novels from a source</h2>
-    <p class="hint">Paste a source website/base URL. Every novel the source exposes
-      through its own search is discovered, de-duplicated, and queued for download.</p>
-    <label for="src-url">Source URL</label>
-    <input id="src-url" type="text" placeholder="https://novelsource.example/" />
-    <div class="row checkbox">
-      <input id="src-full" type="checkbox" checked />
-      <label for="src-full" style="margin:0">Also download every chapter (otherwise only each novel's details are added)</label>
-    </div>
-    <div class="row">
-      <button id="discover-btn">Discover &amp; queue</button>
-      <button id="discover-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop discovery</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Download a whole source as a ZIP</h2>
-    <p class="hint">Paste a source URL and download <b>every</b> novel from it, bundled into a
-      single <code>.zip</code> you can save to a hard drive and read offline. Works for manga
-      too — EPUB embeds the page images. Novels that fail or come out incomplete are
-      automatically retried, so you can leave it running overnight. This runs in the
-      background; when it's ready a download starts automatically.</p>
-    <label for="exp-url">Source URL</label>
+    <h2>Download a whole site</h2>
+    <p class="hint">Paste a site's address and press Start. Every novel on it is found and
+      downloaded — manga too. It tunes its speed to the site, waits out blocks and hiccups and
+      tries again, carries on after the app or computer restarts, and keeps the computer awake
+      while it works, so you can start it and leave it for days. You get a notification when
+      it's done.</p>
+    <label for="exp-url">Site URL</label>
     <input id="exp-url" type="text" placeholder="https://novelsource.example/" />
-    <div class="row">
+    <label for="exp-make" style="margin-top:12px">What to make</label>
+    <select id="exp-make">
+      <option value="library" selected>Add to my library — read it in the Reader</option>
+      <option value="zip">Also make e-books, bundled into one ZIP to keep or move</option>
+    </select>
+    <div class="row checkbox">
+      <input id="exp-untildone" type="checkbox" checked />
+      <label for="exp-untildone" style="margin:0">Keep going until everything is downloaded (recommended — safe to leave for days)</label>
+    </div>
+    <div class="row hidden" id="exp-zip-opts">
       <div style="flex:2">
-        <label for="exp-format">Format</label>
+        <label for="exp-format">E-book format</label>
         <select id="exp-format">
           <option value="epub" selected>EPUB (best for manga &amp; most readers)</option>
           <option value="cbz">CBZ (manga only — comic reader archive)</option>
@@ -165,21 +158,21 @@ _TOOLS_HTML = """<!DOCTYPE html>
           <option value="txt">TXT (text only)</option>
         </select>
       </div>
-      <div style="flex:1">
-        <label for="exp-limit">Limit (optional)</label>
-        <input id="exp-limit" type="text" inputmode="numeric" placeholder="blank = all" />
-      </div>
-    </div>
-    <label style="margin-top:12px">Speed</label>
-    <div class="row" id="exp-presets">
-      <button type="button" class="preset secondary" data-preset="fast">⚡ Fast</button>
-      <button type="button" class="preset secondary" data-preset="balanced">⚖️ Balanced</button>
-      <button type="button" class="preset secondary" data-preset="gentle">🐢 Gentle</button>
-      <span class="muted" id="preset-note" style="align-self:center">Balanced — good default</span>
     </div>
     <details>
-      <summary>Advanced options — pacing, retries, limits</summary>
+      <summary>Advanced options — you don't need these</summary>
+      <label style="margin-top:12px">Speed</label>
+      <div class="row" id="exp-presets">
+        <button type="button" class="preset secondary" data-preset="fast">⚡ Fast</button>
+        <button type="button" class="preset secondary" data-preset="balanced">⚖️ Balanced</button>
+        <button type="button" class="preset secondary" data-preset="gentle">🐢 Gentle</button>
+        <span class="muted" id="preset-note" style="align-self:center">Balanced — good default</span>
+      </div>
       <div class="row">
+        <div style="flex:1">
+          <label for="exp-limit">Only the first N novels</label>
+          <input id="exp-limit" type="text" inputmode="numeric" placeholder="blank = all" />
+        </div>
         <div style="flex:1">
           <label for="exp-retries">Auto-retry rounds</label>
           <input id="exp-retries" type="text" inputmode="numeric" value="3" placeholder="3" />
@@ -234,11 +227,25 @@ _TOOLS_HTML = """<!DOCTYPE html>
         leave it blank (the &ldquo;Fast&rdquo; preset) to download several at once instead.</p>
     </details>
     <div class="row" style="margin-top:14px">
-      <button id="export-btn">Download all &rarr; ZIP</button>
+      <button id="export-btn">Start</button>
       <button id="export-test" class="secondary" style="margin-top:14px">🩺 Test source</button>
       <button id="export-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop</button>
       <button id="export-resume" class="secondary hidden" style="margin-top:14px">&#9654; Resume last</button>
       <button id="export-diagnostics" class="secondary hidden" style="margin-top:14px">Download stall diagnostics</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>List a site's novels without downloading them</h2>
+    <p class="hint">Adds every novel a site has to your library with just its details
+      (title, cover, description, chapter list), so you can browse and pick. To download
+      the chapters too, use <b>Download a whole site</b> above, or select novels in the
+      Reader and press <b>Get chapters</b>.</p>
+    <label for="src-url">Source URL</label>
+    <input id="src-url" type="text" placeholder="https://novelsource.example/" />
+    <div class="row">
+      <button id="discover-btn">List novels</button>
+      <button id="discover-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop</button>
     </div>
   </div>
 
@@ -603,7 +610,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (!requireAuth()) return;
     var btn = this;
     var url = document.getElementById("src-url").value.trim();
-    var full = document.getElementById("src-full").checked;
+    var full = false;  // chapters go through "Download a whole site" or the Reader
     if (!url) { log("Enter a source URL.", "log-err"); return; }
     askToNotify();
     busy(btn, true);
@@ -651,6 +658,14 @@ _TOOLS_HTML = """<!DOCTYPE html>
     return bits.length ? " [" + bits.join(", ") + "]" : "";
   }
 
+  // " at 14:05" for a wait that ends at resume_at
+  function untilNote(ex) {
+    if (!ex.resume_at) return "";
+    var d = new Date(ex.resume_at);
+    return " at " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) +
+      (d.toDateString() !== new Date().toDateString() ? " tomorrow" : "");
+  }
+
   function timeLeft(seconds) {
     if (seconds == null || seconds < 0) return "";
     var m = Math.round(seconds / 60);
@@ -688,13 +703,16 @@ _TOOLS_HTML = """<!DOCTYPE html>
     } catch (e) {}
   }
 
-  // Only one export runs at a time, so a queued one is waiting on another. Name
-  // it, and point Stop at it, so a queue that never moves can be cleared from here.
-  function explainQueued(id) {
+  // One download runs per site (and a few sites at once), so a queued one is
+  // waiting on another — the same site's, if there is one. Name it, and point
+  // Stop at it, so a queue that never moves can be cleared from here.
+  function explainQueued(id, domain) {
     explainQueued._said = explainQueued._said || {};
-    api("/jobs?type=53&status=1&limit=5", { method: "GET" })
+    api("/jobs?type=53&status=1&limit=20", { method: "GET" })
       .then(function (res) {
-        var blocker = ((res && res.items) || []).filter(function (j) { return j.id !== id; })[0];
+        var others = ((res && res.items) || []).filter(function (j) { return j.id !== id; });
+        var same = others.filter(function (j) { return (j.extra || {}).domain === domain; });
+        var blocker = same[0] || others[0];
         var key = blocker ? blocker.id : "none";
         if (explainQueued._said[id] === key) return;
         explainQueued._said[id] = key;
@@ -702,8 +720,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
           var bx = blocker.extra || {};
           var what = (bx.domain || "another export") + (bx.current_title ? " (" + bx.current_title + ")" : "");
           setExportControls(blocker.id, null);
-          log("⏳ Queued behind the running export of " + what + " — it starts when that one finishes. " +
-            "Press Stop to end that export and start this one.", "log-info");
+          log("⏳ Waiting for a free slot (another site download, " + what + ", is using it). " +
+            "One download runs per site, and different sites run side by side.", "log-info");
         } else {
           log("⏳ Queued — waiting for the previous export to finish shutting down. " +
             "If this doesn't start within a few minutes, restart the app; queued exports resume.", "log-info");
@@ -720,7 +738,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
         var ex = job.extra || {};
         if (status === "RUNNING") setExportControls(id, id);
         if (status === "PENDING") {
-          explainQueued(id);
+          explainQueued(id, ex.domain);
         } else if (status === "RUNNING" && ex.phase === "discovering") {
           log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches + sitemap pages)", "log-info");
         } else if (status === "RUNNING" && ex.phase === "solving-challenge") {
@@ -747,7 +765,16 @@ _TOOLS_HTML = """<!DOCTYPE html>
         } else if (status === "RUNNING" && ex.phase === "waiting-between-novels") {
           log("Waiting " + (ex.adaptive_delay || 0) + " seconds before the next novel after source errors; downloaded chapters are retained.", "log-info");
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
-          log("Retry " + (ex.retry || "") + " — waiting for the source to recover…", "log-info");
+          log("Round " + ((ex.retry || 0) + 1) + " for what's left — " +
+            (ex.quiet_rounds ? "the site gave nothing new last round, so it's resting it" : "waiting briefly") +
+            untilNote(ex) + ". Nothing is lost while it waits.", "log-info");
+        } else if (status === "RUNNING" && ex.phase === "cooling-down") {
+          var why = { "stalled": "downloads stopped responding, so it started fresh downloaders",
+            "blocked-discovery": "the site isn't answering searches (likely blocking for now)",
+            "restarting": "something unexpected went wrong, so it restarts from where it was" }[ex.cool_reason] || "the site needs a rest";
+          log("Pausing — " + why + "; trying again" + untilNote(ex) + ".", "log-info");
+        } else if (status === "RUNNING" && ex.phase === "disk-full") {
+          log("⚠ The disk is full. Free up some space — the download carries on by itself" + untilNote(ex) + ".", "log-err");
         } else if (status === "RUNNING" && ex.phase === "checking-updates") {
           log("Checking finished novels for new chapters… (" + job.done + "/" + job.total + ")", "log-info");
         } else {
@@ -762,7 +789,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
           if (extra.incomplete) parts.push(extra.incomplete + " partial");
           if (extra.skipped) parts.push(extra.skipped + " skipped (already had)");
           if (extra.failed) parts.push(extra.failed + " failed");
-          log("Export done: " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".",
+          log((extra.library_only ? "Done — in your library: " : "Export done: ") + parts.join(", ") +
+            " of " + (extra.total_novels || 0) + "." + (extra.library_only ? " Open the Reader to read them." : ""),
             extra.failed ? "log-info" : "log-ok");
           notifyEnd("Export finished", (extra.domain || "Export") + ": " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".");
           if (extra.discovery_capped) {
@@ -860,6 +888,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var url = document.getElementById("exp-url").value.trim();
     if (!url) { log("Enter a source URL.", "log-err"); return null; }
     var body = { url: url, format: document.getElementById("exp-format").value };
+    body.library_only = document.getElementById("exp-make").value === "library";
+    body.until_done = document.getElementById("exp-untildone").checked;
     var limitRaw = document.getElementById("exp-limit").value.trim();
     if (limitRaw) {
       var limit = parseInt(limitRaw, 10);
@@ -895,6 +925,14 @@ _TOOLS_HTML = """<!DOCTYPE html>
     return body;
   }
 
+  // the e-book format only matters when e-books are being made
+  function syncMake() {
+    document.getElementById("exp-zip-opts").classList.toggle("hidden",
+      document.getElementById("exp-make").value !== "zip");
+  }
+  document.getElementById("exp-make").addEventListener("change", syncMake);
+  syncMake();
+
   document.getElementById("export-btn").addEventListener("click", function () {
     if (!requireAuth()) return;
     var btn = this;
@@ -902,14 +940,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (!body) return;
     askToNotify();
     busy(btn, true);
-    log("Starting full export of " + body.url + " (this can take a while) …", "log-info");
+    log("Starting to download every novel from " + body.url +
+      (body.until_done ? " — it keeps going until everything is in, so you can leave it." : " …"), "log-info");
     api("/job/create/export-source", { method: "POST", body: JSON.stringify(body) })
       .then(function (job) {
-        if (activeExportId && activeExportId !== job.id) {
-          log("Export job created: " + job.id + " — queued behind the running export; it starts automatically when that one succeeds or fails.", "log-ok");
-        } else {
-          log("Export job created: " + job.id, "log-ok");
-        }
+        log("Download started (job " + String(job.id).slice(0, 8) + "). Closing this page doesn't stop it.", "log-ok");
         pollExport(job.id);
       })
       .catch(function (e) { log("Export failed: " + e.message, "log-err"); })

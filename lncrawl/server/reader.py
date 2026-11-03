@@ -1521,17 +1521,20 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-getch"].textContent = "⬇ Get chapters for " + n + " details-only novel(s)";
     els["lib-getch"].classList.toggle("hidden", !n);
   }
-  // One job downloads every chapter of the novels given (chapters already
-  // downloaded are skipped), re-reading each novel's page first.
+  // The bulk download engine gets every chapter of these novels: one job per
+  // site, which tunes its speed to the site, waits out blocks and hangs, and
+  // carries on after a restart. Chapters already downloaded are skipped.
   function getChapters(novels, done) {
     var urls = novels.map(function (n) { return n.url; }).filter(Boolean);
     if (!urls.length) { if (done) done(null); return; }
-    api("/job/create/fetch-novels", { method: "POST", body: JSON.stringify({ urls: urls, full: true }) })
-      .then(function (job) {
-        alert("Downloading the chapters of " + urls.length + " novel(s). They fill in as they arrive; " +
-          "follow it under Jobs in the app.");
-        if (done) done(job);
-        watchGetChapters(job.id);
+    api("/job/create/bulk-download", { method: "POST", body: JSON.stringify({ urls: urls }) })
+      .then(function (jobs) {
+        jobs = Array.isArray(jobs) ? jobs : [jobs];
+        alert("Downloading the chapters of " + urls.length + " novel(s) (" + jobs.length + " site(s)). " +
+          "It keeps going on its own, waiting out sites that block it, so you can leave it; " +
+          "novels fill in as they arrive.");
+        if (done) done(jobs[0]);
+        jobs.forEach(function (job) { watchGetChapters(job.id); });
       })
       .catch(function (e) { alert("Couldn't start the download: " + e.message); if (done) done(null); });
   }

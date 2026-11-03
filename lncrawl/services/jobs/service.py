@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, List, Optional, TypeVar, Union
+from typing import Any, Callable, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from sqlalchemy.orm import aliased
 import sqlmodel as sq
@@ -31,6 +31,11 @@ job_success_literal = sq.cast(sq.literal(JobStatus.SUCCESS.name), job_status_typ
 job_running_literal = sq.cast(sq.literal(JobStatus.RUNNING.name), job_status_type)
 job_canceled_literal = sq.cast(sq.literal(JobStatus.CANCELED.name), job_status_type)
 job_pending_literal = sq.cast(sq.literal(JobStatus.PENDING.name), job_status_type)
+
+
+def max_parallel_exports() -> int:
+    """How many sites may bulk-download at once: all but two of the workers."""
+    return max(1, int(ctx.config.crawler.runner_concurrency) - 2)
 
 
 class JobService:
@@ -768,11 +773,14 @@ class JobService:
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
         parallel_novels: int = 2,
+        until_done: bool = False,
+        library_only: bool = False,
         **data: Any,
     ) -> Job:
         domain = ctx.sources.get_domain(url)
         source = ctx.sources.get_source(domain)
-        if not source.can_search:
+        # finding a site's novels needs its search; downloading listed ones does not
+        if not urls and not source.can_search:
             raise ServerErrors.search_not_supported.with_extra(domain)
         data["domain"] = source.domain
         data["url"] = source.url
@@ -788,6 +796,8 @@ class JobService:
         data["update_only"] = bool(update_only)
         data["use_sitemap"] = bool(use_sitemap)
         data["parallel_novels"] = max(1, min(4, int(parallel_novels)))
+        data["until_done"] = bool(until_done)
+        data["library_only"] = bool(library_only)
         if limit:
             data["limit"] = int(limit)
         # When specific novels are picked, export exactly those (skip discovery)
@@ -800,6 +810,43 @@ class JobService:
             depends_on=depends_on,
             type=JobType.EXPORT_SOURCE,
         )
+
+    def bulk_download(
+        self,
+        user: User,
+        urls: List[str],
+        *,
+        parent_id: Optional[str] = None,
+        **data: Any,
+    ) -> List[Job]:
+        """Download every chapter of these novels into the library, unattended.
+
+        One "until done" export per site, in library-only mode, so every bulk
+        download gets the same engine: one speed limit per site that tunes itself,
+        several novels at once, recovery from stalls and blocks, and resume.
+        """
+        by_site: dict = {}
+        for url in dict.fromkeys(str(u) for u in urls if u):
+            try:
+                site = ctx.sources.get_domain(url)
+                ctx.sources.get_source(site)
+            except Exception:
+                continue  # no source for it here; nothing could download it
+            by_site.setdefault(site, []).append(url)
+        if not by_site:
+            raise ServerErrors.no_novels_to_download
+        return [
+            self.export_source(
+                user,
+                site_urls[0],
+                urls=site_urls,
+                until_done=True,
+                library_only=True,
+                parent_id=parent_id,
+                **data,
+            )
+            for site_urls in by_site.values()
+        ]
 
     def import_archive(
         self,
@@ -991,13 +1038,12 @@ class JobService:
         artifact: Optional[bool] = None,
         skip_job_ids: Iterable[str] = [],
         skip_user_ids: Iterable[str] = [],
-        skip_exports: bool = False,
+        held_exports: Iterable[Tuple[str, str]] = (),
     ) -> Optional[Job]:
+        """The next job to run. ``held_exports`` is (job id, site) of the exports
+        workers in this process still hold, cancelled ones included."""
         with ctx.db.session() as sess:
             stmt = sq.select(Job)
-
-            if skip_exports:
-                stmt = stmt.where(Job.type != JobType.EXPORT_SOURCE)
 
             job_alias = aliased(Job)
             dep_is_done = (
@@ -1035,23 +1081,39 @@ class JobService:
                 else:
                     stmt = stmt.where(Job.type != JobType.ARTIFACT)
 
-            # Run at most one source export at a time: a single export already
-            # saturates the download engine, so several at once just starve each
-            # other. Queued exports wait until the running one finishes.
-            running_export = aliased(Job)
-            running_export_exists = (
-                sq.exists(1)
-                .where(sq.col(running_export.type) == JobType.EXPORT_SOURCE)
-                .where(sq.col(running_export.status) == JobStatus.RUNNING)
-                .where(sq.col(running_export.id) != Job.id)
-            )
-            stmt = stmt.where(sq.or_(Job.type != JobType.EXPORT_SOURCE, ~running_export_exists))
-
             stmt = stmt.order_by(
                 sq.desc(Job.priority),
                 sq.asc(Job.updated_at),
             )
-            return sess.exec(stmt.limit(1)).first()
+            # Bulk downloads (source exports) run one per site, so a site only
+            # ever sees one job's requests and one speed limit, while different
+            # sites download side by side, up to a share of the workers that
+            # leaves room for everything else. A site's other exports wait.
+            other = sess.exec(stmt.where(Job.type != JobType.EXPORT_SOURCE).limit(1)).first()
+            exports = sess.exec(stmt.where(Job.type == JobType.EXPORT_SOURCE).limit(200)).all()
+            export = None
+            if exports:
+                running = list(held_exports) + [
+                    (job.id, str((job.extra or {}).get("domain") or ""))
+                    for job in sess.exec(
+                        sq.select(Job)
+                        .where(Job.type == JobType.EXPORT_SOURCE)
+                        .where(Job.status == JobStatus.RUNNING)
+                    ).all()
+                ]
+                running = list(dict(running).items())  # once per job
+                for job in exports:
+                    site = str((job.extra or {}).get("domain") or "")
+                    others = [domain for job_id, domain in running if job_id != job.id]
+                    if site not in others and len(others) < max_parallel_exports():
+                        export = job
+                        break
+            if other is None or export is None:
+                return other or export
+            # whichever the ordering above puts first
+            if (-other.priority, other.updated_at) <= (-export.priority, export.updated_at):
+                return other
+            return export
 
     # Job rows are changed with bulk UPDATE statements, which the ORM's
     # before_update hook never sees, so each one stamps updated_at itself. That

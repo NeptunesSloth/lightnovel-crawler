@@ -7,6 +7,7 @@ on:
       - dev
     paths:
       - "lncrawl/server/reader.py"
+      - "lncrawl/server/tools.py"
       - "lncrawl/server/api/**"
       - "lncrawl/services/reader_state.py"
       - "lncrawl/services/auto_update.py"
@@ -19,6 +20,7 @@ on:
       - dev
     paths:
       - "lncrawl/server/reader.py"
+      - "lncrawl/server/tools.py"
       - "lncrawl/server/api/**"
       - "lncrawl/services/reader_state.py"
       - "lncrawl/services/auto_update.py"

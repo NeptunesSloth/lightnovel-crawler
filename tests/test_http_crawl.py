@@ -195,7 +195,7 @@ class HttpCrawlTests(unittest.TestCase):
         source.version = 1
         return source
 
-    def export(self, seconds=2, urls=None):
+    def export(self, seconds=2, urls=None, **options):
         module = "lncrawl.services.scheduler.handlers.export_source"
         job = self.ctx.jobs._create(
             self.user,
@@ -207,6 +207,7 @@ class HttpCrawlTests(unittest.TestCase):
                 "dedupe": False,
                 "auto_tune": False,
                 "requests_per_sec": 100,
+                **options,
             },
         )
         with (
@@ -243,6 +244,13 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(resumed.status, JobStatus.SUCCESS, resumed.error)
         self.assertEqual(resumed.extra["resumed"], 1)
         self.assertEqual(self.counts, previous_requests)
+
+    def test_unattended_library_download_over_real_http(self) -> None:
+        job = self.export(until_done=True, library_only=True, keep_awake=False)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["complete"], 1)
+        self.assertNotIn("export_file", job.extra)
+        self.assertTrue(self.ctx.chapters.completeness("novel").complete)
 
     def test_two_novels_download_at_once_on_their_own_crawlers(self) -> None:
         made = []
