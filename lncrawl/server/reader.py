@@ -130,6 +130,7 @@ _READER_HTML = """<!DOCTYPE html>
     border-radius: 4px; padding: 1px 6px; margin-left: 7px; vertical-align: middle;
   }
   .badge.new { color: #7ee2a8; border-color: #2f5d43; background: #12291c; }
+  .badge.nochap { color: #f0b46a; border-color: #6b4a1f; background: #2a1d0c; }
   .chap {
     display: flex; justify-content: space-between; gap: 10px; align-items: center;
     padding: 9px 6px; border-bottom: 1px solid #20242d; cursor: pointer;
@@ -264,6 +265,7 @@ _READER_HTML = """<!DOCTYPE html>
   <a class="back hidden" id="nav-back">&larr; Back</a>
   <div class="spacer"></div>
   <div id="search-wrap" style="flex:1;max-width:380px"><input id="search" type="text" placeholder="Search title, author, description, tags…" /></div>
+  <a class="back" href="/downloads" target="_blank" id="downloads-link" title="Every download: progress, pause, resume">⤓ Downloads</a>
   <a class="back" href="/tools" target="_blank" id="tools-link">Tools</a>
   <button id="fit-btn" class="hidden" title="Image fit mode">Fit: width</button>
   <button id="aa-btn" class="hidden" title="Reading settings">Aa</button>
@@ -335,9 +337,11 @@ _READER_HTML = """<!DOCTYPE html>
           <button id="lib-backup" title="Save your positions, favorites, bookmarks, ratings, views and shelves to a file">⤓ Back up reading data</button>
           <button id="lib-restore" title="Load a backup made here, adding it to what you have">⤒ Restore a backup</button>
           <input id="lib-restore-file" type="file" accept="application/json,.json" class="hidden" />
-          <button id="lib-select" title="Select novels to delete">☑ Select</button>
+          <button id="lib-getch" class="hidden" title="Download the chapters of every novel that has only its details (added by a discovery)">⬇ Get chapters for details-only novels</button>
+          <button id="lib-select" title="Select novels to delete or download">☑ Select</button>
         </div>
       </details>
+      <button id="lib-getsel" class="hidden">⬇ Get chapters (0)</button>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
       <div id="lib-cats" class="tags"></div>
     </div>
@@ -381,6 +385,7 @@ _READER_HTML = """<!DOCTYPE html>
       <label class="check" title="Show only titles that appear more than once (the same story from different sources); open one and press Merge to combine them"><input id="lib-dupes" type="checkbox" /> Possible duplicates</label>
       <label class="check" title="Hide Boys' Love novels and comics (BL, Yaoi, Shounen Ai, Danmei)"><input id="lib-nobl" type="checkbox" /> Hide BL</label>
       <label class="check" title="Hide machine-translated (MTL) novels"><input id="lib-nomtl" type="checkbox" /> Hide MTL</label>
+      <label class="check" title="Show only novels with no chapters downloaded yet, such as ones a discovery added with just their details"><input id="lib-noch" type="checkbox" /> No chapters yet</label>
       <button id="lib-clear" class="hidden" title="Clear every filter">✕ Clear filters</button>
       <select id="lib-views" title="Apply a saved view"><option value="">Saved views</option></select>
       <button id="lib-view-save" title="Save the current sort and filters under a name">💾 Save view</button>
@@ -435,6 +440,7 @@ _READER_HTML = """<!DOCTYPE html>
     <h2 id="novel-title"></h2>
     <p class="meta muted" id="novel-meta"></p>
     <p class="meta muted" id="novel-completeness" aria-live="polite"></p>
+    <button id="getch-btn" class="hidden" style="margin-bottom:12px">⬇ Download all chapters</button>
     <button id="repair-btn" style="margin-bottom:12px">Retry missing chapters and rebuild EPUB</button>
     <button id="repair-download" class="hidden" style="margin-bottom:12px">Download repaired EPUB</button>
     <p id="repair-status" class="muted" aria-live="polite"></p>
@@ -587,7 +593,7 @@ _READER_HTML = """<!DOCTYPE html>
       lang: els["lib-lang"].value, state: els["lib-state"].value, progress: els["lib-progress"].value,
       favonly: els["lib-favonly"].checked, dupes: els["lib-dupes"].checked, shelf: els["lib-shelf"].value,
       nobl: els["lib-nobl"].checked, len: els["lib-len"].value, lenMin: els["lib-len-min"].value,
-      lenMax: els["lib-len-max"].value, nomtl: els["lib-nomtl"].checked
+      lenMax: els["lib-len-max"].value, nomtl: els["lib-nomtl"].checked, noch: els["lib-noch"].checked
     };
   }
   function applyView(v) {
@@ -603,6 +609,7 @@ _READER_HTML = """<!DOCTYPE html>
     if (lib.shelves) { els["lib-shelf"].value = v.shelf || ""; }
     els["lib-nobl"].checked = !!v.nobl;
     els["lib-nomtl"].checked = !!v.nomtl;
+    els["lib-noch"].checked = !!v.noch;
     els["lib-len"].value = v.len || "";
     els["lib-len-min"].value = v.lenMin || "";
     els["lib-len-max"].value = v.lenMax || "";
@@ -802,7 +809,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-getch","lib-getsel","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -889,6 +896,7 @@ _READER_HTML = """<!DOCTYPE html>
       lib.latest = m || {};
       if (lib.all.length) { renderLibrary(); notifyNew(); }
     }).catch(function () { lib.latest = {}; });
+    loadDownloadedCounts();
     loadShelves();
     fetchAllNovels("").then(function (items) {
       lib.all = items;
@@ -1191,7 +1199,7 @@ _READER_HTML = """<!DOCTYPE html>
     return [els["lib-tag"].value.trim(), els["lib-source"].value, els["lib-lang"].value,
       els["lib-progress"].value, els["lib-shelf"].value, els["lib-state"].value,
       els["lib-favonly"].checked, !!chapterRange(), els["lib-dupes"].checked,
-      els["lib-nobl"].checked, els["lib-nomtl"].checked, lib.cat].filter(Boolean).length;
+      els["lib-nobl"].checked, els["lib-nomtl"].checked, els["lib-noch"].checked, lib.cat].filter(Boolean).length;
   }
   var FILTERS_OPEN = "lncrawl_reader_filters_open";
   function renderFiltersButton() {
@@ -1216,7 +1224,7 @@ _READER_HTML = """<!DOCTYPE html>
   function filtersActive() {
     return !!(els["lib-kind"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
       els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked || !!chapterRange() || !!els["lib-shelf"].value || els["lib-nobl"].checked || els["lib-dupes"].checked ||
-      els["lib-lang"].value || els["lib-nomtl"].checked || lib.cat);
+      els["lib-lang"].value || els["lib-nomtl"].checked || els["lib-noch"].checked || lib.cat);
   }
 
   function renderCategories() {
@@ -1310,6 +1318,7 @@ _READER_HTML = """<!DOCTYPE html>
     }
     if (els["lib-nobl"].checked) items = items.filter(function (n) { return !isBL(n); });
     if (els["lib-nomtl"].checked) items = items.filter(function (n) { return !n.mtl; });
+    if (els["lib-noch"].checked) items = items.filter(detailsOnly);
     els["lib-clear"].classList.toggle("hidden", !filtersActive());
 
     var sort = els["lib-sort"].value;
@@ -1417,6 +1426,11 @@ _READER_HTML = """<!DOCTYPE html>
         sb.textContent = { completed: "Completed", hiatus: "Hiatus", cancelled: "Cancelled" }[st8] || st8;
         h.appendChild(sb);
       }
+      if (detailsOnly(n)) {
+        var xb = document.createElement("span"); xb.className = "badge nochap";
+        xb.textContent = "details only"; xb.title = "No chapters downloaded yet — open it, or use ⋯ More, to get them";
+        h.appendChild(xb);
+      }
       var upd = loadUpdates()[n.id];
       if (upd && upd.found) {
         var nb = document.createElement("span"); nb.className = "badge new";
@@ -1487,7 +1501,71 @@ _READER_HTML = """<!DOCTYPE html>
     var n = Object.keys(lib.sel).length;
     els["lib-del"].textContent = "🗑 Delete (" + n + ")";
     els["lib-del"].classList.toggle("hidden", !lib.manage);
+    els["lib-getsel"].textContent = "⬇ Get chapters (" + n + ")";
+    els["lib-getsel"].classList.toggle("hidden", !lib.manage);
   }
+
+  // ---- Novels with only their details (a discovery adds those) ----
+  // lib.got is {novel_id: chapters downloaded}; until it loads nothing is marked.
+  function loadDownloadedCounts() {
+    return api("/novels/downloaded-counts").then(function (m) {
+      lib.got = m || {};
+      if (lib.all.length) renderLibrary();
+      renderGetChapters();
+    }).catch(function () { lib.got = null; });
+  }
+  function detailsOnly(n) {
+    return !!lib.got && !lib.got[n.id];
+  }
+  function renderGetChapters() {
+    var n = (lib.everything || []).filter(detailsOnly).length;
+    els["lib-getch"].textContent = "⬇ Get chapters for " + n + " details-only novel(s)";
+    els["lib-getch"].classList.toggle("hidden", !n);
+  }
+  // The bulk download engine gets every chapter of these novels: one job per
+  // site, which tunes its speed to the site, waits out blocks and hangs, and
+  // carries on after a restart. Chapters already downloaded are skipped.
+  function getChapters(novels, done) {
+    var urls = novels.map(function (n) { return n.url; }).filter(Boolean);
+    if (!urls.length) { if (done) done(null); return; }
+    api("/job/create/bulk-download", { method: "POST", body: JSON.stringify({ urls: urls }) })
+      .then(function (jobs) {
+        jobs = Array.isArray(jobs) ? jobs : [jobs];
+        alert("Downloading the chapters of " + urls.length + " novel(s) (" + jobs.length + " site(s)). " +
+          "It keeps going on its own, waiting out sites that block it, so you can leave it; " +
+          "novels fill in as they arrive.");
+        if (done) done(jobs[0]);
+        jobs.forEach(function (job) { watchGetChapters(job.id); });
+      })
+      .catch(function (e) { alert("Couldn't start the download: " + e.message); if (done) done(null); });
+  }
+  // refresh the marks while the download runs, so novels lose "details only" as they fill
+  function watchGetChapters(jobId) {
+    api("/job/" + jobId).then(function (job) {
+      loadDownloadedCounts();
+      var st = job ? statusName(job.status) : "";
+      if (st === "PENDING" || st === "RUNNING") setTimeout(function () { watchGetChapters(jobId); }, 15000);
+    }).catch(function () {});
+  }
+  els["lib-getch"].addEventListener("click", function () {
+    var todo = (lib.everything || []).filter(detailsOnly);
+    if (!todo.length) return;
+    if (!confirm("Download every chapter of " + todo.length + " novel(s) that have only their details?")) return;
+    getChapters(todo);
+  });
+  els["lib-getsel"].addEventListener("click", function () {
+    var ids = lib.sel;
+    var todo = (lib.everything || []).filter(function (n) { return ids[n.id]; });
+    if (!todo.length) return;
+    var btn = this; btn.disabled = true;
+    getChapters(todo, function (job) {
+      btn.disabled = false;
+      if (!job) return;
+      lib.manage = false; lib.sel = {};
+      els["lib-select"].textContent = "☑ Select";
+      updateDelBtn(); renderLibrary();
+    });
+  });
   els["lib-select"].addEventListener("click", function () {
     lib.manage = !lib.manage;
     lib.sel = {};
@@ -1548,6 +1626,7 @@ _READER_HTML = """<!DOCTYPE html>
     els[k].addEventListener("input", function () { clearTimeout(tagTimer); tagTimer = setTimeout(renderLibrary, 200); });
   });
   els["lib-nomtl"].addEventListener("change", renderLibrary);
+  els["lib-noch"].addEventListener("change", renderLibrary);
   var tagTimer = null;
   els["lib-tag"].addEventListener("input", function () {
     clearTimeout(tagTimer);
@@ -1557,7 +1636,7 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-kind"].value = ""; els["lib-tag"].value = ""; els["lib-source"].value = "";
     els["lib-lang"].value = ""; els["lib-state"].value = ""; els["lib-progress"].value = ""; els["lib-favonly"].checked = false;
     els["lib-len"].value = ""; els["lib-len-min"].value = ""; els["lib-len-max"].value = "";
-    els["lib-len-custom"].classList.add("hidden"); els["lib-nobl"].checked = false; els["lib-dupes"].checked = false; els["lib-shelf"].value = ""; els["lib-nomtl"].checked = false; lib.cat = "";
+    els["lib-len-custom"].classList.add("hidden"); els["lib-nobl"].checked = false; els["lib-dupes"].checked = false; els["lib-shelf"].value = ""; els["lib-nomtl"].checked = false; els["lib-noch"].checked = false; lib.cat = "";
     renderCategories(); renderLibrary();
   });
 
@@ -2290,6 +2369,14 @@ _READER_HTML = """<!DOCTYPE html>
       els["repair-status"].textContent = "Couldn't start repair: " + error.message;
     });
   });
+  els["getch-btn"].addEventListener("click", function () {
+    if (!current.novel) return;
+    var btn = this; btn.disabled = true;
+    getChapters([current.novel], function (job) {
+      if (!job) { btn.disabled = false; return; }
+      btn.textContent = "⬇ Downloading chapters…";
+    });
+  });
   els["repair-download"].addEventListener("click", function () {
     if (!current.novel) return;
     var novelId = current.novel.id;
@@ -2363,6 +2450,9 @@ _READER_HTML = """<!DOCTYPE html>
     els["repair-btn"].disabled = !!repairJobs[novel.id];
     els["repair-status"].textContent = repairJobs[novel.id] ? "Repair in progress…" : "";
     els["repair-download"].classList.toggle("hidden", !repairedArtifacts[novel.id]);
+    els["getch-btn"].classList.toggle("hidden", !detailsOnly(novel));
+    els["getch-btn"].disabled = false;
+    els["getch-btn"].textContent = "⬇ Download all chapters";
     refreshCompleteness(novel.id);
     renderNovelHeader(novel);
     maybeRefreshInfo(novel);

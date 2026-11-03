@@ -10,6 +10,10 @@ class FetchNovelsRequest(BaseModel):
     full: bool = Field(default=False, description="To fetch all contents")
 
 
+class BulkDownloadRequest(BaseModel):
+    urls: List[HttpUrl] = Field(description="Novels to download every chapter of")
+
+
 class FetchVolumesRequest(BaseModel):
     volumes: List[str] = Field(description="List of volume ids to fetch")
 
@@ -126,6 +130,23 @@ class ExportSourceRequest(BaseModel):
         default=True,
         description="Automatically lower the request rate when blocking is detected and raise it "
         "back when clear, so the run finds the fastest rate that isn't blocked",
+    )
+    until_done: bool = Field(
+        default=True,
+        description="Keep going until everything that can be downloaded is: wait out blocks "
+        "and stalls and try again instead of stopping, so it can be left alone for days",
+    )
+    library_only: bool = Field(
+        default=False,
+        description="Only download into the library (read in the Reader); skip making "
+        "e-books and the zip",
+    )
+    parallel_novels: int = Field(
+        default=2,
+        ge=1,
+        le=4,
+        description="How many novels to download at the same time; they share one request "
+        "rate, so this fills the gaps one novel leaves rather than asking the site for more",
     )
     update_only: bool = Field(
         default=False,

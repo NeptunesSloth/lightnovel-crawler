@@ -13,6 +13,7 @@ _lock = EventLock()
 _queue: Dict[str, Event] = {}
 _users: Dict[str, str] = {}
 _types: Dict[str, JobType] = {}
+_sites: Dict[str, str] = {}  # export job id -> its site, while a worker holds it
 
 
 class JobRunner:
@@ -20,18 +21,21 @@ class JobRunner:
     def run(signal: Event, artifact: bool):
         with _lock.using(signal):
             # get next pending job for a user that doesn't have any running job
+            # exports still held by a worker count as running even once
+            # cancelled, until that worker has actually stopped
+            held = list(_sites.items())
             job = ctx.jobs._pending(
                 artifact,
                 skip_job_ids=_queue.keys(),
                 skip_user_ids=_users.values(),
-                skip_exports=JobType.EXPORT_SOURCE in _types.values(),
+                held_exports=held,
             )
             # if no such job, get next pending job for any existing users
             if not job:
                 job = ctx.jobs._pending(
                     artifact,
                     skip_job_ids=_queue.keys(),
-                    skip_exports=JobType.EXPORT_SOURCE in _types.values(),
+                    held_exports=held,
                 )
             if not job:
                 return  # no pending job
@@ -47,6 +51,8 @@ class JobRunner:
             _queue[job.id] = job_signal
             _users[job.id] = job.user_id
             _types[job.id] = job.type
+            if job.type == JobType.EXPORT_SOURCE:
+                _sites[job.id] = str((job.extra or {}).get("domain") or "")
 
         # process the current job
         try:
@@ -58,6 +64,7 @@ class JobRunner:
                     _queue.pop(job.id).set()
                     _users.pop(job.id, None)
                     _types.pop(job.id, None)
+                    _sites.pop(job.id, None)
 
     @staticmethod
     def cancel(job_id: str, cancel_children: bool = True):

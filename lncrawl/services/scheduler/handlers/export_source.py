@@ -1,3 +1,4 @@
+import errno
 import hashlib
 from html import escape
 import json
@@ -17,11 +18,14 @@ from bs4 import BeautifulSoup
 from typing_extensions import NotRequired
 
 from ....context import ctx
-from ....enums import JobType, OutputFormat
+from ....enums import JobStatus, JobType, OutputFormat
 from ....utils.file_tools import atomic_write, safe_filename
+from ....utils.keep_awake import keep_awake
 from ....utils.notify import notify_finished
+from ....utils.time_utils import current_timestamp
 from ...crawl_engine import CrawlStalledError, crawl_items
 from ._base import AbortedException, BaseHandler, HandlerException
+from .export_pace import RPS_MAX, PaceController, estimate_left, pressure
 
 
 class NovelResult(TypedDict):
@@ -29,6 +33,7 @@ class NovelResult(TypedDict):
     missing: int  # chapters still not downloaded
     duplicate: bool  # already present (same title) from another source
     errors: NotRequired[List[str]]  # bounded samples used for pacing and diagnosis
+    stored: NotRequired[bool]  # chapters are in the library; no ebook was asked for
 
 
 # How many extra passes to make over novels that failed or came out incomplete,
@@ -61,9 +66,6 @@ ADAPTIVE_STEP = 8.0  # seconds added per failed novel (doubled when it looks thr
 ADAPTIVE_MAX = 60.0  # never wait more than this between novels
 ADAPTIVE_DECAY = 0.7  # multiply the delay by this after each success
 
-# Auto-tuning of the request rate (requests/second). When blocking is detected the
-# rate is halved; after a streak of clean novels it creeps back up. Bounds keep it
-# both effective and from thrashing.
 # How many chapters/images may be in flight at once, whether or not a rate was
 # asked for. The rate is held by the task queue's limiter, which hands out send
 # slots from one shared clock, so these workers overlap each other's latency
@@ -75,14 +77,38 @@ ADAPTIVE_DECAY = 0.7  # multiply the delay by this after each success
 # so threads wake together — about 2x over the cap when measured). The pacer
 # still widens by itself when a site starts refusing, underneath all this.
 EXPORT_WORKERS = 4
-RPS_MIN = 0.2  # slowest auto-tuned rate (1 request / 5s)
-RPS_MAX = 5.0  # fastest auto-tuned rate
-RPS_RAISE_AFTER = 3  # consecutive clean novels before nudging the rate up
+
+# How many novels are downloaded at the same time (extra["parallel_novels"]).
+# They share the one request rate, so this does not ask the site for more; it
+# fills the gaps one novel leaves while its details page or images load.
+DEFAULT_PARALLEL_NOVELS = 2
+MAX_PARALLEL_NOVELS = 4
 
 # Defensive idle guard for failures outside normal per-item request budgets.
 # The engine drains only a bounded number of requests and stops scheduling a
 # novel after repeated failures; partial content remains resumable.
 STALL_TIMEOUT = 120.0  # seconds with no completion before giving up on a novel
+
+# "Until done" mode, for a job left alone for days. Instead of stopping when a
+# site blocks it or its downloads hang, it waits and tries again, longer each
+# time nothing improves, and only finishes once rounds stop getting anywhere.
+# Waits after rounds with no progress: 10 min, 30 min, 1, 2, 4 and 8 hours, so a
+# site that is down or blocking for most of a day is waited out. These long
+# waits only happen once nothing else is left to download.
+COOLDOWNS = (600.0, 1800.0, 3600.0, 7200.0, 14400.0, 28800.0)
+# Passes a novel may go without improving before it is kept as it is; one more
+# than the waits, so every novel is tried again after the longest one.
+STUCK_PASSES = len(COOLDOWNS) + 1
+MAX_STALL_RECOVERIES = 12  # fresh downloaders after hangs, before calling it broken
+STALL_COOLDOWN = 300.0  # wait after replacing a hung lane's downloaders
+DISK_FULL_WAIT = 900.0  # re-check free space this often while the disk is full
+DISCOVERY_MAX_MINUTES = 180.0  # longest a continued discovery round may run
+HEARTBEAT = 60.0  # a waiting job still updates itself this often
+MAX_RESTARTS = 5  # fresh starts after an unexpected error, before reporting it
+RESTART_WAIT = 120.0  # seconds before a fresh start (times the number of restarts)
+
+# Library-only runs keep no ebook; this stands in for one in the bookkeeping.
+_IN_LIBRARY = Path("<library>")
 
 
 class ExportStalledError(HandlerException):
@@ -103,24 +129,6 @@ def _save_stall_diagnostics(job_id: str) -> str:
             lines.extend(traceback.format_list(traceback.extract_stack(frame)))
     ctx.files.save_text(relative, "".join(lines), compress=False)
     return relative
-
-
-# Substrings in a failure reason that suggest the source is rate-limiting/blocking
-# us (as opposed to a parse error), so we should back off harder.
-_THROTTLE_HINTS = (
-    "429",
-    "403",
-    "too many",
-    "rate limit",
-    "ratelimit",
-    "timeout",
-    "timed out",
-    "connection",
-    "blocked",
-    "captcha",
-    "cloudflare",
-    "forbidden",
-)
 
 
 _crash_logged = False
@@ -151,12 +159,6 @@ def _norm_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
 
 
-def _looks_throttled(reason: str) -> bool:
-    """Whether a failure reason looks like rate-limiting/blocking, not a parse bug."""
-    low = (reason or "").lower()
-    return any(hint in low for hint in _THROTTLE_HINTS)
-
-
 def _classify_error(reason: str) -> str:
     """Map a raw failure reason to a short, human label for the live UI."""
     low = (reason or "").lower()
@@ -175,16 +177,35 @@ def _classify_error(reason: str) -> str:
     return "error"
 
 
-def _apply_rate(crawler, rps: float) -> None:
-    """Set the rate this source is downloaded at. 0 means no cap.
+def _run_lanes(count: int, lane: Callable[[int], None]) -> None:
+    """Run ``lane(0..count-1)`` side by side and wait for all of them.
 
-    Goes to the queue's limiter, which admits one call per interval from a clock
-    shared by every worker — so the pool stays several deep while the cap holds.
+    One lane runs right here. When a lane fails the others finish the novel they
+    are on and stop; the most telling error is raised (a stall or a real failure
+    over the plain "stopped" the other lanes see once the job is cancelled).
     """
-    crawler.taskman.init_executor(
-        workers=EXPORT_WORKERS,
-        ratelimit=rps if rps and rps > 0 else None,
-    )
+    if count <= 1:
+        lane(0)
+        return
+    errors: List[BaseException] = []
+
+    def _run(index: int) -> None:
+        try:
+            lane(index)
+        except BaseException as error:  # handed to the caller below
+            errors.append(error)
+
+    threads = [
+        threading.Thread(target=_run, args=(index,), name=f"export-lane-{index}", daemon=True)
+        for index in range(count)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if errors:
+        errors.sort(key=lambda error: isinstance(error, AbortedException))
+        raise errors[0]
 
 
 def _select_novels(urls: List[str], limit: Optional[int] = None) -> List[str]:
@@ -399,7 +420,134 @@ class ExportSourceHandler(BaseHandler):
     result path is stored in ``job.extra["export_file"]``.
     """
 
+    _extra_lock = threading.Lock()
+    _notified = False
+
+    def _set_extra(self, **values) -> None:
+        # Lanes write the job's extra at the same time; it is read, merged and
+        # written back, so two unguarded writes would lose one of them.
+        with self._extra_lock:
+            super()._set_extra(**values)
+
+    def _replace_lane(self, lanes: List, lane: int, url: str) -> None:
+        """Swap a lane's crawler for a fresh one, abandoning its hung requests."""
+        old = lanes[lane]
+        old.taskman.use_limiter(None)  # the limiter is shared; closing must not stop it
+        try:
+            old.close()
+        except Exception as error:
+            ctx.logger.debug(f"Closing a hung downloader failed: {error}")
+        lanes[lane] = self._new_lane(url)
+
+    def _new_lane(self, url: str):
+        """Another crawler for downloading a second novel at once, on the shared rate."""
+        lane = ctx.sources.init_crawler(url, workers=EXPORT_WORKERS)
+        lane.scraper.signal = self.signal
+        lane.taskman.signal = self.signal
+        lane.taskman.init_executor(workers=EXPORT_WORKERS, ratelimit=None)
+        self.pace.attach(lane.taskman)
+        return lane
+
+    def _discover(
+        self, crawler, domain: str, budget: float, polite: bool, use_sitemap: bool
+    ) -> Tuple[List[str], bool]:
+        """Find the site's novels within ``budget`` seconds; (urls, stopped by the cap).
+
+        A site that turns up nothing before the cap is almost certainly blocking
+        us. An "until done" job waits and tries again (longer waits each time)
+        rather than giving up; otherwise that is a clear failure.
+        """
+        until_done = bool(self.job.extra.get("until_done"))
+        for attempt in range(len(COOLDOWNS) + 1):
+            # drive the progress bar with search progress so a slow site isn't a silent 0%
+            def _on_discover(done: int, seeds: int, found: int) -> None:
+                self._set_extra(phase="discovering", found=found)
+                self._set_progress(done, seeds)
+
+            started = monotonic()
+            urls = ctx.crawler.discover_novels(
+                self.user.id,
+                domain,
+                self.signal,
+                custom=crawler,
+                on_progress=_on_discover,
+                time_budget=budget,
+                delay=POLITE_DELAY if polite else 0,
+                use_sitemap=use_sitemap,
+            )
+            if self.signal.is_set():
+                raise AbortedException()
+            # Discovery stopping on its time cap is why an export comes back with
+            # only part of a source; record it so the UI can say so.
+            capped = monotonic() - started >= budget
+            self._set_extra(phase="downloading", discovered=len(urls), discovery_capped=capped)
+            if urls or not capped:
+                if capped:
+                    ctx.logger.warn(
+                        f"Discovery on {domain} stopped at its {round(budget / 60)} minute cap "
+                        f"with {len(urls)} novel(s)"
+                        + ("; it carries on once these are downloaded" if until_done else "")
+                    )
+                return urls, capped
+            if not until_done or attempt >= len(COOLDOWNS):
+                break
+            self._wait(COOLDOWNS[attempt], "cooling-down", cool_reason="blocked-discovery")
+        minutes = round(budget / 60)
+        raise HandlerException(
+            f"Discovery found no novels on '{domain}' within {minutes} minutes — "
+            "the source is likely throttling or blocking automated requests. "
+            "Try a smaller limit, enable polite mode, or use a different source."
+        )
+
+    def _wait(self, seconds: float, phase: str, **extra) -> None:
+        """Wait ``seconds``, showing why and when it resumes, and stay alive.
+
+        The job's activity time is refreshed every minute, so a long cool-down
+        is never mistaken for a stuck job and cancelled.
+        """
+        resume_at = current_timestamp() + int(seconds * 1000)
+        self._set_extra(phase=phase, resume_at=resume_at, **extra)
+        end = monotonic() + seconds
+        while True:
+            left = end - monotonic()
+            if left <= 0:
+                break
+            if self.signal.wait(min(HEARTBEAT, left)):
+                raise AbortedException()
+            self._set_extra(phase=phase, resume_at=resume_at)
+        self._set_extra(phase="downloading", resume_at=None)
+
+    def process(self) -> bool:
+        until_done = bool((self.job.extra or {}).get("until_done"))
+        with keep_awake(enabled=bool((self.job.extra or {}).get("keep_awake", until_done))):
+            return self._process_and_notify()
+
+    def _process_and_notify(self) -> bool:
+        ok = super().process()
+        if not ok and not self._notified:
+            try:
+                status = ctx.jobs.get(self.job.id).status
+            except Exception:
+                status = None
+            if status not in (JobStatus.FAILED, JobStatus.PAUSED):
+                extra = self.job.extra or {}
+                done = extra.get("done_novels") or self.job.done or 0
+                total = extra.get("total_novels") or self.job.total or 0
+                self._notify_finish(
+                    f"{self.job.extra.get('domain')}: export stopped after {done} of "
+                    f"{total} novel(s). Resume it to carry on where it left off.",
+                    title="Lightnovel Crawler — export stopped",
+                )
+        return ok
+
     def _set_failure(self, error: str = "", err_source: Optional[Exception] = None) -> bool:
+        if not self._notified:
+            first = (error or "").strip().splitlines()
+            self._notify_finish(
+                f"{self.job.extra.get('domain')}: export failed — "
+                f"{first[0] if first else 'unknown error'}",
+                title="Lightnovel Crawler — export failed",
+            )
         # Expected watchdog stops get a short message; worker stacks are saved
         # separately for diagnosis without filling the Activity view.
         if isinstance(err_source, ExportStalledError):
@@ -411,6 +559,34 @@ class ExportSourceHandler(BaseHandler):
         return job.type == JobType.EXPORT_SOURCE
 
     def run(self) -> None:
+        """Run the export; an "until done" one restarts itself after a surprise.
+
+        Something unexpected (a database hiccup, a source bug) would otherwise
+        end a job meant to run for days. It waits a little and starts again
+        from its checkpoints instead, a few times, before reporting the error.
+        Stopping it, and the export's own deliberate failures, still end it.
+        """
+        restarts = 0
+        while True:
+            try:
+                self._run_once()
+                return
+            except (AbortedException, HandlerException):
+                raise
+            except Exception as error:
+                if not self.job.extra.get("until_done") or restarts >= MAX_RESTARTS:
+                    raise
+                restarts += 1
+                ctx.logger.warn(
+                    f"Export hit an unexpected error ({type(error).__name__}: {error}); "
+                    f"restarting from its checkpoint ({restarts}/{MAX_RESTARTS})"
+                )
+                self._set_extra(
+                    restarts=restarts, last_restart_error=f"{type(error).__name__}: {error}"[:200]
+                )
+                self._wait(RESTART_WAIT * restarts, "cooling-down", cool_reason="restarting")
+
+    def _run_once(self) -> None:
         domain = self.job.extra.get("domain")
         if not domain:
             raise HandlerException("Source domain is not specified")
@@ -424,6 +600,8 @@ class ExportSourceHandler(BaseHandler):
         discovery_timeout = float(self.job.extra.get("discovery_minutes", 10)) * 60
         max_chapters = int(self.job.extra.get("max_chapters", 0))
         resume = bool(self.job.extra.get("resume", True))
+        until_done = bool(self.job.extra.get("until_done", False))
+        library_only = bool(self.job.extra.get("library_only", False))
         # Sitemap mining is what lifts discovery past the one page of results a
         # source's search returns; only turned off when a site's sitemap is junk.
         use_sitemap = bool(self.job.extra.get("use_sitemap", True))
@@ -453,7 +631,7 @@ class ExportSourceHandler(BaseHandler):
         self._set_running()
 
         # One crawler session reused for discovery and every download. The scraper
-        # is left unpaced on purpose — `_apply_rate` puts this run's cap on the
+        # is left unpaced on purpose — the pace controller puts this run's cap on the
         # queue instead, where it can be held exactly with several requests in
         # flight. Pacing is the anti-bot measure too, the fix for "ch 0/N" on
         # Cloudflare-protected sources where unthrottled timing gets the IP
@@ -461,7 +639,17 @@ class ExportSourceHandler(BaseHandler):
         crawler = ctx.sources.init_crawler(source.url, workers=EXPORT_WORKERS)
         crawler.scraper.signal = self.signal
         crawler.taskman.signal = self.signal
-        _apply_rate(crawler, requests_per_sec)
+        crawler.taskman.init_executor(workers=EXPORT_WORKERS, ratelimit=None)
+        # One controller holds the rate for the whole run, for every lane, and
+        # moves it as each chapter comes back (see export_pace).
+        self.pace = PaceController(
+            requests_per_sec,
+            auto=auto_tune,
+            ceiling=explicit_rps if explicit_rps > 0 else RPS_MAX,
+            on_change=lambda rate: self._set_extra(requests_per_sec=rate),
+        )
+        self.pace.attach(crawler.taskman)
+        lanes: List = [crawler]
         if requests_per_sec > 0:
             ctx.logger.info(
                 f"Export capped at {requests_per_sec} req/s on {domain} "
@@ -471,6 +659,12 @@ class ExportSourceHandler(BaseHandler):
             ctx.logger.info(f"Export uncapped on {domain} ({EXPORT_WORKERS} in flight)")
         try:
             selected = self.job.extra.get("urls")
+            # Whether this job found its own novels (so it may look for more
+            # later) and whether that search has seen the whole catalogue.
+            found_here = bool(self.job.extra.get("found_by_discovery"))
+            discovery_done = bool(self.job.extra.get("discovery_done", not found_here))
+            budget = float(self.job.extra.get("next_discovery_minutes") or 0) * 60
+            budget = budget or discovery_timeout
             if selected:
                 # specific novels were picked — export exactly those, so the
                 # limit (a cap on how much of a catalogue to take) does not
@@ -478,55 +672,20 @@ class ExportSourceHandler(BaseHandler):
                 # the resume path: the list persisted below was already capped.
                 urls = _select_novels(list(selected))
             else:
-                # Discovery runs before any download; drive the progress bar with
-                # seed progress so a slow/throttled source isn't a silent 0%.
-                def _on_discover(done: int, seeds: int, found: int) -> None:
-                    self._set_extra(phase="discovering", found=found)
-                    self._set_progress(done, seeds)
-
-                discover_start = monotonic()
-                urls = ctx.crawler.discover_novels(
-                    self.user.id,
-                    domain,
-                    self.signal,
-                    custom=crawler,
-                    on_progress=_on_discover,
-                    time_budget=discovery_timeout,
-                    delay=POLITE_DELAY if polite else 0,
-                    use_sitemap=use_sitemap,
+                urls, capped = self._discover(
+                    crawler, domain, discovery_timeout, polite, use_sitemap
                 )
-                # Discovery stopping on its time cap is why an export comes back
-                # with only part of a source; record it so the UI can say so
-                # instead of leaving a short catalogue unexplained.
-                discovery_capped = monotonic() - discover_start >= discovery_timeout
-                self._set_extra(
-                    phase="downloading",
-                    discovered=len(urls),
-                    discovery_capped=discovery_capped,
-                )
-                if discovery_capped and urls:
-                    ctx.logger.warn(
-                        f"Discovery on {domain} stopped at its "
-                        f"{round(discovery_timeout / 60)} minute cap with {len(urls)} novel(s); "
-                        "raise 'Max discovery (min)' to enumerate more of the catalogue"
-                    )
-                # If discovery hit its time cap and turned up nothing, the source
-                # is almost certainly throttling/blocking — fail fast and clearly.
-                if not urls and discovery_capped:
-                    minutes = round(discovery_timeout / 60)
-                    raise HandlerException(
-                        f"Discovery found no novels on '{domain}' within {minutes} minutes — "
-                        "the source is likely throttling or blocking automated requests. "
-                        "Try a smaller limit, enable polite mode, or use a different source."
-                    )
+                found_here = True
                 urls = _select_novels(urls, limit)
+                discovery_done = not capped or bool(limit and len(urls) >= limit)
+                budget = discovery_timeout
             if not urls:
                 self._set_extra(exported=0, failed=0, total_novels=0)
                 return
 
             # Replay copies job extras: persist discovery once so Resume does
             # not enumerate a different catalogue or reset its selection.
-            self._set_extra(urls=urls)
+            self._set_extra(urls=urls, found_by_discovery=found_here, discovery_done=discovery_done)
 
             total = len(urls)
             self._set_progress(0, total)
@@ -608,18 +767,7 @@ class ExportSourceHandler(BaseHandler):
 
             # Adaptive pacing between novels (see ADAPTIVE_* constants).
             floor_delay = POLITE_DELAY if polite else 0.0
-            adaptive_delay = floor_delay
-
-            # Auto-tuned request rate (req/s). Starts at the configured rate (0 =
-            # unthrottled, multi-worker) and is adjusted between novels: halved when
-            # blocking is seen, nudged up after a clean streak.
-            tuned_rps = requests_per_sec
-            applied_rps = requests_per_sec
-            success_streak = 0
-
-            # Cloudflare clearance is solved in a browser at most once per run, the
-            # first time a novel is blocked, then reused for every HTTP request.
-            warmed_up = False
+            pacing = {"delay": floor_delay}
 
             # Per-novel missing-chapter count from the previous pass. Used to stop
             # retrying a novel that isn't improving: if a whole pass fills in no new
@@ -629,35 +777,52 @@ class ExportSourceHandler(BaseHandler):
             # keeps going; one whose count holds steady is abandoned as partial.
             prev_missing: Dict[str, int] = {}
 
-            # initial pass + retry rounds over whatever still isn't complete
-            for attempt in range(retries + 1):
-                if not pending:
-                    break
-                if attempt > 0:
-                    ctx.logger.info(
-                        f"Export retry {attempt}/{retries}: {len(pending)} novel(s) left on {domain}"
-                    )
-                    # back off before each retry round so a throttled/blocked
-                    # source has time to recover instead of failing everything again
-                    backoff = min(RETRY_BACKOFF * attempt, MAX_RETRY_BACKOFF)
-                    self._set_extra(phase="retry-waiting", retry=attempt)
-                    if self.signal.wait(backoff):
-                        raise AbortedException()
-                    self._set_extra(phase="downloading")
-                next_pending: List[str] = []
-                for novel_url in pending:
-                    if self.signal.is_set():
-                        raise AbortedException()
+            # Several novels are downloaded at once, each lane with its own crawler
+            # (a source keeps per-novel state on its crawler while reading a novel's
+            # page) but all of them sending through the one shared rate.
+            parallel = int(self.job.extra.get("parallel_novels") or DEFAULT_PARALLEL_NOVELS)
+            parallel = max(1, min(MAX_PARALLEL_NOVELS, parallel))
+            book = threading.Lock()  # guards the bookkeeping shared by the lanes
+            active: Dict[int, Dict] = {}  # lane -> what it is downloading now
+            needed: List[int] = []  # chapters each started novel still needed
+            warmed: Set[int] = set()  # lanes that solved a Cloudflare check already
+            stuck: Dict[str, int] = {}  # passes in a row a novel did not improve
+            stalls = [0]  # times downloads stopped responding
+            queue: List[str] = []
+            last_eta = [0.0]
 
-                    # remember the title for live failure reporting (set once known)
-                    cur_title: List[str] = [""]
-                    cached_chapters: List[Optional[int]] = [None]
+            def _publish_active(force: bool = False) -> None:
+                # called with `book` held
+                now = monotonic()
+                if not force and now - last_eta[0] < 5:
+                    return
+                last_eta[0] = now
+                pairs = [(a["done"], a["total"]) for a in active.values()]
+                average = sum(needed) / len(needed) if needed else 0.0
+                eta = estimate_left(self.pace.pace(), pairs, len(queue), average)
+                self._set_extra(
+                    active_novels=[
+                        {"title": a["title"], "done": a["done"], "total": a["total"]}
+                        for a in active.values()
+                    ],
+                    eta_seconds=eta,
+                    chapters_per_min=round(self.pace.pace() * 60, 1),
+                )
 
-                    # live status so a long run isn't a misleading 0%
-                    def _on_novel(title: str, c_done: int, c_total: int) -> None:
+            def _process(novel_url: str, lane: int, next_pending: List[str]) -> None:
+                lane_crawler = lanes[lane]
+                # remember the title for live failure reporting (set once known)
+                cur_title: List[str] = [""]
+                cached_chapters: List[Optional[int]] = [None]
+
+                # live status so a long run isn't a misleading 0%
+                def _on_novel(title: str, c_done: int, c_total: int) -> None:
+                    with book:
                         if cached_chapters[0] is None:
                             cached_chapters[0] = c_done
+                            needed.append(c_total - c_done)
                         cur_title[0] = title
+                        active[lane] = {"title": title, "done": c_done, "total": c_total}
                         self._set_extra(
                             phase="downloading",
                             current_title=title,
@@ -667,29 +832,38 @@ class ExportSourceHandler(BaseHandler):
                             done_novels=len(complete) + len(partial) + len(skipped),
                             total_novels=total,
                         )
+                        _publish_active()
 
-                    def _on_images(i_done: int, i_total: int) -> None:
-                        self._set_extra(
-                            phase="downloading-images",
-                            current_images=i_done,
-                            current_total_images=i_total,
-                        )
+                def _on_images(i_done: int, i_total: int) -> None:
+                    self._set_extra(
+                        phase="downloading-images",
+                        current_images=i_done,
+                        current_total_images=i_total,
+                    )
 
-                    result: NovelResult
-                    try:
-                        result = _download_novel(
-                            crawler,
-                            self.user.id,
-                            novel_url,
-                            fmt,
-                            self.signal,
-                            seen_titles,
-                            dedupe,
-                            max_chapters,
-                            _on_novel,
-                            _on_images,
-                        )
-                    except ExportStalledError:
+                result: NovelResult
+                failure = ""
+                try:
+                    result = _download_novel(
+                        lane_crawler,
+                        self.user.id,
+                        novel_url,
+                        fmt,
+                        self.signal,
+                        seen_titles,
+                        dedupe,
+                        max_chapters,
+                        _on_novel,
+                        _on_images,
+                        self.pace.report,
+                        build=not library_only,
+                    )
+                except ExportStalledError:
+                    with book:
+                        active.pop(lane, None)
+                        stalls[0] += 1
+                        first = stalls[0] == 1
+                    if first or not until_done or stalls[0] > MAX_STALL_RECOVERIES:
                         try:
                             diagnostic = _save_stall_diagnostics(self.job.id)
                             self._set_extra(
@@ -699,27 +873,57 @@ class ExportSourceHandler(BaseHandler):
                             ctx.logger.debug(
                                 f"Could not save stall diagnostics: {diagnostic_error}"
                             )
+                    if not until_done or stalls[0] > MAX_STALL_RECOVERIES:
+                        self.signal.set()  # stop the other lanes too; checkpoints are kept
                         raise
-                    except AbortedException:
-                        raise
-                    except Exception as e:
-                        # Append where it was raised (file:line) so the live UI
-                        # pinpoints the source instead of just the message — and
-                        # stash the full traceback for the crash log below.
-                        tb = e.__traceback__
-                        frames = traceback.extract_tb(tb)
-                        where = ""
-                        if frames:
-                            last = frames[-1]
-                            fname = os.path.basename(last.filename)
-                            where = f" @ {fname}:{last.lineno}"
-                        last_error[novel_url] = f"{type(e).__name__}: {e}{where}"[:200]
-                        _log_crash(novel_url, e)
-                        ctx.logger.debug(f"Export attempt failed for {novel_url}: {e}")
-                        result = {"file": None, "missing": 1, "duplicate": False}
+                    # Requests stopped coming back. Give this lane fresh
+                    # downloaders (the hung ones are abandoned), let the site rest,
+                    # and put the novel back for the next round.
+                    ctx.logger.warn(
+                        f"Downloads stopped responding on {cur_title[0] or novel_url}; "
+                        f"starting fresh downloaders ({stalls[0]}/{MAX_STALL_RECOVERIES})"
+                    )
+                    self._replace_lane(lanes, lane, source.url)
+                    with book:
+                        next_pending.append(novel_url)
+                        last_error[novel_url] = "Downloads stopped responding; will try again"
+                    self._set_extra(stall_recoveries=stalls[0])
+                    self._wait(STALL_COOLDOWN, "cooling-down", cool_reason="stalled")
+                    return
+                except AbortedException:
+                    raise
+                except Exception as e:
+                    if until_done and isinstance(e, OSError) and e.errno == errno.ENOSPC:
+                        # The disk is full. Nothing downloaded is lost; wait for
+                        # space to be freed and try this novel again.
+                        with book:
+                            active.pop(lane, None)
+                            next_pending.append(novel_url)
+                        ctx.logger.warn("The disk is full; waiting for free space to continue")
+                        self._wait(DISK_FULL_WAIT, "disk-full")
+                        return
+                    # Append where it was raised (file:line) so the live UI
+                    # pinpoints the source instead of just the message — and
+                    # stash the full traceback for the crash log below.
+                    frames = traceback.extract_tb(e.__traceback__)
+                    where = ""
+                    if frames:
+                        last = frames[-1]
+                        where = f" @ {os.path.basename(last.filename)}:{last.lineno}"
+                    failure = f"{type(e).__name__}: {e}{where}"[:200]
+                    _log_crash(novel_url, e)
+                    ctx.logger.debug(f"Export attempt failed for {novel_url}: {e}")
+                    result = {"file": None, "missing": 1, "duplicate": False}
 
+                warm_up = False
+                with book:
+                    active.pop(lane, None)
+                    if failure:
+                        last_error[novel_url] = failure
                     file = result["file"]
-                    if file is not None:
+                    if file is None and result.get("stored"):
+                        file = _IN_LIBRARY  # in the library; no ebook was asked for
+                    if file is not None and file is not _IN_LIBRARY:
                         manifest[novel_url] = {
                             "file": str(file),
                             "missing": result["missing"],
@@ -734,13 +938,7 @@ class ExportSourceHandler(BaseHandler):
                         complete[novel_url] = file
                         partial.pop(novel_url, None)
                         last_error.pop(novel_url, None)
-                        adaptive_delay = max(floor_delay, adaptive_delay * ADAPTIVE_DECAY)
-                        # a clean novel: let auto-tune creep the rate back up
-                        if auto_tune and tuned_rps > 0:
-                            success_streak += 1
-                            if success_streak >= RPS_RAISE_AFTER:
-                                success_streak = 0
-                                tuned_rps = min(RPS_MAX, tuned_rps + 0.5)
+                        pacing["delay"] = max(floor_delay, pacing["delay"] * ADAPTIVE_DECAY)
                     else:
                         give_up = False
                         if file is not None:
@@ -758,6 +956,12 @@ class ExportSourceHandler(BaseHandler):
                             prev = prev_missing.get(novel_url)
                             prev_missing[novel_url] = result["missing"]
                             if prev is not None and result["missing"] >= prev:
+                                stuck[novel_url] = stuck.get(novel_url, 0) + 1
+                            else:
+                                stuck[novel_url] = 0
+                            # until done, a novel gets several chances (with the
+                            # waits between rounds) before it is kept as it is
+                            if stuck[novel_url] >= (STUCK_PASSES if until_done else 1):
                                 give_up = True
                                 ctx.logger.info(
                                     f"No progress on {novel_url} "
@@ -768,14 +972,15 @@ class ExportSourceHandler(BaseHandler):
                         if not give_up:
                             next_pending.append(novel_url)
                         reason_text = last_error[novel_url]
-                        throttled = _looks_throttled(reason_text)
-                        # a failure: slow down (harder if it looks like throttling)
-                        bump = ADAPTIVE_STEP * (2 if throttled else 1)
-                        adaptive_delay = min(ADAPTIVE_MAX, max(adaptive_delay, floor_delay) + bump)
-                        # auto-tune the request rate down when blocking is detected
-                        if auto_tune and throttled:
-                            success_streak = 0
-                            tuned_rps = 1.0 if tuned_rps <= 0 else max(RPS_MIN, tuned_rps / 2)
+                        kind = pressure(reason_text)
+                        # a failure: slow down (harder if the site refused us). A
+                        # partial novel's chapters already told the controller.
+                        if file is None and kind:
+                            self.pace.report(reason=reason_text)
+                        bump = ADAPTIVE_STEP * (2 if kind == "refused" else 1)
+                        pacing["delay"] = min(
+                            ADAPTIVE_MAX, max(pacing["delay"], floor_delay) + bump
+                        )
                         # surface the reason live so the UI shows *why*, not just "ch 0"
                         reason = _classify_error(reason_text)
                         self._set_extra(
@@ -783,43 +988,131 @@ class ExportSourceHandler(BaseHandler):
                             last_fail_reason=reason,
                             last_fail_detail=reason_text[:140],
                         )
-                        # First time we hit anti-bot blocking, solve the Cloudflare
-                        # challenge once in a browser and reuse the clearance for the
-                        # rest of the run (the remaining novels then ride the cleared
-                        # HTTP session). Best-effort; no-op without a browser.
-                        warm = getattr(crawler, "warm_up_clearance", None)
-                        if not warmed_up and reason in ("blocked", "anti-bot") and callable(warm):
-                            warmed_up = True
-                            # browser warm-up is best-effort; never let it abort the run
-                            try:
-                                self._set_extra(phase="solving-challenge")
-                                cleared = warm(source.url, self.signal)
-                                self._set_extra(phase="downloading", browser_cleared=bool(cleared))
-                            except Exception as e:
-                                ctx.logger.warn(f"Cloudflare warm-up errored: {e}")
+                        # First time a lane hits anti-bot blocking, solve the
+                        # Cloudflare challenge once in a browser and reuse the
+                        # clearance for the rest of the run. Best-effort.
+                        if lane not in warmed and reason in ("blocked", "anti-bot"):
+                            warmed.add(lane)
+                            warm_up = True
                     self._set_progress(len(complete) + len(partial) + len(skipped), total)
+                    _publish_active(force=True)
 
-                    # apply any auto-tuned rate change before the next novel (safe
-                    # here — no download futures are in flight between novels)
-                    if auto_tune and tuned_rps != applied_rps:
-                        _apply_rate(crawler, tuned_rps)
-                        applied_rps = tuned_rps
-                        self._set_extra(requests_per_sec=round(tuned_rps, 2))
+                warm = getattr(lane_crawler, "warm_up_clearance", None)
+                if warm_up and callable(warm):
+                    # browser warm-up is best-effort; never let it abort the run
+                    try:
+                        self._set_extra(phase="solving-challenge")
+                        cleared = warm(source.url, self.signal)
+                        self._set_extra(phase="downloading", browser_cleared=bool(cleared))
+                    except Exception as e:
+                        ctx.logger.warn(f"Cloudflare warm-up errored: {e}")
 
-                    # pace the next novel: adaptive delay climbs on failures and
-                    # decays on success, so a run auto-throttles when a site pushes
-                    # back. With polite mode off and no failures this is 0 (no wait).
-                    if next_pending and adaptive_delay > 0:
+            def _lane(lane: int, next_pending: List[str]) -> None:
+                while True:
+                    if self.signal.is_set():
+                        raise AbortedException()
+                    with book:
+                        if not queue:
+                            return
+                        novel_url = queue.pop(0)
+                    _process(novel_url, lane, next_pending)
+                    # pace the next novel: the delay climbs on failures and decays
+                    # on success, so a run eases off when a site pushes back. With
+                    # polite mode off and no failures this is 0 (no wait).
+                    delay = pacing["delay"]
+                    if queue and delay > 0:
                         self._set_extra(
-                            phase="waiting-between-novels", adaptive_delay=round(adaptive_delay, 1)
+                            phase="waiting-between-novels", adaptive_delay=round(delay, 1)
                         )
-                        if self.signal.wait(adaptive_delay):
+                        if self.signal.wait(delay):
                             raise AbortedException()
-                pending = next_pending
+
+            def _score() -> Tuple[int, int, int]:
+                # what a round can improve: novels finished, chapters still
+                # missing in partial ones, novels with nothing at all yet
+                return (
+                    len(complete) + len(skipped),
+                    sum(prev_missing.get(url, 0) for url in partial),
+                    len(last_error),
+                )
+
+            def _run_passes(pending: List[str]) -> List[str]:
+                """The first pass and the retry rounds; returns what is still left.
+
+                Normally a fixed number of retry rounds. "Until done" keeps going
+                while rounds make progress, and after a round that made none waits
+                (10 minutes, rising to 8 hours) before trying again, so a site that
+                blocks for a while is waited out instead of given up on.
+                """
+                attempt = 0
+                quiet = 0  # rounds in a row that improved nothing
+                while pending:
+                    if attempt > 0:
+                        if until_done:
+                            if quiet > len(COOLDOWNS):
+                                break
+                            wait = COOLDOWNS[quiet - 1] if quiet else RETRY_BACKOFF
+                            ctx.logger.info(
+                                f"Export round {attempt + 1}: {len(pending)} novel(s) left on "
+                                f"{domain}; next try in {round(wait / 60)} min"
+                            )
+                            self._wait(wait, "retry-waiting", retry=attempt, quiet_rounds=quiet)
+                        else:
+                            if attempt > retries:
+                                break
+                            ctx.logger.info(
+                                f"Export retry {attempt}/{retries}: {len(pending)} novel(s) "
+                                f"left on {domain}"
+                            )
+                            # back off before each retry round so a throttled/blocked
+                            # source has time to recover instead of failing again
+                            backoff = min(RETRY_BACKOFF * attempt, MAX_RETRY_BACKOFF)
+                            self._wait(backoff, "retry-waiting", retry=attempt)
+                    before = _score()
+                    next_pending: List[str] = []
+                    queue[:] = pending
+                    while len(lanes) < min(parallel, len(pending)):
+                        lanes.append(self._new_lane(source.url))
+                    _run_lanes(min(parallel, len(pending)), lambda lane: _lane(lane, next_pending))
+                    # keep the original order for the next pass and the summary
+                    order = {url: index for index, url in enumerate(urls)}
+                    pending = sorted(next_pending, key=lambda url: order.get(url, 0))
+                    after = _score()
+                    improved = after[0] > before[0] or after[1] < before[1] or after[2] < before[2]
+                    quiet = 0 if improved else quiet + 1
+                    attempt += 1
+                return pending
+
+            pending = _run_passes(pending)
+
+            # A discovery that stopped at its time cap saw only part of the site.
+            # Once those are downloaded, an "until done" job looks again with
+            # twice the time (up to 3 hours) and downloads whatever is new,
+            # until a look finishes inside its time or turns up nothing new.
+            while until_done and found_here and not discovery_done and not limit:
+                budget = min(DISCOVERY_MAX_MINUTES * 60, budget * 2)
+                self._set_extra(next_discovery_minutes=round(budget / 60))
+                more, capped = self._discover(crawler, domain, budget, polite, use_sitemap)
+                known = set(urls)
+                new_urls = [url for url in _select_novels(more) if url not in known]
+                discovery_done = not capped or not new_urls
+                urls = urls + new_urls
+                total = len(urls)
+                self._set_extra(
+                    urls=urls,
+                    discovery_done=discovery_done,
+                    total_novels=total,
+                    found_more=len(new_urls),
+                )
+                if not new_urls:
+                    break
+                ctx.logger.info(f"Found {len(new_urls)} more novel(s) on {domain}")
+                self._set_progress(len(complete) + len(partial) + len(skipped), total)
+                pending = pending + _run_passes(new_urls)
 
             # speed memory: remember the rate the tuner settled on for next run
-            if auto_tune and tuned_rps > 0:
-                _save_manifest(domain, manifest, tuned_rps=tuned_rps)
+            if auto_tune and self.pace.rate > 0:
+                _save_manifest(domain, manifest, tuned_rps=self.pace.rate)
 
             # bundle the complete ones, plus the best partial we have for the rest.
             # Iterate `partial` directly (not just novels still in `pending`) so a
@@ -842,6 +1135,33 @@ class ExportSourceHandler(BaseHandler):
                 {"reason": r, "count": c}
                 for r, c in sorted(reason_tally.items(), key=lambda x: -x[1])[:5]
             ]
+
+            if library_only:
+                stored = len(complete) + sum(1 for url in partial if url not in complete)
+                incomplete = stored - len(complete)
+                self._set_extra(
+                    phase="done",
+                    library_only=True,
+                    exported=stored,
+                    complete=len(complete),
+                    incomplete=incomplete,
+                    failed=failed,
+                    skipped=len(skipped),
+                    total_novels=total,
+                    fail_reasons=fail_reasons,
+                    active_novels=[],
+                    eta_seconds=None,
+                )
+                if not stored and failed:
+                    raise HandlerException(
+                        f"Could not download any of {total} novel(s) from {domain}"
+                    )
+                self._notify_finish(
+                    f"{domain}: {stored} of {total} novel(s) downloaded to your library "
+                    f"({len(complete)} complete, {incomplete} partial, {failed} failed, "
+                    f"{len(skipped)} skipped)."
+                )
+                return
 
             if not files:
                 self._set_extra(
@@ -936,7 +1256,8 @@ class ExportSourceHandler(BaseHandler):
                 summary += " Saved to your Desktop."
             self._notify_finish(summary)
         finally:
-            crawler.close()
+            for lane_crawler in lanes:
+                lane_crawler.close()
 
     def _set_progress(self, done: int, total: int) -> None:
         with ctx.db.session() as sess:
@@ -946,14 +1267,17 @@ class ExportSourceHandler(BaseHandler):
         self.job.total = max(total, 1)
         ctx.job_notifier.notify(self.user, self.job)
 
-    def _notify_finish(self, summary: str) -> None:
-        """Fire the configured desktop/webhook finish notifications (best-effort)."""
+    def _notify_finish(
+        self, summary: str, title: str = "Lightnovel Crawler — export finished"
+    ) -> None:
+        """Fire the configured desktop/webhook notifications, once per run (best-effort)."""
+        self._notified = True
         cfg = ctx.config.notify
         if not cfg.desktop_toast and not cfg.webhook_url:
             return
         try:
             notify_finished(
-                title="Lightnovel Crawler — export finished",
+                title=title,
                 message=summary,
                 webhook_url=cfg.webhook_url,
                 desktop=cfg.desktop_toast,
@@ -973,6 +1297,8 @@ def _download_novel(
     max_chapters: int = 0,
     on_novel: Optional[Callable[[str, int, int], None]] = None,
     on_images: Optional[Callable[[int, int], None]] = None,
+    on_result: Optional[Callable[..., None]] = None,
+    build: bool = True,
 ) -> NovelResult:
     """Download a novel and build its ebook.
 
@@ -985,6 +1311,9 @@ def _download_novel(
     series can't stall the whole run. ``on_novel(title, done, total)`` reports
     live chapter progress, and ``on_images(done, total)`` the page images after
     them — for a long manga that is thousands of images and most of the time.
+    ``on_result(error, count=True)`` hears about every chapter and image as it
+    finishes, which is what the request rate is tuned from. ``build`` False
+    stops once the chapters are in the library, without making an ebook.
     """
     # Reuse already-fetched metadata: on retry rounds (and re-runs) the novel and
     # its chapter list are already in the DB, so skip re-downloading the info page
@@ -1037,10 +1366,11 @@ def _download_novel(
             idle_timeout=STALL_TIMEOUT,
             on_progress=_tick,
         ):
+            if on_result:
+                on_result(outcome.error)
             if outcome.error is not None and len(errors) < 3:
                 errors.append(f"{type(outcome.error).__name__}: {outcome.error}"[:300])
     except CrawlStalledError as error:
-        signal.set()
         raise ExportStalledError(str(error)) from error
 
     # download chapter images in one batch (covers manga pages and inline art);
@@ -1059,7 +1389,7 @@ def _download_novel(
                 on_images(done + i_cached, i_total)
 
         try:
-            for _ in crawl_items(
+            for outcome in crawl_items(
                 pending_images,
                 lambda image_id: crawler.taskman.submit_task(
                     ctx.crawler.fetch_image,
@@ -1073,9 +1403,9 @@ def _download_novel(
                 idle_timeout=STALL_TIMEOUT,
                 on_progress=_image_tick,
             ):
-                pass
+                if on_result:
+                    on_result(outcome.error, count=False)
         except CrawlStalledError as error:
-            signal.set()
             raise ExportStalledError(str(error)) from error
 
     # how many of the targeted chapters are still not downloaded (drives retries)
@@ -1089,6 +1419,17 @@ def _download_novel(
         if errors:
             reason += "; " + "; ".join(errors)
         raise HandlerException(reason)
+
+    if not build:
+        if seen_titles is not None and missing == 0:
+            seen_titles.add(norm)
+        return {
+            "file": None,
+            "missing": missing,
+            "duplicate": False,
+            "errors": errors,
+            "stored": True,
+        }
 
     # build the ebook. Formats derived from epub need an epub built first.
     epub_artifact = None

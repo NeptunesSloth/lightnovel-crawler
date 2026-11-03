@@ -1,5 +1,5 @@
 import re
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Path, Query, Security
 from fastapi.responses import FileResponse
@@ -9,6 +9,7 @@ from ...dao import Job, JobPriority, JobStatus, JobType, User
 from ...exceptions import ServerErrors
 from ...utils.file_tools import safe_filename
 from ..models import (
+    BulkDownloadRequest,
     DiscoverSourceRequest,
     ExportSourceRequest,
     FetchChaptersRequest,
@@ -60,6 +61,11 @@ def list_jobs(
         priority=priority,
         parent_job_id=parent_job_id,
     )
+
+
+@router.get("s/downloads", summary="Every download: running, paused and queued, then recent")
+def list_downloads(user: User = Security(ensure_user)) -> List[Dict[str, Any]]:
+    return ctx.jobs.list_downloads(user)
 
 
 def _current_proxy_config() -> ProxyConfig:
@@ -174,6 +180,27 @@ def cancel_job(
     return True
 
 
+@router.post("/{job_id}/pause", summary="Pause a site download where it is")
+def pause_job(
+    user: User = Security(ensure_user),
+    job_id: str = Path(),
+) -> bool:
+    ctx.jobs.verify_access(user, job_id)
+    ctx.jobs.pause(job_id)
+    ctx.scheduler.stop_job(job_id)
+    return True
+
+
+@router.post("/{job_id}/resume", summary="Resume a paused site download")
+def resume_job(
+    user: User = Security(ensure_user),
+    job_id: str = Path(),
+) -> bool:
+    ctx.jobs.verify_access(user, job_id)
+    ctx.jobs.resume(job_id)
+    return True
+
+
 @router.post("/{job_id}/replay", summary="Replay a job")
 def replay_job(
     user: User = Security(ensure_user),
@@ -206,6 +233,17 @@ def fetch_novels(
     if body.full and not ctx.tier.full_novel_batch_allowed(user):
         raise ServerErrors.full_novel_not_allowed
     return ctx.jobs.fetch_many_novels(user, *urls, full=body.full)
+
+
+@router.post(
+    "/create/bulk-download",
+    summary="Download every chapter of many novels, unattended, one job per site",
+)
+def bulk_download(
+    user: User = Security(ensure_user),
+    body: BulkDownloadRequest = Body(),
+) -> List[Job]:
+    return ctx.jobs.bulk_download(user, [str(url) for url in body.urls])
 
 
 @router.post(
@@ -381,6 +419,9 @@ def export_source(
         auto_tune=body.auto_tune,
         update_only=body.update_only,
         use_sitemap=body.use_sitemap,
+        parallel_novels=body.parallel_novels,
+        until_done=body.until_done,
+        library_only=body.library_only,
         urls=[str(u) for u in body.urls] if body.urls else None,
     )
 

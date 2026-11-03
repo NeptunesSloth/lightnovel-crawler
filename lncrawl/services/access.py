@@ -46,6 +46,14 @@ class AccessManager:
         UserTier.PREMIUM: 500,
         UserTier.VIP: None,
     }
+    # How many novels one discovery may add to the library. Discovery used to be
+    # VIP-only and simply failed for everyone else after doing all the work; now
+    # every tier can use it and only the size of what it queues differs.
+    _MAX_DISCOVERY_QUEUE = {
+        UserTier.BASIC: 200,
+        UserTier.PREMIUM: 1000,
+        UserTier.VIP: None,
+    }
     _MAX_READ_HISTORY = {
         UserTier.BASIC: 500,
         UserTier.PREMIUM: 5000,
@@ -104,6 +112,9 @@ class AccessManager:
 
     def max_read_history(self, user: User) -> Optional[int]:
         return self._MAX_READ_HISTORY[user.tier]
+
+    def max_discovery_queue(self, user: User) -> Optional[int]:
+        return self._MAX_DISCOVERY_QUEUE[user.tier]
 
     def search_can_fetch_novel_metadata(self, user: User) -> bool:
         return user.tier == UserTier.VIP

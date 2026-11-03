@@ -195,18 +195,19 @@ class HttpCrawlTests(unittest.TestCase):
         source.version = 1
         return source
 
-    def export(self, seconds=2):
+    def export(self, seconds=2, urls=None, **options):
         module = "lncrawl.services.scheduler.handlers.export_source"
         job = self.ctx.jobs._create(
             self.user,
             JobType.EXPORT_SOURCE,
             {
                 "domain": "fixture.test",
-                "urls": [self.novel_url],
+                "urls": urls or [self.novel_url],
                 "retries": 0,
                 "dedupe": False,
                 "auto_tune": False,
                 "requests_per_sec": 100,
+                **options,
             },
         )
         with (
@@ -243,6 +244,29 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(resumed.status, JobStatus.SUCCESS, resumed.error)
         self.assertEqual(resumed.extra["resumed"], 1)
         self.assertEqual(self.counts, previous_requests)
+
+    def test_unattended_library_download_over_real_http(self) -> None:
+        job = self.export(until_done=True, library_only=True, keep_awake=False)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["complete"], 1)
+        self.assertNotIn("export_file", job.extra)
+        self.assertTrue(self.ctx.chapters.completeness("novel").complete)
+
+    def test_two_novels_download_at_once_on_their_own_crawlers(self) -> None:
+        made = []
+        init = self.ctx.sources.init_crawler
+
+        def counted(*args, **kwargs):
+            made.append(1)
+            return init(*args, **kwargs)
+
+        self.ctx.sources.init_crawler = counted
+        job = self.export(urls=[self.novel_url, self.novel_url + "-gone"])
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(len(made), 2)  # a second lane was opened
+        self.assertEqual(job.extra["complete"], 1)
+        self.assertEqual(job.extra["failed"], 1)
+        self.assertIn("active_novels", job.extra)
 
     def test_real_novelfire_metadata_pagination_cover_and_discovery(self) -> None:
         urls = self.ctx.crawler.discover_novels(

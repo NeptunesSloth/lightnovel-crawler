@@ -19,6 +19,9 @@ from ..utils.url_tools import extract_host
 
 logger = logging.getLogger(__name__)
 
+# Time allowed for a novel's details page and its whole chapter list.
+NOVEL_DETAILS_SECONDS: float = 600
+
 
 class CrawlerService:
     def __init__(self) -> None:
@@ -101,7 +104,12 @@ class CrawlerService:
         custom: Optional[Crawler] = None,
     ) -> Novel:
         cancellation = signal or (custom.scraper.signal if custom is not None else None)
-        with request_budget(cancellation, seconds=180):
+        # A big novel on a slow site lists its chapters over many pages; three
+        # minutes was not enough for some, and the timeout then read as the site
+        # throttling the export, which slowed it right down for nothing.
+        with request_budget(
+            cancellation, seconds=NOVEL_DETAILS_SECONDS, label="Novel details request"
+        ):
             return self._fetch_novel(user_id, url, signal, custom)
 
     def _fetch_novel(

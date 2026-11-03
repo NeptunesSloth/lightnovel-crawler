@@ -56,9 +56,16 @@ class JobScheduler:
         # can otherwise leave it half-initialized and crash every later browser op
         # with "cannot import name 'network' from partially initialized module".
         try:
-            from ...webdriver import warmup_nodriver
+            from ...webdriver import (
+                BROWSER_PAGES_SUPPORTED,
+                BROWSER_PAGES_UNSUPPORTED,
+                warmup_nodriver,
+            )
 
-            warmup_nodriver()
+            if BROWSER_PAGES_SUPPORTED:
+                warmup_nodriver()
+            else:
+                logger.warning(BROWSER_PAGES_UNSUPPORTED)
         except Exception:
             logger.warning("nodriver warmup failed; will retry on first browser use", exc_info=True)
         for _ in range(ctx.config.crawler.runner_concurrency):

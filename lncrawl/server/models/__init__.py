@@ -9,6 +9,7 @@ from .feedback import (
     FeedbackUpdateRequest,
 )
 from .job import (
+    BulkDownloadRequest,
     DiscoverSourceRequest,
     ExportSourceRequest,
     FetchChaptersRequest,
@@ -77,6 +78,7 @@ __all__ = [
     "LoginData",
     # job
     "FetchNovelsRequest",
+    "BulkDownloadRequest",
     "FetchVolumesRequest",
     "FetchChaptersRequest",
     "FetchImagesRequest",
