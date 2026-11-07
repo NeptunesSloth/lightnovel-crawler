@@ -346,7 +346,8 @@ class NovelRepairTests(unittest.TestCase):
         job = self.repair()
         self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
         self.assertCountEqual(self.downloads, [2, 3, 4])
-        self.assertEqual(self.ctx.sources.init_crawler.call_count, 3)
+        # The three chapter jobs share one pooled crawler instead of building one each.
+        self.assertEqual(self.ctx.sources.init_crawler.call_count, 1)
         self.assertTrue(job.extra["completeness"]["complete"])
         artifact = self.ctx.artifacts.get(job.extra["artifact_id"])
         with ZipFile(self.ctx.files.resolve(artifact.output_file)) as book:
