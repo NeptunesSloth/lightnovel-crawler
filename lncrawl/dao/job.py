@@ -17,6 +17,7 @@ class Job(BaseTable, table=True):
         sa.Index("ix_jobs_depends_on", "depends_on", "is_done"),
         sa.Index("ix_jobs_scheduler", "status", "done", "type"),
         sa.Index("ix_jobs_ordering", "priority", "user_id", "updated_at"),
+        sa.Index("ix_jobs_top_level", "parent_job_id", "is_done", "updated_at"),
     )
 
     user_id: str = sa.Field(foreign_key="users.id", ondelete="CASCADE")
