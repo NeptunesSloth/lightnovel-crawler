@@ -55,6 +55,18 @@ def serve(chapters: int) -> ThreadingHTTPServer:
     return server
 
 
+def saved_chapters() -> int:
+    """Chapters downloaded with their text, across the whole library."""
+    import sqlmodel as sq
+
+    from lncrawl.context import ctx
+    from lncrawl.dao import Chapter
+
+    with ctx.db.session() as sess:
+        ids = sess.exec(sq.select(Chapter.id).where(sq.col(Chapter.is_done).is_(True))).all()
+    return sum(int(chapter.is_available) for chapter in ctx.chapters.get_many(list(ids)))
+
+
 def main() -> None:
     data_dir, workers, chapters, mode = (
         Path(sys.argv[1]),
@@ -86,11 +98,28 @@ def main() -> None:
     ctx.config.crawler.worker_processes = workers
     ctx.config.crawler.can_use_browser = False
     user = ctx.users.get_admin()
+
+    import logging
+
+    from_workers = []
+
+    class Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.processName != "MainProcess":
+                from_workers.append(record.processName)
+
+    logging.getLogger().addHandler(Collect())
+    logging.getLogger().setLevel(logging.INFO)
+
     roots = []
-    for origin in origins:
-        novel = ctx.crawler.fetch_novel(user.id, origin + "book/example")
-        ids = ctx.chapters.list_ids(novel_id=novel.id)
-        roots.append(ctx.jobs.fetch_many_chapters(user, *ids, novel_title=novel.title))
+    if mode in ("export", "export-cancel"):
+        # a bulk download: one unattended library-only export per site
+        roots = ctx.jobs.bulk_download(user, [origin + "book/example" for origin in origins])
+    else:
+        for origin in origins:
+            novel = ctx.crawler.fetch_novel(user.id, origin + "book/example")
+            ids = ctx.chapters.list_ids(novel_id=novel.id)
+            roots.append(ctx.jobs.fetch_many_chapters(user, *ids, novel_title=novel.title))
 
     ctx.scheduler.start()
     started = time.monotonic()
@@ -102,23 +131,35 @@ def main() -> None:
             break
         alive = [w for w in ctx.download_workers._workers if w.process.is_alive()]
         workers_seen = max(workers_seen, len(alive))
+        if mode == "export-cancel" and not killed and alive and saved_chapters() > 2:
+            for root in roots:
+                ctx.jobs.cancel(root.id)
+                ctx.scheduler.stop_job(root.id)
+            killed = True
         if mode == "kill" and not killed and alive and any(job.done > 2 for job in jobs):
             for worker in alive:
                 worker.process.kill()
             killed = True
         time.sleep(0.1)
 
-    available = 0
-    for root in roots:
-        for chapter in ctx.chapters.get_many(list(ctx.jobs.get(root.id).extra["chapter_ids"])):
-            available += int(chapter.is_available)
+    ctx.scheduler.stop()  # workers report back and stop before anything is measured
+    ctx.download_workers.close()
+
+    from lncrawl.core import scraping
+
+    hosts = [origin.split("//", 1)[1].rstrip("/") for origin in origins]
+    profiles = scraping.profile_snapshot()
     print(
         json.dumps(
             {
                 "statuses": [ctx.jobs.get(root.id).status.name for root in roots],
-                "available": available,
+                "available": saved_chapters(),
                 "workers_seen": workers_seen,
                 "killed": killed,
+                "logs_from_workers": len(from_workers),
+                "profiles_kept": [
+                    host for host in hosts if profiles.get(host, {}).get("successes")
+                ],
             }
         )
     )

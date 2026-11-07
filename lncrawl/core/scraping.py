@@ -20,6 +20,7 @@ per-crawler, so two jobs on one site no longer pace themselves independently
 into a block.
 """
 
+from dataclasses import asdict
 import logging
 import threading
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,7 +37,7 @@ from scraper import (
     diagnosis,
     session as scraper_session,
 )
-from scraper.memory import Memory
+from scraper.memory import Memory, OriginProfile
 
 from ..context import ctx
 from ..exceptions import AbortedException
@@ -343,6 +344,29 @@ def _hold_rate(scraper: Scraper, origin: str, interval: float) -> None:
     profile.interval = interval
     scraper.memory.touch()
     scraper.pacer.learn(scraper.memory.key(origin), interval)
+
+
+def profile_snapshot() -> Dict[str, dict]:
+    """Everything this process knows about sites, as plain data."""
+    mem = memory()
+    with mem._lock:
+        return {key: asdict(profile) for key, profile in mem._profiles.items()}
+
+
+def merge_profiles(profiles: Dict[str, dict]) -> None:
+    """Keep what a download worker learned about its sites (see scheduler/workers.py).
+
+    A site is downloaded by one process at a time, so the worker's profile of it
+    is the newer one and replaces this process's.
+    """
+    if not profiles:
+        return
+    mem = memory()
+    known = set(OriginProfile.__dataclass_fields__)
+    with mem._lock:
+        for key, fields in profiles.items():
+            mem._profiles[key] = OriginProfile(**{k: v for k, v in fields.items() if k in known})
+    mem.touch()
 
 
 def close_shared_state() -> None:
