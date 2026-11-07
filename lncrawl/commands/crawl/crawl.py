@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, as_completed
 import logging
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from rich import print
 import typer
@@ -52,20 +51,6 @@ def crawl(
         "--pass",
         help="Password/Token",
     ),
-    workers: Optional[int] = typer.Option(
-        None,
-        "--workers",
-        min=1,
-        metavar="N",
-        help="Chapters to download at the same time (default: 4, or the source's own)",
-    ),
-    rate: Optional[float] = typer.Option(
-        None,
-        "--rate",
-        min=0,
-        metavar="REQ/S",
-        help="Most requests per second to the site; 0 for no limit (default: from config)",
-    ),
     url: str = typer.Argument(
         default=None,
         help="Novel details page URL.",
@@ -74,8 +59,7 @@ def crawl(
     from rich.console import Console
     from rich.panel import Panel
 
-    from ...core.taskman import TaskManager
-    from ...dao import Artifact, ChapterImage
+    from ...dao import Artifact
     from ...exceptions import ServerError
     from ...utils.file_tools import format_size, open_folder
     from .prompts import (
@@ -102,10 +86,7 @@ def crawl(
 
     # init crawler
     try:
-        crawler = ctx.sources.init_crawler(url, workers=workers, requests_per_sec=rate)
-        if workers and crawler.taskman.workers != workers:
-            # a source may pick its own count in initialize(); an explicit one wins
-            crawler.taskman.init_executor(workers=workers)
+        crawler = ctx.sources.init_crawler(url)
         can_login = getattr(crawler, "can_login", False)
     except ServerError as e:
         print(f"[red]{e.format(True)}[/red]")
@@ -168,72 +149,50 @@ def crawl(
         else:
             formats = prompt_format_selection()
 
-    # Images download alongside the chapters: each chapter's images are queued
-    # as soon as it is saved. They get a pool of their own so a long image queue
-    # never delays the chapters, which have a stall timeout of their own.
-    image_tasks = TaskManager(workers=crawler.taskman.workers, signal=crawler.scraper.signal)
-    image_futures: Dict[Future[ChapterImage], str] = {}
-    queued_images: Set[str] = set()
+    # download chapters
+    pending_chapters = ctx.crawler.pending_chapter_ids(chapters)
+    downloaded_chapter_ids = list(set(chapters) - set(pending_chapters))
+    with crawler.taskman.progress_bar(
+        total=len(pending_chapters), desc="Chapters", unit=" c"
+    ) as bar:
+        for outcome in crawl_items(
+            pending_chapters,
+            lambda chapter_id: crawler.taskman.submit_task(
+                ctx.crawler.fetch_chapter,
+                user.id,
+                chapter_id,
+                signal=crawler.scraper.signal,
+                custom=crawler,
+            ),
+            crawler.scraper.signal,
+            max_inflight=crawler.taskman.workers,
+        ):
+            bar.update()
+            if outcome.value is not None:
+                downloaded_chapter_ids.append(outcome.value.id)
+            elif outcome.error is not None:
+                logger.warning(f"Chapter {outcome.item_id} failed: {outcome.error}")
 
-    def queue_images(chapter_ids: List[str]) -> None:
-        if not chapter_ids:
-            return
-        image_ids = ctx.images.list_ids(novel_id=novel.id, chapter_ids=chapter_ids)
-        for image_id in ctx.crawler.pending_image_ids(image_ids):
-            if image_id in queued_images:
-                continue
-            queued_images.add(image_id)
-            future = image_tasks.submit_task(
+    chapter_image_ids = ctx.images.list_ids(novel_id=novel.id, chapter_ids=downloaded_chapter_ids)
+
+    # download chapter images
+    pending_images = ctx.crawler.pending_image_ids(chapter_image_ids)
+    with crawler.taskman.progress_bar(total=len(pending_images), desc="Images", unit=" img") as bar:
+        for outcome in crawl_items(
+            pending_images,
+            lambda image_id: crawler.taskman.submit_task(
                 ctx.crawler.fetch_image,
                 user.id,
                 image_id,
                 signal=crawler.scraper.signal,
                 custom=crawler,
-            )
-            image_futures[future] = image_id
-
-    try:
-        # download chapters
-        pending_chapters = ctx.crawler.pending_chapter_ids(chapters)
-        downloaded_chapter_ids = list(set(chapters) - set(pending_chapters))
-        queue_images(downloaded_chapter_ids)  # images an earlier run did not finish
-        with crawler.taskman.progress_bar(
-            total=len(pending_chapters), desc="Chapters", unit=" c"
-        ) as bar:
-            for outcome in crawl_items(
-                pending_chapters,
-                lambda chapter_id: crawler.taskman.submit_task(
-                    ctx.crawler.fetch_chapter,
-                    user.id,
-                    chapter_id,
-                    signal=crawler.scraper.signal,
-                    custom=crawler,
-                ),
-                crawler.scraper.signal,
-                max_inflight=crawler.taskman.workers,
-            ):
-                bar.update()
-                if outcome.value is not None:
-                    downloaded_chapter_ids.append(outcome.value.id)
-                    queue_images([outcome.value.id])
-                elif outcome.error is not None:
-                    logger.warning(f"Chapter {outcome.item_id} failed: {outcome.error}")
-
-        # wait for the chapter images still in flight
-        with crawler.taskman.progress_bar(
-            total=len(image_futures), desc="Images", unit=" img"
-        ) as bar:
-            for future in as_completed(image_futures):
-                bar.update()
-                if crawler.scraper.signal.is_set():
-                    break
-                if future.cancelled():
-                    continue
-                error = future.exception()
-                if error is not None:
-                    logger.warning(f"Image {image_futures[future]} failed: {error}")
-    finally:
-        image_tasks.close()
+            ),
+            crawler.scraper.signal,
+            max_inflight=crawler.taskman.workers,
+        ):
+            bar.update()
+            if outcome.error is not None:
+                logger.warning(f"Image {outcome.item_id} failed: {outcome.error}")
 
     # create artifacts
     format_set = set(formats)
