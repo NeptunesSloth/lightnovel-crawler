@@ -9,8 +9,10 @@ Self-contained like the Tools page (``/tools``), so it survives front-end
 rebuilds and works from the desktop app. Served at ``GET /downloads``.
 """
 
-from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Request
+from fastapi.responses import Response
+
+from .caching import blob_response, text_blob
 
 router = APIRouter()
 
@@ -390,5 +392,7 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
 
 
 @router.get("/downloads", include_in_schema=False)
-async def downloads_page() -> HTMLResponse:
-    return HTMLResponse(content=_DOWNLOADS_HTML)
+async def downloads_page(request: Request) -> Response:
+    # Encoded and gzipped once; a revalidating browser gets a 304.
+    page = text_blob(_DOWNLOADS_HTML, "text/html; charset=utf-8")
+    return blob_response(request, page, {"Cache-Control": "no-cache"})
