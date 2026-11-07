@@ -54,7 +54,9 @@ class HttpCrawlTests(unittest.TestCase):
         self.notices = set()
         self.fail_once = set()
         self.js_redirected = set()
+        self.illustrated = set()
         counts, slow, notices = self.counts, self.slow, self.notices
+        illustrated = self.illustrated
         fail_once, js_redirected = self.fail_once, self.js_redirected
         cover = BytesIO()
         Image.new("RGB", (2, 2), "blue").save(cover, format="JPEG")
@@ -93,7 +95,12 @@ class HttpCrawlTests(unittest.TestCase):
                 body = (
                     f'<html><body><div id="content"><div class="chapter-text">'
                     f"<h2>Chapter {serial}: A title</h2><p>Real story text for chapter {serial}.</p>"
-                    "</div></div></body></html>"
+                    + (
+                        f'<p><img src="/art-{serial}.jpg" alt="Art {serial}"></p>'
+                        if self.path in illustrated
+                        else ""
+                    )
+                    + "</div></div></body></html>"
                 ).encode()
                 if self.path in notices and counts[self.path] == 1:
                     from lncrawl.utils.chapter_content import NOVELFIRE_LOGIN_NOTICE
@@ -126,7 +133,7 @@ class HttpCrawlTests(unittest.TestCase):
                         '<ul class="novel-list"><li class="novel-item"><a title="Test Novel" href="/book/example">'
                         '<span class="icon-book-open">4</span><span class="icon-crown">1</span></a></li></ul>'
                     ).encode()
-                elif self.path == "/cover.jpg":
+                elif self.path == "/cover.jpg" or self.path.startswith("/art-"):
                     content_type = "image/jpeg"
                     body = cover_bytes
                 try:
@@ -327,6 +334,57 @@ class HttpCrawlTests(unittest.TestCase):
         ebooks = list(data.glob("novels/*/artifacts/*.epub"))
         self.assertEqual(len(ebooks), 1, (result.stdout + result.stderr)[-4000:])
         with ZipFile(ebooks[0]) as epub:
+            for serial in range(1, 5):
+                member = next(
+                    name for name in epub.namelist() if name.endswith(f"chapter_{serial:05}.xhtml")
+                )
+                self.assertIn(f"Real story text for chapter {serial}.".encode(), epub.read(member))
+
+    def test_cli_downloads_chapter_images_alongside_chapters_with_speed_options(self) -> None:
+        data = self.root / "cli-images"
+        source_file = data / "sources/en/n/fixture.py"
+        source_file.parent.mkdir(parents=True)
+        origin = self.novel_url.split("/book/", 1)[0] + "/"
+        source_file.write_text(
+            "from sources.en.n.novelfire import NovelFireCrawler\n"
+            "class FixtureNovelFireCrawler(NovelFireCrawler):\n"
+            f"    base_url = [{origin!r}]\n"
+        )
+        self.illustrated.update(f"/chapter-{serial}" for serial in range(1, 5))
+        entry = "from lncrawl.context import ctx; ctx.setup(sync_remote_index=False); from lncrawl import main; main()"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                entry,
+                "-ll",
+                "crawl",
+                self.novel_url,
+                "--first",
+                "4",
+                "--format",
+                "epub",
+                "--workers",
+                "2",
+                "--rate",
+                "0",
+                "--noin",
+            ],
+            env=dict(os.environ, LNCRAWL_DATA_PATH=str(data)),
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        output = (result.stdout + result.stderr)[-4000:]
+        self.assertEqual(result.returncode, 0, output)
+        for serial in range(1, 5):
+            self.assertEqual(self.counts[f"/art-{serial}.jpg"], 1, output)
+        ebooks = list(data.glob("novels/*/artifacts/*.epub"))
+        self.assertEqual(len(ebooks), 1, output)
+        with ZipFile(ebooks[0]) as epub:
+            images = [name for name in epub.namelist() if "/images/" in name]
+            self.assertGreaterEqual(len(images), 4, epub.namelist())
             for serial in range(1, 5):
                 member = next(
                     name for name in epub.namelist() if name.endswith(f"chapter_{serial:05}.xhtml")
