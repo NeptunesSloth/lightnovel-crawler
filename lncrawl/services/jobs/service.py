@@ -21,6 +21,7 @@ from ...dao import (
 from ...exceptions import ServerErrors
 from ...server.models import Paginated
 from ...utils.time_utils import current_timestamp
+from ...utils.wakeup import ring_for
 from .utils import select_ancestors, select_descendants
 
 T = TypeVar("T")
@@ -1078,6 +1079,7 @@ class JobService:
         with ctx.db.session() as sess:
             self._update(sess, job_id, status=job_pending_literal)
             sess.commit()
+        ring_for(job.type == JobType.ARTIFACT)
 
     def cancel(self, job_id: str, who: str = "admin") -> None:
         with ctx.db.session() as sess:
@@ -1169,6 +1171,7 @@ class JobService:
             sess.commit()
             sess.refresh(job)
 
+        ring_for(type == JobType.ARTIFACT)
         if parent_id is None:
             ctx.activity.record(user.id, ActivityType.REQUEST, job.id)
         return job

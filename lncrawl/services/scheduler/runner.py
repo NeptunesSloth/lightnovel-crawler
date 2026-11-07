@@ -6,6 +6,7 @@ from ...context import ctx
 from ...dao import Job
 from ...enums import JobType
 from ...utils.event_lock import EventLock
+from ...utils.wakeup import artifact_wakeup, job_wakeup, ring_for
 from .handlers import run_job
 
 logger = logging.getLogger(__name__)
@@ -61,10 +62,18 @@ class JobRunner:
             if job.type == JobType.EXPORT_SOURCE:
                 _sites[job.id] = str((job.extra or {}).get("domain") or "")
 
+        # Taken: wake the next idle runner in case more are waiting. One that
+        # finds nothing does not ring on, so a burst wakes only what it needs.
+        ring_for(artifact)
+
         # process the current job
         try:
             run_job(job, job_signal)
         finally:
+            # a finished job can make others runnable (one that depended on it,
+            # another export of its site)
+            job_wakeup.ring()
+            artifact_wakeup.ring()
             # release from queue
             with _lock:
                 if _queue.get(job.id) is job_signal:
