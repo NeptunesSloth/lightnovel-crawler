@@ -218,7 +218,7 @@ class ChapterService:
             auto_fetch = ctx.tier.auto_fetch_enabled(user)
 
         chapter = self.get(chapter_id)
-        ctx.history.add(user.id, chapter.id)
+        ctx.history.add(user.id, chapter.id, chapter)
 
         job: Optional[Job] = None
         content: Optional[str] = None

@@ -325,6 +325,18 @@ class CrawlerService:
             # check if download is necessary
             available = chapter.is_available
             if not refresh and available:
+                if not chapter.is_done:
+                    # The text was saved but the row never said so: the process
+                    # stopped in between. Without this the chapter stays counted
+                    # as missing, since every later run skips it as downloaded.
+                    chapter.is_done = True
+                    with ctx.db.session() as sess:
+                        sess.exec(
+                            sq.update(Chapter)
+                            .where(sq.col(Chapter.id) == chapter.id)
+                            .values(is_done=True, updated_at=current_timestamp())
+                        )
+                        sess.commit()
                 logger.debug(f"Skipped: {novel.title}] - Chapter {chapter.serial}")
                 return chapter
 

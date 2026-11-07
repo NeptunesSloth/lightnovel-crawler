@@ -66,9 +66,21 @@ class JobRunner:
         # finds nothing does not ring on, so a burst wakes only what it needs.
         ring_for(artifact)
 
-        # process the current job
+        # process the current job: a site's bulk export on a worker process when
+        # one is free (services/scheduler/workers.py), like chapter batches
         try:
-            run_job(job, job_signal)
+            site = _sites.get(job.id) if job.type == JobType.EXPORT_SOURCE else None
+            if site:
+                ctx.download_workers.run(
+                    site,
+                    [job.id],
+                    1,
+                    job_signal,
+                    lambda: run_job(job, job_signal),
+                    export=True,
+                )
+            else:
+                run_job(job, job_signal)
         finally:
             # a finished job can make others runnable (one that depended on it,
             # another export of its site)

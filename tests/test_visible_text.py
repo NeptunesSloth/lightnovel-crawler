@@ -39,6 +39,18 @@ class VisibleTextTests(unittest.TestCase):
     def test_scraper_uses_the_fast_extraction(self) -> None:
         self.assertIs(scraper_session._visible_text, scraping._visible_text)
 
+    def test_the_same_page_twice_is_read_once(self) -> None:
+        page = PAGES[0]
+        first = scraping._visible_text(page, "lxml")
+        original = scraping._extract_visible_text
+        try:
+            scraping._extract_visible_text = lambda *a: self.fail("read again")
+            self.assertEqual(scraping._visible_text(page, "lxml"), first)
+        finally:
+            scraping._extract_visible_text = original
+        # a different page (even with equal text) is read afresh
+        self.assertEqual(scraping._visible_text("<p>other</p>", "lxml"), "other")
+
     def test_same_words_as_the_original(self) -> None:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # bs4 warns about the XML-looking sample

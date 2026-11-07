@@ -1,9 +1,44 @@
-from functools import cached_property
+import functools
 import logging
 from pathlib import Path
-from typing import Optional, Union
+import threading
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 logger = logging.getLogger(__name__)
+
+_MISSING = object()
+
+
+class _SynchronizedCachedProperty(functools.cached_property):
+    """``functools.cached_property`` that builds each service once, whatever the threads do.
+
+    Python 3.12 dropped the lock the standard one held while building a value, so
+    two threads asking for a service at once (the scheduler's runners, say)
+    each built their own: two pools of download workers, each spawning its own
+    processes, enforcing its own limits, and one never closed. One lock for all
+    of the context, reentrant because building a service often asks for another.
+    """
+
+    _lock = threading.RLock()
+
+    def __get__(self, instance: Any, owner: Any = None) -> Any:
+        if instance is None:
+            return self
+        cache = instance.__dict__
+        value = cache.get(self.attrname, _MISSING)
+        if value is _MISSING:
+            with self._lock:
+                value = cache.get(self.attrname, _MISSING)
+                if value is _MISSING:
+                    value = self.func(instance)
+                    cache[self.attrname] = value
+        return value
+
+
+if TYPE_CHECKING:  # type checkers keep each service's own type
+    from functools import cached_property
+else:
+    cached_property = _SynchronizedCachedProperty
 
 
 class __AppContext__:

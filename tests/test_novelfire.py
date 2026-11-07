@@ -84,14 +84,12 @@ class NovelFireTests(unittest.TestCase):
         cls.cleaner = TextCleaner()
 
     def extract(self, html: str) -> str:
-        crawler = SimpleNamespace(
-            get_soup=lambda url: BeautifulSoup(html, "html.parser"),
-            cleaner=self.cleaner,
-        )
+        crawler = SimpleNamespace(cleaner=self.cleaner)
         chapter = Chapter(
             id=12, title="Chapter 12: Arrival", url="https://novelfire.net/book/example/chapter-12"
         )
-        return NovelFireCrawler.download_chapter_body(crawler, chapter)
+        soup = BeautifulSoup(html, "html.parser")
+        return NovelFireCrawler._chapter_body(crawler, soup, chapter)
 
     def test_nested_wrapper_keeps_all_story_paragraphs(self) -> None:
         text = self.extract(

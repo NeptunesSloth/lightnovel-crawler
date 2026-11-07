@@ -408,6 +408,49 @@ class HttpCrawlTests(unittest.TestCase):
                 self.ctx.files.load_text(chapter.content_file),
             )
 
+    def test_redirected_chapters_go_straight_to_the_mirror_once_learned(self) -> None:
+        from lncrawl.core import Chapter as CrawlerChapter
+        from sources.en.n import novelfire
+
+        self.addCleanup(setattr, novelfire, "_MIRRORS", novelfire._MIRRORS)
+        novelfire._MIRRORS = novelfire._MirrorMap()
+        origin = self.novel_url.split("/book/", 1)[0]
+        self.js_redirected.update(f"/chapter-{serial}" for serial in range(1, 7))
+        for serial in range(1, 7):
+            chapter = CrawlerChapter(id=serial, url=f"{origin}/chapter-{serial}", title="")
+            body = self.source.download_chapter_body(chapter)
+            self.assertIn(f"Real story text for chapter {serial}.", body)
+        # chapters 1 and 2 go through the redirect chain and agree on where it
+        # ends; from chapter 3 on, one request to the mirror each
+        for serial in (1, 2):
+            self.assertEqual(self.counts[f"/chapter-{serial}"], 1)
+            self.assertEqual(self.counts[f"/loading/chapter-{serial}"], 1)
+        for serial in range(3, 7):
+            self.assertEqual(self.counts[f"/chapter-{serial}"], 0)
+            self.assertEqual(self.counts[f"/loading/chapter-{serial}"], 0)
+            self.assertEqual(self.counts[f"/mirror/chapter-{serial}?noti=1"], 1)
+
+    def test_a_mirror_that_stops_serving_falls_back_to_the_chain(self) -> None:
+        from lncrawl.core import Chapter as CrawlerChapter
+        from sources.en.n import novelfire
+
+        self.addCleanup(setattr, novelfire, "_MIRRORS", novelfire._MIRRORS)
+        novelfire._MIRRORS = novelfire._MirrorMap()
+        origin = self.novel_url.split("/book/", 1)[0]
+        self.js_redirected.update(f"/chapter-{serial}" for serial in range(1, 9))
+        # the mirror only gives the login notice when asked directly
+        self.notices.update(f"/mirror/chapter-{serial}?noti=1" for serial in range(3, 9))
+        for serial in range(1, 9):
+            chapter = CrawlerChapter(id=serial, url=f"{origin}/chapter-{serial}", title="")
+            self.source.download_chapter_body(chapter)
+        # each direct miss went back through the chain; after three in a row the
+        # mirror is not asked directly any more
+        for serial in range(3, 6):
+            self.assertEqual(self.counts[f"/chapter-{serial}"], 1)
+        for serial in range(6, 9):
+            self.assertEqual(self.counts[f"/chapter-{serial}"], 1)
+            self.assertEqual(self.counts[f"/mirror/chapter-{serial}?noti=1"], 1)
+
     def test_transient_http_failure_is_retried_before_accepting_chapter(self) -> None:
         self.fail_once.add("/chapter-2")
         job = self.export(seconds=5)
