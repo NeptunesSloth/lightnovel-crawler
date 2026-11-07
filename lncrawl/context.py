@@ -204,6 +204,8 @@ class __AppContext__:
         self.__ready = False
         if "scheduler" in self.__dict__:
             self.scheduler.stop()
+        if "crawler" in self.__dict__:
+            self.crawler.close()  # pooled crawlers, once no job can be using one
         if "sources" in self.__dict__:
             self.sources.close()
         if "mail" in self.__dict__:

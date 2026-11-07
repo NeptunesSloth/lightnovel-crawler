@@ -1,6 +1,6 @@
 import logging
 from threading import Event, Thread
-from typing import Callable, List, Set
+from typing import Callable, List, Optional, Set
 
 from ...context import ctx
 from ...exceptions import AbortedException
@@ -15,12 +15,12 @@ def run_scrubber(signal: Event) -> None:
     Scrubber.run(signal)
 
 
-def run_jobs(signal: Event):
-    JobRunner.run(signal, False)
+def run_jobs(signal: Event) -> bool:
+    return JobRunner.run(signal, False)
 
 
-def run_artifact_maker(signal: Event):
-    JobRunner.run(signal, True)
+def run_artifact_maker(signal: Event) -> bool:
+    return JobRunner.run(signal, True)
 
 
 class JobScheduler:
@@ -87,7 +87,7 @@ class JobScheduler:
     def stop_job(self, job_id: str):
         JobRunner.cancel(job_id)
 
-    def _thread(self, run: Callable[[Event], None], interval: int) -> None:
+    def _thread(self, run: Callable[[Event], Optional[bool]], interval: int) -> None:
         t = Thread(
             target=self._loop,
             args=[run, interval],
@@ -96,11 +96,16 @@ class JobScheduler:
         t.start()
         self._threads.append(t)
 
-    def _loop(self, run: Callable[[Event], None], interval: int) -> None:
+    def _loop(self, run: Callable[[Event], Optional[bool]], interval: int) -> None:
         while self.running:
             try:
-                run(self._signal)
-                self._signal.wait(interval)
+                # A runner that just took a job goes straight back for the next
+                # one; the cooldown is only for an empty queue. Pausing after every
+                # job capped a novel at about one chapter per second per worker,
+                # since each chapter (and each image) is a job of its own.
+                busy = run(self._signal)
+                if not busy:
+                    self._signal.wait(interval)
                 if self._signal.is_set():
                     return
             except KeyboardInterrupt:
@@ -109,3 +114,4 @@ class JobScheduler:
                 return
             except Exception:
                 logger.error("Unexpected error in scheduler", exc_info=True)
+                self._signal.wait(interval)  # don't spin on an error that repeats

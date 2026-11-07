@@ -18,7 +18,8 @@ _sites: Dict[str, str] = {}  # export job id -> its site, while a worker holds i
 
 class JobRunner:
     @staticmethod
-    def run(signal: Event, artifact: bool):
+    def run(signal: Event, artifact: bool) -> bool:
+        """Claim and run the next pending job. True if one was taken off the queue."""
         with _lock.using(signal):
             # get next pending job for a user that doesn't have any running job
             # exports still held by a worker count as running even once
@@ -38,13 +39,13 @@ class JobRunner:
                     held_exports=held,
                 )
             if not job:
-                return  # no pending job
+                return False  # no pending job
 
             # if it is an internal job, cancel it if it is part of a finished job
             if job.parent_job_id:
                 if ctx.jobs.cancel_if_dangling(job):
                     logger.debug(f"Dangling job [b]{job.id}[/b] | {job.job_title}")
-                    return
+                    return True
 
             # add the job to queue
             job_signal = Event()
@@ -65,6 +66,7 @@ class JobRunner:
                     _users.pop(job.id, None)
                     _types.pop(job.id, None)
                     _sites.pop(job.id, None)
+        return True
 
     @staticmethod
     def cancel(job_id: str, cancel_children: bool = True):
