@@ -1,5 +1,5 @@
 from threading import Event
-from typing import List, Type
+from typing import Dict, List, Tuple, Type
 
 from ....dao import Job
 from ._base import BaseHandler, FallbackHandler
@@ -65,3 +65,42 @@ def run_job(job: Job, signal: Event) -> bool:
         if handler.can_activate(job):
             return handler(job, signal).process()
     return False
+
+
+def run_jobs_concurrently(
+    jobs: List[Tuple[Job, Event]],
+    concurrency: int,
+    signal: Event,
+) -> None:
+    """Run each job with its own signal, ``concurrency`` at a time, until all ran.
+
+    Raises AbortedException once ``signal`` is set; jobs then running are asked
+    to stop through their own signals.
+    """
+    from ....core.taskman import TaskManager
+    from ...crawl_engine import crawl_items
+
+    by_id: Dict[str, Tuple[Job, Event]] = {job.id: (job, sig) for job, sig in jobs}
+
+    def run_one(job_id: str) -> bool:
+        job, job_signal = by_id[job_id]
+        if signal.is_set():
+            job_signal.set()
+        return run_job(job, job_signal)
+
+    taskman = TaskManager(workers=concurrency, signal=signal)
+    try:
+        for _ in crawl_items(
+            list(by_id),
+            lambda job_id: taskman.submit_task(run_one, job_id),
+            signal,
+            max_inflight=concurrency,
+            # Each job bounds its own requests; this only guards a hang.
+            idle_timeout=600,
+        ):
+            pass
+    finally:
+        if signal.is_set():
+            for _, job_signal in by_id.values():
+                job_signal.set()
+        taskman.close()

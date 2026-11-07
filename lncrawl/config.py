@@ -678,6 +678,21 @@ class CrawlerConfig(_Section):
         self._set("download_concurrency", max(1, int(v)))
 
     @property
+    def worker_processes(self) -> int:
+        """Download Worker Processes.
+
+        Separate processes that download chapters, so downloads from different sites use different
+        CPU cores and the web interface stays responsive. Each one uses about 175 MB of memory while
+        it runs and stops after five idle minutes. `0` downloads in the main process only; `-1`
+        (the default) picks one fewer than the number of CPU cores, at most three.
+        """
+        return int(self._get("worker_processes", -1))
+
+    @worker_processes.setter
+    def worker_processes(self, v: int) -> None:
+        self._set("worker_processes", int(v))
+
+    @property
     def runner_cooldown(self) -> int:
         """Runner Cooldown.
 

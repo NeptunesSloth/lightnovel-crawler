@@ -30,6 +30,7 @@ from lncrawl.services.jobs.service import JobService
 from lncrawl.services.novels import NovelService
 from lncrawl.services.scheduler.handlers import run_job
 from lncrawl.services.scheduler.handlers.export_source import ExportStalledError
+from lncrawl.services.scheduler.workers import DownloadWorkers
 from lncrawl.services.volumes import VolumeService
 from lncrawl.utils.chapter_content import NOVELFIRE_LOGIN_NOTICE
 
@@ -256,7 +257,10 @@ class NovelRepairTests(unittest.TestCase):
             config=SimpleNamespace(
                 app=SimpleNamespace(app_dir=root),
                 crawler=SimpleNamespace(
-                    ignore_images=True, runner_concurrency=5, download_concurrency=4
+                    ignore_images=True,
+                    runner_concurrency=5,
+                    download_concurrency=4,
+                    worker_processes=0,  # in-process: worker processes need a real app
                 ),
             ),
             db=SimpleNamespace(session=lambda: Session(self.engine, expire_on_commit=False)),
@@ -269,6 +273,7 @@ class NovelRepairTests(unittest.TestCase):
             logger=SimpleNamespace(info=MagicMock(), debug=MagicMock()),
             activity=SimpleNamespace(record=MagicMock()),
             job_notifier=SimpleNamespace(notify=MagicMock()),
+            download_workers=DownloadWorkers(),
             files=FileService(),
             chapters=ChapterService(),
             crawler=CrawlerService(),
@@ -315,6 +320,7 @@ class NovelRepairTests(unittest.TestCase):
             "services.scheduler.handlers.fetch_missing",
             "services.scheduler.handlers.chapter_batch",
             "services.scheduler.handlers.chapter",
+            "services.scheduler.workers",
             "services.scheduler.handlers.artifact",
         ]
         for module in modules:

@@ -17,6 +17,11 @@ _types: Dict[str, JobType] = {}
 _sites: Dict[str, str] = {}  # export job id -> its site, while a worker holds it
 
 
+def held_export_sites() -> List[str]:
+    """Sites a bulk export is downloading in this process right now."""
+    return [site for site in list(_sites.values()) if site]
+
+
 class JobRunner:
     @staticmethod
     def run(signal: Event, artifact: bool) -> bool:

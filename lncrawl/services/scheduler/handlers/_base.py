@@ -173,11 +173,9 @@ class BatchHandler(BaseHandler):
         (``extra[key]`` names their key) are reused rather than made again, so a
         batch resumed after a restart carries on where it was.
         """
-        from ....core.taskman import TaskManager
-        from ....services.crawl_engine import crawl_items
         from ....utils.text_tools import generate_uuid
         from ..runner import JobRunner
-        from . import run_job
+        from . import run_jobs_concurrently
 
         def runnable() -> List[Job]:
             # The same jobs a worker would pick: never started, or started and
@@ -198,14 +196,7 @@ class BatchHandler(BaseHandler):
         new_ids = {item: generate_uuid() for item in missing}
         reserved = JobRunner.reserve(new_ids.values(), self.job.user_id, child_type)
 
-        def run_child(job_id: str) -> bool:
-            job, job_signal = jobs[job_id]
-            if self.signal.is_set():
-                job_signal.set()
-            return run_job(job, job_signal)
-
         workers = ctx.config.crawler.download_concurrency
-        taskman = TaskManager(workers=workers, signal=self.signal)
         try:
             for start in range(0, len(missing), CREATE_CHUNK):
                 if self.signal.is_set():
@@ -214,21 +205,42 @@ class BatchHandler(BaseHandler):
                 for job in create(chunk, [new_ids[item] for item in chunk]):
                     jobs[job.id] = (job, reserved[job.id])
 
-            for _ in crawl_items(
-                list(jobs),
-                lambda job_id: taskman.submit_task(run_child, job_id),
-                self.signal,
-                max_inflight=workers,
-                # Each child bounds its own requests; this only guards a hang.
-                idle_timeout=600,
-            ):
-                pass
+            def run_here() -> None:
+                # whatever a worker did not get to (or everything, without one)
+                if self.signal.is_set():
+                    raise AbortedException()
+                left = {child.id for child in runnable()}
+                todo = [entry for job_id, entry in jobs.items() if job_id in left]
+                run_jobs_concurrently(todo, workers, self.signal)
+
+            # Chapter downloads are where the CPU goes, so they may run in a
+            # worker process (services/scheduler/workers.py).
+            site = self._download_site(child_type, jobs)
+            if site:
+                ctx.download_workers.run(site, list(jobs), workers, self.signal, run_here)
+            else:
+                run_jobs_concurrently(list(jobs.values()), workers, self.signal)
+            if self.signal.is_set():
+                raise AbortedException()
         finally:
-            taskman.close()
             for job_id, (_, job_signal) in jobs.items():
                 JobRunner.release(job_id, job_signal)
             for job_id, job_signal in reserved.items():
                 JobRunner.release(job_id, job_signal)  # no-op for those released above
+
+    def _download_site(
+        self, child_type: JobType, jobs: Dict[str, Tuple[Job, Event]]
+    ) -> Optional[str]:
+        """The site these children download from, if they may go to a worker."""
+        if child_type != JobType.CHAPTER or not jobs:
+            return None
+        novel_id = next(iter(jobs.values()))[0].extra.get("novel_id")
+        if not novel_id:
+            return None
+        try:
+            return ctx.novels.get(novel_id).domain or None
+        except Exception:
+            return None
 
 
 class FallbackHandler(BaseHandler):
