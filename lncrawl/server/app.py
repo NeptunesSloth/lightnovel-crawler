@@ -2,17 +2,19 @@ import asyncio
 from contextlib import asynccontextmanager
 import mimetypes
 from pathlib import Path
+from typing import Dict, Optional, Tuple
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, Response
 
 from ..assets.version import get_version
 from ..context import ctx
 from ..exceptions import ServerErrors, get_exception_handlers
 from .api import router as api
+from .caching import Blob, FileBlobCache, blob_response, text_blob
 from .downloads import router as downloads_router
+from .middleware.compression import SelectiveGZipMiddleware
 from .middleware.staticfiles import CustomStaticFiles, StaticFilesGuard
 from .reader import router as reader_router
 from .tools import router as tools_router
@@ -89,7 +91,7 @@ app.add_middleware(
 )
 
 app.add_middleware(
-    GZipMiddleware,
+    SelectiveGZipMiddleware,
     minimum_size=1000,
 )
 
@@ -116,8 +118,9 @@ app.mount("/static", CustomStaticFiles(), name="static")
 
 
 # Lightweight liveness probe — no auth, used by Docker healthcheck
+# (sync: the counts are DB queries, so FastAPI runs it off the event loop)
 @app.get("/health", include_in_schema=False)
-async def health():
+def health() -> Dict[str, object]:
     job_count = ctx.jobs.count()
     user_count = ctx.users.count()
     return {
@@ -129,25 +132,58 @@ async def health():
 
 
 # Mount frontend
-@app.get("/{fallback:path}", include_in_schema=False)
-async def serve_web(fallback: str):
-    target_file = web_dir.joinpath(fallback)
-    if not target_file.is_relative_to(web_dir):
-        raise ServerErrors.not_found
-    loop = asyncio.get_event_loop()
-    if not await loop.run_in_executor(None, target_file.is_file):
-        target_file = web_dir / "index.html"
+#
+# The build under web/ is held in memory, gzipped once, and refreshed when a
+# file changes on disk, so a page load neither re-reads nor re-compresses the
+# ~4 MB of bundles on the event loop. Vite names everything under assets/ by
+# its content hash (Home-CaOuWaxX.js), so those are cached by the browser for
+# good; the entry points that must pick up a new build stay uncached.
+_NO_CACHE = "no-cache, no-store, must-revalidate"
+_IMMUTABLE = "public, max-age=31536000, immutable"
+_web_cache = FileBlobCache()
+_web_root = web_dir.resolve()
+
+
+def _web_media_type(target_file: Path) -> str:
     mime_type, _ = mimetypes.guess_type(target_file)
     if not mime_type:
-        mime_type = "application/octet-stream"
+        return "application/octet-stream"
     if mime_type == "text/javascript":
-        mime_type = "application/javascript"
+        return "application/javascript"
+    return mime_type
+
+
+def _load_web_file(fallback: str) -> Tuple[Path, Optional[Blob]]:
+    target_file = web_dir.joinpath(fallback).resolve()
+    if not target_file.is_relative_to(_web_root):
+        # "/../app.py" (sent raw, e.g. curl --path-as-is) must not leave web/
+        raise ServerErrors.not_found
+    if not target_file.is_file():
+        target_file = web_dir / "index.html"
+    if target_file.name == "index.html":
+        return target_file, _load_index(target_file)
+    return target_file, _web_cache.get(target_file, _web_media_type(target_file))
+
+
+def _load_index(target_file: Path) -> Optional[Blob]:
+    blob = _web_cache.get(target_file, "text/html")
+    if blob is None:
+        return None
+    html = blob.body.decode("utf-8")
+    if "lncrawl-tools-launcher" not in html and "</body>" in html:
+        html = html.replace("</body>", _TOOLS_LAUNCHER + "</body>", 1)
+    return text_blob(html, "text/html; charset=utf-8")
+
+
+@app.get("/{fallback:path}", include_in_schema=False)
+async def serve_web(request: Request, fallback: str) -> Response:
+    loop = asyncio.get_running_loop()
+    target_file, blob = await loop.run_in_executor(None, _load_web_file, fallback)
+    headers: Dict[str, str] = {}
     if target_file.name in {"index.html", "sw.js", "registerSW.js"}:
-        no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
-        if target_file.name == "index.html":
-            html = await loop.run_in_executor(None, lambda: target_file.read_text(encoding="utf-8"))
-            if "lncrawl-tools-launcher" not in html and "</body>" in html:
-                html = html.replace("</body>", _TOOLS_LAUNCHER + "</body>", 1)
-            return HTMLResponse(content=html, headers=no_cache)
-        return FileResponse(target_file, media_type=mime_type, headers=no_cache)
-    return FileResponse(target_file, media_type=mime_type)
+        headers["Cache-Control"] = _NO_CACHE
+    elif target_file.parent == _web_root / "assets":
+        headers["Cache-Control"] = _IMMUTABLE
+    if blob is not None:
+        return blob_response(request, blob, headers)
+    return FileResponse(target_file, media_type=_web_media_type(target_file), headers=headers)

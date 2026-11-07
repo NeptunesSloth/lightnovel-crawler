@@ -1,10 +1,13 @@
+from collections import Counter
+from concurrent.futures import Future
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
-from lncrawl.core import Chapter
+from lncrawl.core import Chapter, Volume
 from lncrawl.core.cleaner import TextCleaner
 from sources.en.n.novelfire import NovelFireCrawler
 
@@ -14,6 +17,67 @@ class NovelFireTests(unittest.TestCase):
         crawler = SimpleNamespace(workers=4, init_executor=MagicMock())
         NovelFireCrawler.initialize(crawler)
         crawler.init_executor.assert_called_once_with(workers=4, ratelimit=3)
+
+    def test_chapter_list_pages_are_all_read_once_and_in_order(self) -> None:
+        # Nine pages, each paginated with a window of the next three only, so the
+        # crawler must keep following "next" past what the first page names.
+        novel_url = "https://novelfire.net/book/example"
+        last_page = 9
+        fetched: Counter = Counter()
+
+        def page_html(number: int) -> str:
+            links = "".join(
+                f'<a class="page-link" href="/book/example/chapters?page={n}"'
+                + (' rel="next"' if n == number + 1 else "")
+                + f">{n}</a>"
+                for n in range(max(1, number - 1), min(last_page, number + 3) + 1)
+                if n != number
+            )
+            items = "".join(
+                f'<li><a title="Chapter {number}.{i}" href="/book/example/c-{number}-{i}">x</a></li>'
+                for i in (1, 2)
+            )
+            return f'<ul class="chapter-list">{items}</ul><div class="pagination">{links}</div>'
+
+        def get_soup(url: str) -> BeautifulSoup:
+            fetched[url] += 1
+            if url == novel_url:
+                return BeautifulSoup(
+                    '<h1>Example</h1><span itemprop="author">A</span>'
+                    '<div class="cover"><img src="/c.jpg"></div>',
+                    "html.parser",
+                )
+            number = int(url.rsplit("page=", 1)[1]) if "page=" in url else 1
+            return BeautifulSoup(page_html(number), "html.parser")
+
+        def submit_task(fn, *args) -> Future:
+            future: Future = Future()
+            future.set_result(fn(*args))
+            return future
+
+        crawler = SimpleNamespace(
+            novel_url=novel_url,
+            get_soup=get_soup,
+            submit_task=submit_task,
+            absolute_url=lambda url: urljoin(novel_url, url),
+            cleaner=self.cleaner,
+            chapters=[],
+            volumes=[],
+        )
+        NovelFireCrawler.read_novel_info(crawler)
+
+        self.assertEqual(
+            [chapter.title for chapter in crawler.chapters],
+            [f"Chapter {n}.{i}" for n in range(1, last_page + 1) for i in (1, 2)],
+        )
+        self.assertEqual([chapter.id for chapter in crawler.chapters], list(range(1, 19)))
+        self.assertEqual(crawler.volumes, [Volume(id=n) for n in range(1, last_page + 1)])
+        self.assertEqual(
+            [chapter.volume for chapter in crawler.chapters],
+            [n for n in range(1, last_page + 1) for _ in (1, 2)],
+        )
+        self.assertTrue(all(count == 1 for count in fetched.values()), fetched)
+        self.assertEqual(len(fetched), last_page + 1)  # the novel page and each list page
 
     @classmethod
     def setUpClass(cls) -> None:

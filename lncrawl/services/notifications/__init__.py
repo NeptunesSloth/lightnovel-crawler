@@ -43,15 +43,24 @@ class JobNotificationService:
         if not user.is_verified:
             return
 
+        email_alerts = user.extra.get("email_alerts") or {}
+        if not any(email_alerts.values()):
+            return  # nothing to send; skip the root lookup below
+
         # ensure this is root job, as email_sent is tracked only on the root
         if job.parent_job_id:
+            # Every email is about the root's state. The root's own handler reports
+            # it starting, and it can only finish when some job under it finishes,
+            # so a child that is still in progress cannot change what to send. This
+            # runs for every chapter of a download; skipping saves a recursive query.
+            if not job.is_done:
+                return
             root = ctx.jobs.get_root(job.id)
             if not root:
                 return  # unlikely, but can happen for dangling jobs
             job = root
 
         # send when notification is enabled and email is not already sent
-        email_alerts = user.extra.get("email_alerts") or {}
         email_sent = set(job.extra.get("email_sent") or [])
         for item_value, is_enabled in email_alerts.items():
             if not is_enabled:

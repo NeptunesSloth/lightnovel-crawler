@@ -9,8 +9,10 @@ embedded as a string constant so it is always packaged with the wheel/exe.
 Served at ``GET /tools``.
 """
 
-from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Request
+from fastapi.responses import Response
+
+from .caching import blob_response, text_blob
 
 router = APIRouter()
 
@@ -497,6 +499,23 @@ _TOOLS_HTML = """<!DOCTYPE html>
   }
   function isActive(s) { return s === "PENDING" || s === "RUNNING"; }
 
+  // Job polling backs off while the tab is hidden: a background tab polls at
+  // most every 30 s instead of every 2-4 s, and catches up as soon as it is shown.
+  var waiting = [];
+  function later(fn, ms) {
+    var entry = { fn: fn, t: 0 };
+    entry.t = setTimeout(function () {
+      var i = waiting.indexOf(entry); if (i >= 0) waiting.splice(i, 1);
+      fn();
+    }, document.hidden ? Math.max(ms, 30000) : ms);
+    waiting.push(entry);
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) return;
+    var due = waiting; waiting = [];
+    due.forEach(function (e) { clearTimeout(e.t); e.fn(); });
+  });
+
   // Jobs share a few workers. Say what a waiting job is waiting behind, once per change.
   function explainWaiting(id, label) {
     explainWaiting._said = explainWaiting._said || {};
@@ -549,7 +568,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
             " downloaded, " + c.missing + " missing, " + c.failed + " failed, " + c.empty + " empty.", "log-info");
         }
         if (isActive(status)) {
-          setTimeout(function () { pollJob(id, label, onEnd); }, 3000);
+          later(function () { pollJob(id, label, onEnd); }, 3000);
           return;
         }
         if (status === "FAILED" && job.error) {
@@ -792,7 +811,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           log("Export · " + status + " (" + job.done + "/" + job.total + ")", "log-info");
         }
         if (isActive(status)) {
-          setTimeout(function () { pollExport(id, 0); }, 4000);
+          later(function () { pollExport(id, 0); }, 4000);
         } else if (status === "SUCCESS") {
           setExportControls(null, id);
           var extra = job.extra || {};
@@ -835,7 +854,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
         var n = fails + 1;
         if (n === 1) log("Status check hiccup — still retrying… (" + e.message + ")", "log-err");
         else if (n === 15) log("Still can't reach the server — export status is unknown; retrying every 15s. Check that the app is still running before starting another export.", "log-err");
-        setTimeout(function () { pollExport(id, n); }, n < 15 ? 8000 : 15000);
+        later(function () { pollExport(id, n); }, n < 15 ? 8000 : 15000);
       });
   }
 
@@ -1064,7 +1083,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           importStatus.textContent = name + ": " +
             (ex.current ? "reading " + ex.current : "starting") +
             " — " + seen + " novel(s), " + (ex.chapters || 0) + " chapters so far";
-          setTimeout(function () { pollImport(id, name, 0); }, 2000);
+          later(function () { pollImport(id, name, 0); }, 2000);
           return;
         }
         importStatus.textContent = "";
@@ -1084,7 +1103,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
         // the import keeps running server-side, so a hiccup is not the end
         var n = (fails || 0) + 1;
         if (n === 1) log("Status check hiccup — still watching the import…", "log-err");
-        setTimeout(function () { pollImport(id, name, n); }, n < 10 ? 4000 : 10000);
+        later(function () { pollImport(id, name, n); }, n < 10 ? 4000 : 10000);
       });
   }
 
@@ -1322,8 +1341,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
 
 @router.get("/tools", include_in_schema=False)
-async def tools_page() -> HTMLResponse:
+async def tools_page(request: Request) -> Response:
     from ..context import ctx
 
     info = f"Lightnovel Crawler v{ctx.config.app.version} · build {ctx.config.app.build}"
-    return HTMLResponse(content=_TOOLS_HTML.replace("__BUILD_INFO__", info))
+    # Encoded and gzipped once per build info; a revalidating browser gets a 304.
+    page = text_blob(_TOOLS_HTML.replace("__BUILD_INFO__", info), "text/html; charset=utf-8")
+    return blob_response(request, page, {"Cache-Control": "no-cache"})

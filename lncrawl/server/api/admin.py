@@ -115,8 +115,9 @@ def download_backup() -> FileResponse:
     return FileResponse(latest, media_type="application/zip", filename=latest.name)
 
 
+# sync on purpose: downloads from the repository, so it runs in the thread pool
 @router.post("/update-sources", summary="Update sources from the repository")
-async def update() -> int:
+def update() -> int:
     return ctx.admin.update_sources()
 
 

@@ -28,7 +28,7 @@ class ChapterHandler(BatchHandler):
         if not chapter.is_available:
             raise HandlerException("Failed to fetch contents")
 
-        if JobType.IMAGE_BATCH not in added_types:
+        if JobType.IMAGE_BATCH not in added_types and chapter.extra.get("image_count") != 0:
             images = ctx.images.list(chapter_id=chapter.id, is_crawled=False)
             if not images:
                 return

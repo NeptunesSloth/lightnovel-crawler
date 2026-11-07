@@ -11,7 +11,7 @@ from zipfile import ZipFile
 
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.pool import StaticPool
+from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from lncrawl.core import Crawler
@@ -30,8 +30,17 @@ from lncrawl.services.jobs.service import JobService
 from lncrawl.services.novels import NovelService
 from lncrawl.services.scheduler.handlers import run_job
 from lncrawl.services.scheduler.handlers.export_source import ExportStalledError
+from lncrawl.services.scheduler.workers import DownloadWorkers
 from lncrawl.services.volumes import VolumeService
 from lncrawl.utils.chapter_content import NOVELFIRE_LOGIN_NOTICE
+
+
+def _sqlite_pragmas(connection, _record) -> None:
+    cursor = connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=15000")
+    cursor.close()
 
 
 class NovelRepairTests(unittest.TestCase):
@@ -208,9 +217,13 @@ class NovelRepairTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         root = Path(self.stack.enter_context(TemporaryDirectory()))
+        # A file, not one shared in-memory connection: batch jobs run their
+        # chapters on several threads at once, as the app's own database allows.
         self.engine = create_engine(
-            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+            f"sqlite:///{root / 'repair.sqlite'}",
+            connect_args={"check_same_thread": False, "timeout": 15},
         )
+        event.listen(self.engine, "connect", _sqlite_pragmas)
         self.addCleanup(self.engine.dispose)
         SQLModel.metadata.create_all(self.engine)
         self.user = User(id="user", email="reader@example.com", password="test-only")
@@ -243,7 +256,12 @@ class NovelRepairTests(unittest.TestCase):
         self.ctx = SimpleNamespace(
             config=SimpleNamespace(
                 app=SimpleNamespace(app_dir=root),
-                crawler=SimpleNamespace(ignore_images=True, runner_concurrency=5),
+                crawler=SimpleNamespace(
+                    ignore_images=True,
+                    runner_concurrency=5,
+                    download_concurrency=4,
+                    worker_processes=0,  # in-process: worker processes need a real app
+                ),
             ),
             db=SimpleNamespace(session=lambda: Session(self.engine, expire_on_commit=False)),
             users=SimpleNamespace(get=lambda user_id: self.user),
@@ -255,6 +273,7 @@ class NovelRepairTests(unittest.TestCase):
             logger=SimpleNamespace(info=MagicMock(), debug=MagicMock()),
             activity=SimpleNamespace(record=MagicMock()),
             job_notifier=SimpleNamespace(notify=MagicMock()),
+            download_workers=DownloadWorkers(),
             files=FileService(),
             chapters=ChapterService(),
             crawler=CrawlerService(),
@@ -301,6 +320,7 @@ class NovelRepairTests(unittest.TestCase):
             "services.scheduler.handlers.fetch_missing",
             "services.scheduler.handlers.chapter_batch",
             "services.scheduler.handlers.chapter",
+            "services.scheduler.workers",
             "services.scheduler.handlers.artifact",
         ]
         for module in modules:
@@ -346,7 +366,9 @@ class NovelRepairTests(unittest.TestCase):
         job = self.repair()
         self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
         self.assertCountEqual(self.downloads, [2, 3, 4])
-        self.assertEqual(self.ctx.sources.init_crawler.call_count, 3)
+        # The three chapters download at once, each on a pooled crawler: never
+        # more crawlers than chapters in flight, and none built twice for one.
+        self.assertLessEqual(self.ctx.sources.init_crawler.call_count, 3)
         self.assertTrue(job.extra["completeness"]["complete"])
         artifact = self.ctx.artifacts.get(job.extra["artifact_id"])
         with ZipFile(self.ctx.files.resolve(artifact.output_file)) as book:

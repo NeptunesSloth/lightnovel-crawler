@@ -158,6 +158,12 @@ class __AppContext__:
         return TranslationService()
 
     @cached_property
+    def download_workers(self):
+        from .services.scheduler.workers import DownloadWorkers
+
+        return DownloadWorkers()
+
+    @cached_property
     def crawler(self):
         from .services.crawler import CrawlerService
 
@@ -204,6 +210,10 @@ class __AppContext__:
         self.__ready = False
         if "scheduler" in self.__dict__:
             self.scheduler.stop()
+        if "download_workers" in self.__dict__:
+            self.download_workers.close()
+        if "crawler" in self.__dict__:
+            self.crawler.close()  # pooled crawlers, once no job can be using one
         if "sources" in self.__dict__:
             self.sources.close()
         if "mail" in self.__dict__:
@@ -212,7 +222,7 @@ class __AppContext__:
             self.db.close()
         if "lsp" in self.__dict__:
             self.lsp.stop()
-        if "translations" in self.__dict__:
+        if "translator" in self.__dict__:
             self.translator.close()
         if "http" in self.__dict__:
             self.http.close()

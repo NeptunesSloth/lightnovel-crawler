@@ -1,11 +1,12 @@
 from contextlib import contextmanager
 from difflib import SequenceMatcher
 import logging
-from threading import Event
+from threading import Event, Lock
 from time import monotonic, sleep
-from typing import Callable, Dict, List, Optional, Set, Union
+from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from pydantic import HttpUrl
+import sqlmodel as sq
 
 from ..context import ctx
 from ..core import Chapter as CrawlerChapter, Crawler, Novel as CrawlerNovel, SearchResult
@@ -15,6 +16,7 @@ from ..exceptions import AbortedException, EmptyChapterError, ServerErrors
 from ..utils import novel_status
 from ..utils.chapter_content import has_chapter_content
 from ..utils.sitemap import collect_sitemap_urls, learn_shapes, title_from_url
+from ..utils.time_utils import current_timestamp
 from ..utils.url_tools import extract_host
 
 logger = logging.getLogger(__name__)
@@ -22,10 +24,75 @@ logger = logging.getLogger(__name__)
 # Time allowed for a novel's details page and its whole chapter list.
 NOVEL_DETAILS_SECONDS: float = 600
 
+# How long an idle pooled crawler is kept for the next chapter or image job.
+POOL_IDLE_SECONDS: float = 300
+# Idle crawlers kept per (user, site). Busy ones are not counted, so this only
+# bounds how many sit around once a burst of jobs has finished.
+POOL_MAX_IDLE: int = 8
+
+_PoolKey = Tuple[str, str]
+
 
 class CrawlerService:
+    """Fetches novels, chapters and images through source crawlers.
+
+    The server runs every chapter and every image as a job of its own. Building a
+    crawler for each one meant running the source's `initialize()` and, for a
+    source that needs an account, logging in again: once per chapter. Chapter
+    and image fetches therefore borrow a crawler from a small pool keyed by user
+    and site instead. A borrowed crawler serves one job at a time, so the per-job
+    cancellation signal swapped onto its scraper is never shared.
+    """
+
     def __init__(self) -> None:
-        pass
+        self._pool_lock: Lock = Lock()
+        self._pool: Dict[_PoolKey, List[Tuple[float, Crawler]]] = {}
+
+    def close(self) -> None:
+        """Close every idle pooled crawler."""
+        with self._pool_lock:
+            idle = [crawler for entries in self._pool.values() for _, crawler in entries]
+            self._pool.clear()
+        for crawler in idle:
+            self._close_quietly(crawler)
+
+    @staticmethod
+    def _close_quietly(crawler: Crawler) -> None:
+        try:
+            crawler.close()
+        except Exception:
+            logger.debug("Failed to close pooled crawler", exc_info=True)
+
+    @staticmethod
+    def _pool_key(user_id: str, url: str) -> _PoolKey:
+        return (user_id, extract_host(url) or url)
+
+    def _borrow(self, key: _PoolKey) -> Optional[Crawler]:
+        expired: List[Crawler] = []
+        crawler: Optional[Crawler] = None
+        cutoff: float = monotonic() - POOL_IDLE_SECONDS
+        with self._pool_lock:
+            for pool_key, entries in list(self._pool.items()):
+                expired.extend(c for at, c in entries if at < cutoff)
+                fresh = [(at, c) for at, c in entries if at >= cutoff]
+                if fresh:
+                    self._pool[pool_key] = fresh
+                else:
+                    del self._pool[pool_key]
+            entries = self._pool.get(key)
+            if entries:
+                crawler = entries.pop()[1]
+        for old in expired:
+            self._close_quietly(old)
+        return crawler
+
+    def _give_back(self, key: _PoolKey, crawler: Crawler) -> None:
+        with self._pool_lock:
+            entries = self._pool.setdefault(key, [])
+            if len(entries) < POOL_MAX_IDLE:
+                entries.append((monotonic(), crawler))
+                return
+        self._close_quietly(crawler)
 
     def _record_chapter_failure(self, chapter: Chapter, error: Exception) -> None:
         chapter.extra = {
@@ -70,8 +137,20 @@ class CrawlerService:
         url: str,
         signal: Optional[Event] = None,
         custom_crawler: Optional[Crawler] = None,
-    ):
+        pooled: bool = False,
+    ) -> Iterator[Crawler]:
+        """Yield a crawler for ``url``, logged in as the user if the source allows.
+
+        ``pooled`` borrows an idle crawler for the same user and site and returns
+        it afterwards instead of closing it. Only for chapter and image fetches:
+        `read_novel` leaves per-novel state on the instance that must not leak
+        into another novel's details.
+        """
+        key: Optional[_PoolKey] = None
         crawler = custom_crawler
+        if crawler is None and pooled:
+            key = self._pool_key(user_id, url)
+            crawler = self._borrow(key)
         if crawler is None:
             crawler = ctx.sources.init_crawler(url)
 
@@ -94,7 +173,10 @@ class CrawlerService:
         finally:
             crawler.scraper.signal = prev_signal
             if custom_crawler is None:
-                crawler.close()
+                if key is not None:
+                    self._give_back(key, crawler)
+                else:
+                    crawler.close()
 
     def fetch_novel(
         self,
@@ -239,7 +321,7 @@ class CrawlerService:
         if not url.host:
             raise ServerErrors.invalid_url
 
-        with self.prepare_crawler(user_id, novel.url, signal, custom) as crawler:
+        with self.prepare_crawler(user_id, novel.url, signal, custom, pooled=True) as crawler:
             # check if download is necessary
             available = chapter.is_available
             if not refresh and available:
@@ -300,15 +382,27 @@ class CrawlerService:
             extra.pop("download_status", None)
             extra.pop("download_error", None)
             extra["crawler_version"] = crawler.version
+            # Lets the chapter job skip looking for images to fetch when there are none.
+            extra["image_count"] = len(model.images)
             chapter.extra = extra
 
             # update title and status
             chapter.is_done = True
             chapter.title = model.title
+            chapter.updated_at = current_timestamp()
 
-            # update db
+            # update db: a plain UPDATE, where merge() would read the row back first
             with ctx.db.session() as sess:
-                sess.merge(chapter)
+                sess.exec(
+                    sq.update(Chapter)
+                    .where(sq.col(Chapter.id) == chapter.id)
+                    .values(
+                        extra=chapter.extra,
+                        is_done=chapter.is_done,
+                        title=chapter.title,
+                        updated_at=chapter.updated_at,
+                    )
+                )
                 sess.commit()
 
             logger.debug(f"Downloaded chapter: {novel.title}] - Chapter {chapter.serial}")
@@ -343,7 +437,7 @@ class CrawlerService:
         if not url.host:
             raise ServerErrors.invalid_url
 
-        with self.prepare_crawler(user_id, novel.url, signal, custom) as crawler:
+        with self.prepare_crawler(user_id, novel.url, signal, custom, pooled=True) as crawler:
             # check if download is necessary
             if not refresh and image.is_available:
                 logger.debug(f"Skipped: {novel.title}] - Image {image.id}")
