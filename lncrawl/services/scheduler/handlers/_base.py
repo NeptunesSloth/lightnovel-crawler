@@ -5,9 +5,12 @@ import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ....context import ctx
-from ....dao import Job, JobStatus
+from ....dao import Job, JobStatus, JobType
 from ....exceptions import AbortedException
 from ....utils.time_utils import current_timestamp
+
+# Child jobs a batch creates per transaction.
+CREATE_CHUNK: int = 500
 
 
 class HandlerException(Exception):
@@ -151,36 +154,30 @@ class BatchHandler(BaseHandler):
         self,
         key: str,
         keys: List[str],
-        create: Callable[[str], Job],
+        child_type: JobType,
+        create: Callable[[List[str], List[str]], List[Job]],
     ) -> None:
         """Run one child job per key here, a few at a time, instead of queueing them.
 
         Each child is still a job of its own, so its progress, failure and
-        cancellation show and count exactly as before. But a worker no longer has
-        to find each one in the database, and the children share a few pooled
-        crawlers: at the same request rate this ran about three times as many
-        chapters per second as leaving them to the job queue.
+        cancellation show and count exactly as before. But no worker has to find
+        each one in the database, and the children share a few pooled crawlers:
+        at the same request rate this ran about three times as many chapters per
+        second as leaving them to the job queue.
 
-        Children an earlier run of this job made (``extra[key]`` names their key)
-        are reused rather than made again, so a batch resumed after a restart
-        carries on where it was.
+        ``create(keys, job_ids)`` makes the children for those keys with those ids,
+        in one go (see `JobService.fetch_chapters_under`). The ids
+        are claimed from the scheduler before the jobs exist, so an idle worker
+        cannot take them in between. Children an earlier run of this job made
+        (``extra[key]`` names their key) are reused rather than made again, so a
+        batch resumed after a restart carries on where it was.
         """
         from ....core.crawler import DEFAULT_WORKERS
         from ....core.taskman import TaskManager
         from ....services.crawl_engine import crawl_items
+        from ....utils.text_tools import generate_uuid
         from ..runner import JobRunner
         from . import run_job
-
-        # Make the missing children outside the scheduler's lock, which every
-        # worker needs to pick a job; a worker that takes one of them meanwhile
-        # simply runs it, and the claim below leaves it to that worker.
-        known = {child.extra.get(key) for child in ctx.jobs.get_children(self.job.id)}
-        for item in keys:
-            if self.signal.is_set():
-                raise AbortedException()
-            if item not in known:
-                known.add(item)
-                create(item)
 
         def runnable() -> List[Job]:
             # The same jobs a worker would pick: never started, or started and
@@ -193,8 +190,13 @@ class BatchHandler(BaseHandler):
                 or (child.status == JobStatus.RUNNING and child.done == 0)
             ]
 
-        claimed = JobRunner.claim(runnable)
-        jobs: Dict[str, Tuple[Job, Event]] = {job.id: (job, sig) for job, sig in claimed}
+        jobs: Dict[str, Tuple[Job, Event]] = {
+            job.id: (job, job_signal) for job, job_signal in JobRunner.claim(runnable)
+        }
+        known = {child.extra.get(key) for child in ctx.jobs.get_children(self.job.id)}
+        missing = list(dict.fromkeys(item for item in keys if item not in known))
+        new_ids = {item: generate_uuid() for item in missing}
+        reserved = JobRunner.reserve(new_ids.values(), self.job.user_id, child_type)
 
         def run_child(job_id: str) -> bool:
             job, job_signal = jobs[job_id]
@@ -204,6 +206,13 @@ class BatchHandler(BaseHandler):
 
         taskman = TaskManager(workers=DEFAULT_WORKERS, signal=self.signal)
         try:
+            for start in range(0, len(missing), CREATE_CHUNK):
+                if self.signal.is_set():
+                    raise AbortedException()
+                chunk = missing[start : start + CREATE_CHUNK]
+                for job in create(chunk, [new_ids[item] for item in chunk]):
+                    jobs[job.id] = (job, reserved[job.id])
+
             for _ in crawl_items(
                 list(jobs),
                 lambda job_id: taskman.submit_task(run_child, job_id),
@@ -217,6 +226,8 @@ class BatchHandler(BaseHandler):
             taskman.close()
             for job_id, (_, job_signal) in jobs.items():
                 JobRunner.release(job_id, job_signal)
+            for job_id, job_signal in reserved.items():
+                JobRunner.release(job_id, job_signal)  # no-op for those released above
 
 
 class FallbackHandler(BaseHandler):

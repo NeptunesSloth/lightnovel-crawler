@@ -6,6 +6,7 @@ from time import monotonic, sleep
 from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from pydantic import HttpUrl
+import sqlmodel as sq
 
 from ..context import ctx
 from ..core import Chapter as CrawlerChapter, Crawler, Novel as CrawlerNovel, SearchResult
@@ -15,6 +16,7 @@ from ..exceptions import AbortedException, EmptyChapterError, ServerErrors
 from ..utils import novel_status
 from ..utils.chapter_content import has_chapter_content
 from ..utils.sitemap import collect_sitemap_urls, learn_shapes, title_from_url
+from ..utils.time_utils import current_timestamp
 from ..utils.url_tools import extract_host
 
 logger = logging.getLogger(__name__)
@@ -380,15 +382,27 @@ class CrawlerService:
             extra.pop("download_status", None)
             extra.pop("download_error", None)
             extra["crawler_version"] = crawler.version
+            # Lets the chapter job skip looking for images to fetch when there are none.
+            extra["image_count"] = len(model.images)
             chapter.extra = extra
 
             # update title and status
             chapter.is_done = True
             chapter.title = model.title
+            chapter.updated_at = current_timestamp()
 
-            # update db
+            # update db: a plain UPDATE, where merge() would read the row back first
             with ctx.db.session() as sess:
-                sess.merge(chapter)
+                sess.exec(
+                    sq.update(Chapter)
+                    .where(sq.col(Chapter.id) == chapter.id)
+                    .values(
+                        extra=chapter.extra,
+                        is_done=chapter.is_done,
+                        title=chapter.title,
+                        updated_at=chapter.updated_at,
+                    )
+                )
                 sess.commit()
 
             logger.debug(f"Downloaded chapter: {novel.title}] - Chapter {chapter.serial}")

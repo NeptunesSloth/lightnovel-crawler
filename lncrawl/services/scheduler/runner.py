@@ -92,6 +92,25 @@ class JobRunner:
         return claimed
 
     @staticmethod
+    def reserve(job_ids: Iterable[str], user_id: str, job_type: JobType) -> Dict[str, Event]:
+        """Claim jobs before they exist, so no worker can take them once they do.
+
+        For a caller about to create jobs with these ids and run them itself.
+        Give each back with `release`, whether or not it was created.
+        """
+        reserved: Dict[str, Event] = {}
+        with _lock:
+            for job_id in job_ids:
+                if job_id in _queue:
+                    continue
+                job_signal = Event()
+                _queue[job_id] = job_signal
+                _users[job_id] = user_id
+                _types[job_id] = job_type
+                reserved[job_id] = job_signal
+        return reserved
+
+    @staticmethod
     def release(job_id: str, job_signal: Event) -> None:
         """Give back a job taken with `claim`, stopping it if it still runs."""
         with _lock:

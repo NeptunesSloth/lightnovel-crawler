@@ -314,6 +314,53 @@ class JobService:
             type=JobType.CHAPTER,
         )
 
+    def fetch_chapters_under(
+        self,
+        user: User,
+        parent_id: str,
+        chapter_ids: List[str],
+        job_ids: List[str],
+        **data: Any,
+    ) -> List[Job]:
+        """Create one CHAPTER child job of ``parent_id`` per chapter, all at once.
+
+        The same jobs `fetch_chapter` makes one by one, with the ids given, but in
+        one transaction: the chapters are read in one query, the jobs written in
+        one insert, and the parent's counts raised once.
+        """
+        if not chapter_ids:
+            return []
+        chapters = {chapter.id: chapter for chapter in ctx.chapters.get_many(chapter_ids)}
+        if chapters and not data.get("novel_title"):
+            novel = ctx.novels.get(next(iter(chapters.values())).novel_id)
+            data.update({"novel_id": novel.id, "novel_title": novel.title})
+        priority = ctx.tier.job_priority(user)
+        jobs: List[Job] = []
+        for chapter_id, job_id in zip(chapter_ids, job_ids):
+            chapter = chapters.get(chapter_id)
+            if chapter is None:
+                continue
+            extra = dict(data)
+            extra.setdefault("novel_id", chapter.novel_id)
+            extra.update({"chapter_id": chapter_id, "chapter_serial": chapter.serial})
+            job = Job(
+                type=JobType.CHAPTER,
+                extra=extra,
+                user_id=user.id,
+                parent_job_id=parent_id,
+                priority=priority,
+            )
+            job.id = job_id
+            jobs.append(job)
+        if not jobs:
+            return []
+        with ctx.db.session() as sess:
+            sess.add_all(jobs)
+            sess.flush()
+            self._update_up(sess, parent_id, total=Job.total + len(jobs), inclusive=True)
+            sess.commit()
+        return jobs
+
     def fetch_many_chapters(
         self,
         user: User,

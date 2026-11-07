@@ -1,3 +1,5 @@
+from typing import List
+
 from ....context import ctx
 from ....dao import Job
 from ....enums import JobType
@@ -17,12 +19,13 @@ class ChapterBatchHandler(BatchHandler):
         if not self.job.is_running:
             self._set_running()
 
-        def create(chapter_id: str) -> Job:
-            return ctx.jobs.fetch_chapter(
+        def create(chapter_ids: List[str], job_ids: List[str]) -> List[Job]:
+            return ctx.jobs.fetch_chapters_under(
                 self.user,
-                chapter_id,
-                parent_id=self.job.id,
+                self.job.id,
+                chapter_ids,
+                job_ids,
                 novel_title=self.job.extra.get("novel_title"),
             )
 
-        self._run_children_inline("chapter_id", list(chapter_ids), create)
+        self._run_children_inline("chapter_id", list(chapter_ids), JobType.CHAPTER, create)

@@ -37,6 +37,7 @@ from lncrawl.utils.chapter_content import NOVELFIRE_LOGIN_NOTICE
 def _sqlite_pragmas(connection, _record) -> None:
     cursor = connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.execute("PRAGMA busy_timeout=15000")
     cursor.close()
 
