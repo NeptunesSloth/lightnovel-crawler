@@ -1,11 +1,12 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Path, Query, Security
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Path, Query, Request, Security
+from fastapi.responses import Response
 
 from ...context import ctx
 from ...dao import ActivityType, Chapter, ChapterImage, Job, LanguageCode, User
 from ...exceptions import ServerErrors
+from ..caching import cached_file_response
 from ..models import ReadChapterResponse
 from ..security import ensure_user
 
@@ -15,13 +16,15 @@ router = APIRouter()
 
 @router.get("/image/{image_id}", summary="Serve a chapter image file (for the reader)")
 def serve_chapter_image(
+    request: Request,
     image_id: str = Path(),
-) -> FileResponse:
+) -> Response:
     image = ctx.images.get(image_id)
     path = ctx.files.resolve(image.image_file)
     if not path.is_file():
         raise ServerErrors.no_such_file
-    return FileResponse(path, media_type="image/jpeg")
+    # Manga pages are re-read often; a 304 skips sending the image again.
+    return cached_file_response(request, path, "image/jpeg")
 
 
 @router.get("/{chapter_id}", summary="Returns a chapter details")
@@ -31,8 +34,9 @@ def get_chapter(
     return ctx.chapters.get(chapter_id)
 
 
+# sync on purpose: a DB query, run in the thread pool, not on the event loop
 @router.get("/{chapter_id}/images", summary="Gets list of chapter images")
-async def get_chapter_images(
+def get_chapter_images(
     chapter_id: str = Path(),
     available_only: bool = Query(default=False, description="List only available images"),
 ) -> List[ChapterImage]:
