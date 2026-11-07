@@ -14,6 +14,8 @@ class Chapter(BaseTable, table=True):
         sa.Index("ix_chapter_novel_id", "novel_id"),
         sa.Index("ix_chapter_novel_serial", "novel_id", "serial"),
         sa.Index("ix_chapter_novel_volume", "novel_id", "volume_id"),
+        sa.Index("ix_chapter_volume_serial", "volume_id", "serial"),
+        sa.Index("ix_chapter_novel_done_created", "novel_id", "is_done", "created_at"),
     )
 
     novel_id: str = sa.Field(foreign_key="novels.id", ondelete="CASCADE")
