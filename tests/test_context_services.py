@@ -4,7 +4,7 @@ from threading import Barrier, Thread
 import time
 import unittest
 
-from lncrawl.context import cached_property
+from lncrawl.context import _SynchronizedCachedProperty as cached_property
 
 
 class Context:
@@ -35,6 +35,12 @@ class ContextServiceTests(unittest.TestCase):
             thread.join()
         self.assertEqual(Context.built, 1)
         self.assertEqual(len({id(service) for service in seen}), 1)
+
+    def test_the_app_context_uses_it(self) -> None:
+        from lncrawl.context import ctx
+
+        for name in ("download_workers", "crawler", "jobs", "scheduler"):
+            self.assertIsInstance(type(ctx).__dict__[name], cached_property)
 
     def test_behaves_like_a_cached_property(self) -> None:
         context = Context()

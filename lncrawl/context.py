@@ -2,14 +2,14 @@ import functools
 import logging
 from pathlib import Path
 import threading
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 logger = logging.getLogger(__name__)
 
 _MISSING = object()
 
 
-class cached_property(functools.cached_property):
+class _SynchronizedCachedProperty(functools.cached_property):
     """``functools.cached_property`` that builds each service once, whatever the threads do.
 
     Python 3.12 dropped the lock the standard one held while building a value, so
@@ -33,6 +33,12 @@ class cached_property(functools.cached_property):
                     value = self.func(instance)
                     cache[self.attrname] = value
         return value
+
+
+if TYPE_CHECKING:  # type checkers keep each service's own type
+    from functools import cached_property
+else:
+    cached_property = _SynchronizedCachedProperty
 
 
 class __AppContext__:
