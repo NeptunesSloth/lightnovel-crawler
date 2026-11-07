@@ -88,7 +88,21 @@ _slow_visible_text = scraper_session._visible_text
 _INVISIBLE = frozenset({"script", "style", "noscript", "template"})
 
 
+# The scraper asks for a page's words twice in a row (to check it, then to
+# learn from it), passing the same string both times: keep the last answer.
+_last_visible = threading.local()
+
+
 def _visible_text(html: str, parser: str) -> str:
+    last = getattr(_last_visible, "entry", None)
+    if last is not None and last[0] is html:
+        return last[1]
+    text = _extract_visible_text(html, parser)
+    _last_visible.entry = (html, text)
+    return text
+
+
+def _extract_visible_text(html: str, parser: str) -> str:
     try:
         root = lxml_html.document_fromstring(html)
     except Exception:  # empty or unparseable: the original copes with both
