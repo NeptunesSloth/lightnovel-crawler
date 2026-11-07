@@ -14,12 +14,12 @@ import threading
 import time
 
 
-def serve(chapters: int) -> ThreadingHTTPServer:
+def serve(chapters: int, title: str) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             path = self.path.split("?", 1)[0]
             if path == "/book/example":
-                body = '<h1>Novel</h1><span itemprop="author">A</span>'
+                body = f'<h1>{title}</h1><span itemprop="author">A</span>'
             elif path == "/book/example/chapters":
                 body = (
                     '<ul class="chapter-list">'
@@ -76,7 +76,8 @@ def main() -> None:
     )
     os.environ["LNCRAWL_DATA_PATH"] = str(data_dir)
     os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
-    servers = [serve(chapters), serve(chapters)]
+    # different titles: exports skip a novel already in the library from another site
+    servers = [serve(chapters, "First Novel"), serve(chapters, "Second Novel")]
     # two hosts, so two sites
     origins = [
         f"http://127.0.0.1:{servers[0].server_port}/",
