@@ -11,7 +11,7 @@ from zipfile import ZipFile
 
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.pool import StaticPool
+from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from lncrawl.core import Crawler
@@ -32,6 +32,13 @@ from lncrawl.services.scheduler.handlers import run_job
 from lncrawl.services.scheduler.handlers.export_source import ExportStalledError
 from lncrawl.services.volumes import VolumeService
 from lncrawl.utils.chapter_content import NOVELFIRE_LOGIN_NOTICE
+
+
+def _sqlite_pragmas(connection, _record) -> None:
+    cursor = connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=15000")
+    cursor.close()
 
 
 class NovelRepairTests(unittest.TestCase):
@@ -208,9 +215,13 @@ class NovelRepairTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         root = Path(self.stack.enter_context(TemporaryDirectory()))
+        # A file, not one shared in-memory connection: batch jobs run their
+        # chapters on several threads at once, as the app's own database allows.
         self.engine = create_engine(
-            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+            f"sqlite:///{root / 'repair.sqlite'}",
+            connect_args={"check_same_thread": False, "timeout": 15},
         )
+        event.listen(self.engine, "connect", _sqlite_pragmas)
         self.addCleanup(self.engine.dispose)
         SQLModel.metadata.create_all(self.engine)
         self.user = User(id="user", email="reader@example.com", password="test-only")
@@ -346,8 +357,9 @@ class NovelRepairTests(unittest.TestCase):
         job = self.repair()
         self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
         self.assertCountEqual(self.downloads, [2, 3, 4])
-        # The three chapter jobs share one pooled crawler instead of building one each.
-        self.assertEqual(self.ctx.sources.init_crawler.call_count, 1)
+        # The three chapters download at once, each on a pooled crawler: never
+        # more crawlers than chapters in flight, and none built twice for one.
+        self.assertLessEqual(self.ctx.sources.init_crawler.call_count, 3)
         self.assertTrue(job.extra["completeness"]["complete"])
         artifact = self.ctx.artifacts.get(job.extra["artifact_id"])
         with ZipFile(self.ctx.files.resolve(artifact.output_file)) as book:

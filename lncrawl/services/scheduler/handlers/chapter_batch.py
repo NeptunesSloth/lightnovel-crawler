@@ -1,6 +1,7 @@
 from ....context import ctx
+from ....dao import Job
 from ....enums import JobType
-from ._base import AbortedException, BatchHandler
+from ._base import BatchHandler
 
 
 class ChapterBatchHandler(BatchHandler):
@@ -13,22 +14,15 @@ class ChapterBatchHandler(BatchHandler):
         if not chapter_ids:
             return
 
-        added_chapters = set()
-        if self.job.is_running:
-            added_chapters = set([job.extra.get("chapter_id") for job in self.children])
-        else:
+        if not self.job.is_running:
             self._set_running()
 
-        for chapter_id in chapter_ids:
-            if chapter_id in added_chapters:
-                continue
-
-            if self.signal.is_set():
-                raise AbortedException()
-
-            ctx.jobs.fetch_chapter(
+        def create(chapter_id: str) -> Job:
+            return ctx.jobs.fetch_chapter(
                 self.user,
                 chapter_id,
                 parent_id=self.job.id,
                 novel_title=self.job.extra.get("novel_title"),
             )
+
+        self._run_children_inline("chapter_id", list(chapter_ids), create)

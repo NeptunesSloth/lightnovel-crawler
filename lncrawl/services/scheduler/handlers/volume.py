@@ -1,6 +1,7 @@
 from ....context import ctx
+from ....dao import Job
 from ....enums import JobType
-from ._base import AbortedException, BatchHandler, HandlerException
+from ._base import BatchHandler, HandlerException
 
 
 class VolumeHandler(BatchHandler):
@@ -16,23 +17,16 @@ class VolumeHandler(BatchHandler):
         if not volume_id:
             raise HandlerException("No volume id")
 
-        added_chapters = set()
-        if self.job.is_running:
-            added_chapters = set([job.extra.get("chapter_id") for job in self.children])
-        else:
+        if not self.job.is_running:
             self._set_running()
 
-        chapter_ids = ctx.chapters.list_ids(volume_id=volume_id)
-        for chapter_id in chapter_ids:
-            if chapter_id in added_chapters:
-                continue
-
-            if self.signal.is_set():
-                raise AbortedException()
-
-            ctx.jobs.fetch_chapter(
+        def create(chapter_id: str) -> Job:
+            return ctx.jobs.fetch_chapter(
                 self.user,
                 chapter_id,
                 parent_id=self.job.id,
                 novel_title=self.job.extra.get("novel_title"),
             )
+
+        chapter_ids = ctx.chapters.list_ids(volume_id=volume_id)
+        self._run_children_inline("chapter_id", chapter_ids, create)

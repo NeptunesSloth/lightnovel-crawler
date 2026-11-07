@@ -1,8 +1,9 @@
 import logging
 from threading import Event
-from typing import Dict
+from typing import Callable, Dict, Iterable, List, Tuple
 
 from ...context import ctx
+from ...dao import Job
 from ...enums import JobType
 from ...utils.event_lock import EventLock
 from .handlers import run_job
@@ -67,6 +68,37 @@ class JobRunner:
                     _types.pop(job.id, None)
                     _sites.pop(job.id, None)
         return True
+
+    @staticmethod
+    def claim(load: Callable[[], Iterable[Job]]) -> List[Tuple[Job, Event]]:
+        """Take jobs for the caller to run itself, so no worker picks them up.
+
+        ``load`` runs under the same lock workers hold while choosing a job. It
+        should create any new jobs and re-read existing ones there: a job no
+        worker holds and that is not done can then be run by no one else. Each
+        claimed job gets its own signal, set by `cancel` like a worker's, and
+        must be given back with `release` once it has run.
+        """
+        claimed: List[Tuple[Job, Event]] = []
+        with _lock:
+            for job in load():
+                if job.is_done or job.id in _queue:
+                    continue
+                job_signal = Event()
+                _queue[job.id] = job_signal
+                _users[job.id] = job.user_id
+                _types[job.id] = job.type
+                claimed.append((job, job_signal))
+        return claimed
+
+    @staticmethod
+    def release(job_id: str, job_signal: Event) -> None:
+        """Give back a job taken with `claim`, stopping it if it still runs."""
+        with _lock:
+            if _queue.get(job_id) is job_signal:
+                _queue.pop(job_id).set()
+                _users.pop(job_id, None)
+                _types.pop(job_id, None)
 
     @staticmethod
     def cancel(job_id: str, cancel_children: bool = True):
