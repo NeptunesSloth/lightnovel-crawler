@@ -6,7 +6,7 @@ from sqlmodel import col, desc, select
 
 from ..context import ctx
 from ..core.taskman import TaskManager
-from ..dao import ReadHistory
+from ..dao import Chapter, ReadHistory
 
 
 class ReadHistoryService:
@@ -47,9 +47,11 @@ class ReadHistoryService:
             ).first()
             return bool(item)
 
-    def add(self, user_id: str, chapter_id: str) -> None:
+    def add(self, user_id: str, chapter_id: str, chapter: Optional[Chapter] = None) -> None:
+        """Record that the user read this chapter. Pass ``chapter`` if already loaded."""
         with ctx.db.session() as sess:
-            chapter = ctx.chapters.get(chapter_id)
+            if chapter is None or chapter.id != chapter_id:
+                chapter = ctx.chapters.get(chapter_id)
             try:
                 history = ReadHistory(
                     user_id=user_id,
