@@ -1,14 +1,15 @@
 import os
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Path, Query, Security
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Path, Query, Request, Security
+from fastapi.responses import Response
 import sqlmodel as sq
 
 from ...context import ctx
 from ...dao import ActivityType, Artifact, Chapter, Job, LanguageCode, Novel, User, Volume
 from ...exceptions import ServerErrors
 from ...utils.file_tools import dir_size
+from ..caching import cached_file_response
 from ..models import Paginated
 from ..models.novel import NovelCompleteness
 from ..security import ensure_user
@@ -33,13 +34,15 @@ def repair_novel(
 
 @router.get("/{novel_id}/cover", summary="Serve the novel cover image (for the reader)")
 def novel_cover(
+    request: Request,
     novel_id: str = Path(),
-) -> FileResponse:
+) -> Response:
     novel = ctx.novels.get(novel_id)
     path = ctx.files.resolve(novel.cover_file)
     if not path.is_file():
         raise ServerErrors.no_such_file
-    return FileResponse(path, media_type="image/jpeg")
+    # The Reader asks for every cover again on each visit; a 304 skips the body.
+    return cached_file_response(request, path, "image/jpeg")
 
 
 @router.get(
@@ -220,8 +223,10 @@ def get_novel_languages(
     return ctx.novels.list_translation_languages(novel_id)
 
 
+# The listings below are plain (sync) handlers on purpose: they run DB queries,
+# which FastAPI then runs in its thread pool instead of on the event loop.
 @router.get("/{novel_id}/volumes", summary="Gets volumes")
-async def get_novel_volumes(
+def get_novel_volumes(
     novel_id: str = Path(),
     language: Optional[LanguageCode] = Query(default=None),
 ) -> List[Volume]:
@@ -229,7 +234,7 @@ async def get_novel_volumes(
 
 
 @router.get("/{novel_id}/chapters", summary="Gets all chapters")
-async def get_novel_chapters(
+def get_novel_chapters(
     novel_id: str = Path(),
     offset: int = Query(default=0),
     limit: int = Query(default=20, le=100),
@@ -244,7 +249,7 @@ async def get_novel_chapters(
 
 
 @router.get("/{novel_id}/artifacts", summary="Gets latest artifacts")
-async def get_novel_artifacts(
+def get_novel_artifacts(
     novel_id: str = Path(),
     language: Optional[LanguageCode] = Query(default=None),
 ) -> List[Artifact]:
