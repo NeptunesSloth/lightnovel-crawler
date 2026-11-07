@@ -1,11 +1,14 @@
 import logging
 import re
+from typing import Any, Dict
 
 from lncrawl.core import Chapter, LegacyCrawler, Volume
 from lncrawl.core.models import SearchResult
 from lncrawl.utils.novel_status import from_page
 
 logger = logging.getLogger(__name__)
+
+_PAGE_PARAM = re.compile(r"page=(\d+)")
 
 
 class NovelFireCrawler(LegacyCrawler):
@@ -37,33 +40,49 @@ class NovelFireCrawler(LegacyCrawler):
         # "<strong>Ongoing</strong> <small>Status</small>" in the header stats
         self.novel_status = from_page(soup)
 
-        vol_id = 1
-        vol_url = self.novel_url + "/chapters"
+        # The chapter list is paged, each page a volume. The first page's
+        # pagination names later pages, so those are fetched side by side; the
+        # "next" link from the last one fetched then carries on, in case the
+        # pagination left pages out.
+        first_url = self.novel_url + "/chapters"
+        pages: Dict[int, Any] = {1: self.get_soup(first_url)}
+        fetched = {self.absolute_url(first_url)}
+        while True:
+            last = max(pages)
+            next_a = pages[last].select_one("a.page-link[rel='next']")
+            if not next_a:
+                break
+            next_url = self.absolute_url(next_a["href"])
+            if next_url in fetched:
+                break  # a "next" link back to a page already read
+            wanted = {last + 1: next_url}
+            if _PAGE_PARAM.search(next_url):
+                numbers = [
+                    int(match.group(1))
+                    for a in pages[last].select("a.page-link[href]")
+                    for match in [_PAGE_PARAM.search(a["href"])]
+                    if match
+                ]
+                for number in range(last + 2, max(numbers, default=0) + 1):
+                    wanted[number] = _PAGE_PARAM.sub(f"page={number}", next_url)
+            futures = {
+                number: self.submit_task(self.get_soup, url) for number, url in wanted.items()
+            }
+            for number, future in futures.items():
+                pages[number] = future.result()
+            fetched.update(wanted.values())
 
-        while vol_url:
-            soup = self.get_soup(self.absolute_url(vol_url))
-
-            chapters = soup.select("ul.chapter-list li a")
-            for a in chapters:
-                chap_id = len(self.chapters) + 1
+        for vol_id, number in enumerate(sorted(pages), start=1):
+            for a in pages[number].select("ul.chapter-list li a"):
                 self.chapters.append(
                     Chapter(
-                        id=chap_id,
+                        id=len(self.chapters) + 1,
                         volume=vol_id,
                         title=a["title"],
                         url=self.absolute_url(a["href"]),
                     )
                 )
-
             self.volumes.append(Volume(id=vol_id))
-
-            next_vol_a = soup.select_one("a.page-link[rel='next']")
-            if next_vol_a:
-                vol_url = next_vol_a["href"]
-                vol_id += 1
-            else:
-                vol_url = False
-                break
 
     def download_chapter_body(self, chapter: Chapter) -> str:
         soup = self.get_soup(chapter["url"])

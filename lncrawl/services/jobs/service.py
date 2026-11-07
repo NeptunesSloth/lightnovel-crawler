@@ -21,6 +21,7 @@ from ...dao import (
 from ...exceptions import ServerErrors
 from ...server.models import Paginated
 from ...utils.time_utils import current_timestamp
+from ...utils.wakeup import ring_for
 from .utils import select_ancestors, select_descendants
 
 T = TypeVar("T")
@@ -314,6 +315,53 @@ class JobService:
             type=JobType.CHAPTER,
         )
 
+    def fetch_chapters_under(
+        self,
+        user: User,
+        parent_id: str,
+        chapter_ids: List[str],
+        job_ids: List[str],
+        **data: Any,
+    ) -> List[Job]:
+        """Create one CHAPTER child job of ``parent_id`` per chapter, all at once.
+
+        The same jobs `fetch_chapter` makes one by one, with the ids given, but in
+        one transaction: the chapters are read in one query, the jobs written in
+        one insert, and the parent's counts raised once.
+        """
+        if not chapter_ids:
+            return []
+        chapters = {chapter.id: chapter for chapter in ctx.chapters.get_many(chapter_ids)}
+        if chapters and not data.get("novel_title"):
+            novel = ctx.novels.get(next(iter(chapters.values())).novel_id)
+            data.update({"novel_id": novel.id, "novel_title": novel.title})
+        priority = ctx.tier.job_priority(user)
+        jobs: List[Job] = []
+        for chapter_id, job_id in zip(chapter_ids, job_ids):
+            chapter = chapters.get(chapter_id)
+            if chapter is None:
+                continue
+            extra = dict(data)
+            extra.setdefault("novel_id", chapter.novel_id)
+            extra.update({"chapter_id": chapter_id, "chapter_serial": chapter.serial})
+            job = Job(
+                type=JobType.CHAPTER,
+                extra=extra,
+                user_id=user.id,
+                parent_job_id=parent_id,
+                priority=priority,
+            )
+            job.id = job_id
+            jobs.append(job)
+        if not jobs:
+            return []
+        with ctx.db.session() as sess:
+            sess.add_all(jobs)
+            sess.flush()
+            self._update_up(sess, parent_id, total=Job.total + len(jobs), inclusive=True)
+            sess.commit()
+        return jobs
+
     def fetch_many_chapters(
         self,
         user: User,
@@ -343,6 +391,7 @@ class JobService:
         *,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
+        job_id: Optional[str] = None,
         **data: Any,
     ) -> Job:
         chapter = ctx.chapters.get(chapter_id)
@@ -367,6 +416,7 @@ class JobService:
             parent_id=parent_id,
             depends_on=depends_on,
             type=JobType.CHAPTER_TRANSLATION,
+            job_id=job_id,
         )
 
     def translate_many_chapters(
@@ -507,6 +557,7 @@ class JobService:
         *,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
+        job_id: Optional[str] = None,
         **data: Any,
     ) -> Job:
         image = ctx.images.get(image_id)
@@ -522,6 +573,7 @@ class JobService:
             parent_id=parent_id,
             depends_on=depends_on,
             type=JobType.IMAGE,
+            job_id=job_id,
         )
 
     def fetch_many_images(
@@ -1027,6 +1079,7 @@ class JobService:
         with ctx.db.session() as sess:
             self._update(sess, job_id, status=job_pending_literal)
             sess.commit()
+        ring_for(job.type == JobType.ARTIFACT)
 
     def cancel(self, job_id: str, who: str = "admin") -> None:
         with ctx.db.session() as sess:
@@ -1091,6 +1144,7 @@ class JobService:
         data: dict,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
+        job_id: Optional[str] = None,
     ) -> Job:
         with ctx.db.session() as sess:
             if parent_id is None:
@@ -1104,6 +1158,8 @@ class JobService:
                 parent_job_id=parent_id,
                 priority=ctx.tier.job_priority(user),
             )
+            if job_id:
+                job.id = job_id  # reserved by a batch that runs it (JobRunner.reserve)
             sess.add(job)
 
             self._update_up(
@@ -1115,6 +1171,7 @@ class JobService:
             sess.commit()
             sess.refresh(job)
 
+        ring_for(type == JobType.ARTIFACT)
         if parent_id is None:
             ctx.activity.record(user.id, ActivityType.REQUEST, job.id)
         return job

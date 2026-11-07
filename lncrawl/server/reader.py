@@ -8,8 +8,10 @@ size, and per-novel reading-position memory. Kept outside ``lncrawl/server/web``
 markup is embedded as a string so it always ships with the wheel/exe.
 """
 
-from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, Response
+from fastapi import APIRouter, Request
+from fastapi.responses import Response
+
+from .caching import blob_response, text_blob
 
 router = APIRouter()
 
@@ -528,9 +530,29 @@ _READER_HTML = """<!DOCTYPE html>
     });
   }
 
+  // Job polling backs off while the tab is hidden: a background tab polls at
+  // most every 30 s instead of every 2-3 s, and catches up as soon as it is shown.
+  var waiting = [];
+  function later(fn, ms) {
+    var entry = { fn: fn, t: 0 };
+    entry.t = setTimeout(function () { unqueue(entry); fn(); }, document.hidden ? Math.max(ms, 30000) : ms);
+    waiting.push(entry);
+    return entry;
+  }
+  function unqueue(entry) { var i = waiting.indexOf(entry); if (i >= 0) waiting.splice(i, 1); }
+  function cancelLater(entry) { if (entry) { clearTimeout(entry.t); unqueue(entry); } }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) return;
+    var due = waiting; waiting = [];
+    due.forEach(function (e) { clearTimeout(e.t); e.fn(); });
+  });
+
+  // While the library renders, positions are parsed from storage once instead
+  // of once per novel (and per sort comparison).
+  var posMemo = null;
   function loadPos() { try { return JSON.parse(localStorage.getItem(POS) || "{}"); } catch (e) { return {}; } }
   function posOf(novelId) {
-    var v = loadPos()[novelId];
+    var v = (posMemo || loadPos())[novelId];
     if (!v) return null;
     if (typeof v === "string") return { id: v, serial: null, ts: 0 };  // legacy
     return v;
@@ -851,6 +873,7 @@ _READER_HTML = """<!DOCTYPE html>
     });
   }, { rootMargin: "300px" }) : null;
   function fetchCover(img, novelId) {
+    img.decoding = "async";
     var hit = coverCache[novelId];
     if (hit) { img.src = hit; img.classList.remove("hidden"); return; }
     fetch("/api/novel/" + novelId + "/cover", { headers: { "Authorization": "Bearer " + token() } })
@@ -1248,6 +1271,10 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   function renderLibrary() {
+    posMemo = loadPos();
+    try { renderLibraryNow(); } finally { posMemo = null; }
+  }
+  function renderLibraryNow() {
     saveView();
     renderAllBookmarks();  // keeps the Bookmarks count current after reading
     updateWebButton();
@@ -1329,6 +1356,7 @@ _READER_HTML = """<!DOCTYPE html>
       return x.localeCompare(y, undefined, { numeric: true, sensitivity: "base" });
     };
     var readAt = function (n) { var p = posOf(n.id); return (p && p.ts) || 0; };
+    var ratings = sort === "rating" ? loadRatings() : {};
     items.sort(function (a, b) {
       // a search puts title matches first; possible duplicates sit together
       if (words.length && rank[a.id] !== rank[b.id]) return rank[a.id] - rank[b.id];
@@ -1346,7 +1374,7 @@ _READER_HTML = """<!DOCTYPE html>
       else if (sort === "read") d = readAt(b) - readAt(a);
       else if (sort === "author") d = byText(a, b, "authors");
       else if (sort === "source") d = byText(a, b, "domain");
-      else if (sort === "rating") d = (loadRatings()[b.id] || 0) - (loadRatings()[a.id] || 0);
+      else if (sort === "rating") d = (ratings[b.id] || 0) - (ratings[a.id] || 0);
       else if (sort === "newch") d = ((lib.latest || {})[b.id] || 0) - ((lib.latest || {})[a.id] || 0);
       else if (sort === "status") d = statusRank(a, ONGOING_FIRST) - statusRank(b, ONGOING_FIRST);
       else if (sort === "status-done") d = statusRank(a, COMPLETED_FIRST) - statusRank(b, COMPLETED_FIRST);
@@ -1544,7 +1572,7 @@ _READER_HTML = """<!DOCTYPE html>
     api("/job/" + jobId).then(function (job) {
       loadDownloadedCounts();
       var st = job ? statusName(job.status) : "";
-      if (st === "PENDING" || st === "RUNNING") setTimeout(function () { watchGetChapters(jobId); }, 15000);
+      if (st === "PENDING" || st === "RUNNING") later(function () { watchGetChapters(jobId); }, 15000);
     }).catch(function () {});
   }
   els["lib-getch"].addEventListener("click", function () {
@@ -1771,7 +1799,7 @@ _READER_HTML = """<!DOCTYPE html>
     btn.textContent = "🔎 Search the sources for “" + q + "”";
   }
   function stopWebSearch() {
-    clearTimeout(web.timer);
+    cancelLater(web.timer);
     if (web.job) api("/job/" + web.job + "/cancel", { method: "POST" }).catch(function () {});
     web.job = null;
     els["lib-web-stop"].classList.add("hidden");
@@ -1816,9 +1844,9 @@ _READER_HTML = """<!DOCTYPE html>
       var n = els["lib-web-list"].children.length;
       els["lib-web-status"].textContent = "· " + n + " found" +
         (running ? " — searching " + (job.done || 0) + "/" + (job.total || "?") + " sources…" : "");
-      if (running) web.timer = setTimeout(pollWeb, 2000);
+      if (running) web.timer = later(pollWeb, 2000);
       else { web.job = null; els["lib-web-stop"].classList.add("hidden"); }
-    }).catch(function () { web.timer = setTimeout(pollWeb, 4000); });
+    }).catch(function () { web.timer = later(pollWeb, 4000); });
   }
   function renderWebResults(results) {
     var have = {};
@@ -1861,12 +1889,12 @@ _READER_HTML = """<!DOCTYPE html>
             var st = statusName(j.status);
             if (st === "PENDING" || st === "RUNNING") {
               note.textContent = full ? "downloading… " + (j.done || 0) + "/" + (j.total || "?") : "adding…";
-              setTimeout(wait, 2500);
+              later(wait, 2500);
               return;
             }
             note.textContent = st === "SUCCESS" ? "✓ added" : "failed" + (j.error ? ": " + String(j.error).split("\\n").pop() : "");
             if (st === "SUCCESS") loadLibrary();
-          }).catch(function () { setTimeout(wait, 5000); });
+          }).catch(function () { later(wait, 5000); });
         })();
       })
       .catch(function (e) { note.textContent = "couldn't add: " + e.message; });
@@ -2333,7 +2361,7 @@ _READER_HTML = """<!DOCTYPE html>
       var visible = current.novel && current.novel.id === novelId;
       if (active) {
         if (visible) els["repair-status"].textContent = "Repairing chapters and rebuilding EPUB… " + job.done + "/" + job.total;
-        setTimeout(function () { pollRepair(novelId, jobId); }, 3000);
+        later(function () { pollRepair(novelId, jobId); }, 3000);
         return;
       }
       delete repairJobs[novelId];
@@ -2350,7 +2378,7 @@ _READER_HTML = """<!DOCTYPE html>
       current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
       loadChapters();
     }).catch(function () {
-      setTimeout(function () { pollRepair(novelId, jobId); }, 5000);
+      later(function () { pollRepair(novelId, jobId); }, 5000);
     });
   }
   els["repair-btn"].addEventListener("click", function () {
@@ -2488,6 +2516,10 @@ _READER_HTML = """<!DOCTYPE html>
       var items = (res && res.items) || [];
       current.chapters = current.chapters.concat(items);
       var gaps = false;
+      // built off-document and added in one go: one layout for the batch, and
+      // the reading position is read once instead of once per row
+      var here = posOf(current.novel.id);
+      var frag = document.createDocumentFragment();
       items.forEach(function (ch) {
         var row = document.createElement("div");
         row.className = "chap" + (ch.is_available ? "" : " unavail");
@@ -2495,7 +2527,6 @@ _READER_HTML = """<!DOCTYPE html>
         var t = document.createElement("span"); t.className = "t"; t.textContent = ch.title || ("Chapter " + ch.serial);
         // read up to where you are: earlier chapters ticked, yours marked
         var rd = document.createElement("span"); rd.className = "rd";
-        var here = posOf(current.novel.id);
         if (here && here.serial) {
           var done = ch.serial < here.serial || (ch.serial === here.serial && (here.scroll || 0) >= 0.9);
           if (done) { rd.textContent = "✓"; rd.title = "Read"; }
@@ -2504,8 +2535,9 @@ _READER_HTML = """<!DOCTYPE html>
         row.appendChild(rd); row.appendChild(n); row.appendChild(t);
         if (ch.is_available) row.addEventListener("click", function () { openChapter(ch.id); });
         else { gaps = true; var u = document.createElement("span"); u.className = "muted"; u.textContent = "not downloaded"; row.appendChild(u); }
-        els["chap-list"].appendChild(row);
+        frag.appendChild(row);
       });
+      els["chap-list"].appendChild(frag);
       current.offset += items.length;
       var total = (res && res.total) || current.offset;
       els["chap-more-wrap"].classList.toggle("hidden", current.offset >= total);
@@ -2574,7 +2606,7 @@ _READER_HTML = """<!DOCTYPE html>
               els["heal-msg"].textContent = (ex.phase === "searching" ? "Searching " : "Downloading from ") +
                 ex.source + "… (" + (j.done || 0) + "/" + (j.total || 0) + " filled)";
             }
-            setTimeout(poll, 3000);
+            later(poll, 3000);
             return;
           }
           btn.disabled = false;
@@ -2583,7 +2615,7 @@ _READER_HTML = """<!DOCTYPE html>
             current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
             loadChapters();
           }
-        }).catch(function () { setTimeout(poll, 5000); });
+        }).catch(function () { later(poll, 5000); });
       })();
     }).catch(function (e) {
       btn.disabled = false;
@@ -2626,7 +2658,7 @@ _READER_HTML = """<!DOCTYPE html>
     els["reader-pos"].textContent = "";
     hideTransPop();
     window.scrollTo(0, 0);
-    api("/chapter/" + chapterId + "/read?auto_fetch=false").then(function (res) {
+    readChapter(chapterId).then(function (res) {
       var ch = res.chapter || {};
       var novel = res.novel || current.novel || {};
       current.novel = novel;
@@ -2684,6 +2716,7 @@ _READER_HTML = """<!DOCTYPE html>
       var m = src.match(/images\\/([0-9a-fA-F]+)\\.jpg/);
       if (!m) return;
       count += 1;
+      img.decoding = "async";
       img.removeAttribute("src");
       cacheImage(m[1])
         .then(function (u) { img.src = u; })
@@ -2783,8 +2816,20 @@ _READER_HTML = """<!DOCTYPE html>
     return ids;
   }
   // fetch the next chapter's images into the cache so page-turns are instant
+  // The preloaded chapter is kept (briefly) so opening it doesn't fetch it again.
+  var preloaded = null;
+  function readChapter(chapterId) {
+    var hit = preloaded;
+    preloaded = null;
+    if (hit && hit.id === chapterId && Date.now() - hit.at < 300000) {
+      return hit.req.catch(function () { return api("/chapter/" + chapterId + "/read?auto_fetch=false"); });
+    }
+    return api("/chapter/" + chapterId + "/read?auto_fetch=false");
+  }
   function preloadNext(chapterId) {
-    api("/chapter/" + chapterId + "/read?auto_fetch=false").then(function (res) {
+    var req = api("/chapter/" + chapterId + "/read?auto_fetch=false");
+    preloaded = { id: chapterId, at: Date.now(), req: req };
+    req.then(function (res) {
       var ids = imageIdsIn(res && res.content);
       var i = 0;
       (function step() {
@@ -3004,7 +3049,7 @@ _READER_HTML = """<!DOCTYPE html>
       var frac = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
       saveScroll(current.novel.id, current.chapterId, frac);
     }, 400);
-  });
+  }, { passive: true });
 
   // ---- Auth ----
   els["login"].addEventListener("click", function () {
@@ -3114,9 +3159,16 @@ _ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
 </svg>"""
 
 
+# The pages are constants: each is encoded and gzipped once, and a browser
+# revalidating its copy (``no-cache`` + ETag) gets a bodiless 304 back.
+_HTML = "text/html; charset=utf-8"
+_REVALIDATE = {"Cache-Control": "no-cache"}
+_DAILY = {"Cache-Control": "public, max-age=86400"}
+
+
 @router.get("/reader", include_in_schema=False)
-async def reader_page() -> HTMLResponse:
-    return HTMLResponse(content=_READER_HTML)
+async def reader_page(request: Request) -> Response:
+    return blob_response(request, text_blob(_READER_HTML, _HTML), _REVALIDATE)
 
 
 @router.get("/reader/sw.js", include_in_schema=False)
@@ -3131,10 +3183,10 @@ async def reader_service_worker() -> Response:
 
 
 @router.get("/reader/manifest.webmanifest", include_in_schema=False)
-async def reader_manifest() -> Response:
-    return Response(content=_MANIFEST, media_type="application/manifest+json")
+async def reader_manifest(request: Request) -> Response:
+    return blob_response(request, text_blob(_MANIFEST, "application/manifest+json"), _DAILY)
 
 
 @router.get("/reader/icon.svg", include_in_schema=False)
-async def reader_icon() -> Response:
-    return Response(content=_ICON_SVG, media_type="image/svg+xml")
+async def reader_icon(request: Request) -> Response:
+    return blob_response(request, text_blob(_ICON_SVG, "image/svg+xml"), _DAILY)

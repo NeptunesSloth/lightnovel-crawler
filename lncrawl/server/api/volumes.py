@@ -28,8 +28,9 @@ def fetch_volume(
     return ctx.jobs.fetch_volume(user, volume_id)
 
 
+# sync on purpose: a DB query, run in the thread pool, not on the event loop
 @router.get("/{volume_id}/chapters", summary="Gets all chapters")
-async def get_volume_chapters(
+def get_volume_chapters(
     volume_id: str = Path(),
     offset: int = Query(default=0),
     limit: int = Query(default=20, le=100),

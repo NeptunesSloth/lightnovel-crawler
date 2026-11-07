@@ -25,7 +25,7 @@ class TaskManager:
         It is being used as a superclass of the Crawler.
 
         Args:
-        - workers (int, optional): Number of concurrent workers to expect. Default: 5.
+        - workers (int, optional): Number of concurrent workers to expect. Default: 1.
         - ratelimit (float, optional): Number of requests per second.
         """
         self.signal = signal or Event()
@@ -70,7 +70,7 @@ class TaskManager:
         it will shutdown the current executor, and cancel all pending tasks.
 
         Args:
-        - workers (int, optional): Number of concurrent workers to expect. Default: 5.
+        - workers (int, optional): Number of concurrent workers to expect. Default: 1.
         - ratelimit (float, optional): Number of requests per second.
         """
         if not self._futures:

@@ -17,6 +17,13 @@ from ..utils.text_tools import format_title, normalize
 from ..utils.url_tools import extract_base
 from .models import Chapter, Novel, SearchResult, Volume
 
+# Download workers a crawler gets when its caller does not ask for a number.
+# Throughput is set by the per-host pacer in core/scraping.py, not by this: the
+# workers only overlap each other's network latency, so a slow response no longer
+# holds up the next chapter. A source that must stay sequential calls
+# `self.taskman.init_executor(workers=1)` in `initialize()`.
+DEFAULT_WORKERS: int = 4
+
 
 class Crawler(ABC):
     base_url: Union[str, List[str]]
@@ -51,6 +58,7 @@ class Crawler(ABC):
         Args:
         - origin (str): The origin URL of the source.
         - workers (int, optional): Number of concurrent workers to expect.
+            Default: `DEFAULT_WORKERS`.
         - parser (Optional[str], optional): Desirable features of the parser. This can be the name of a specific parser
             ("lxml", "lxml-xml", "html.parser", or "html5lib") or it may be the type of markup to be used ("html", "html5", "xml").
         - requests_per_sec (float, optional): Cap on requests per second to any one
@@ -68,7 +76,7 @@ class Crawler(ABC):
         from .taskman import TaskManager
 
         self.cleaner = TextCleaner()
-        self.taskman = TaskManager(workers=workers)
+        self.taskman = TaskManager(workers=workers or DEFAULT_WORKERS)
 
         # Built from the process-wide configuration and state, so this crawler
         # shares one exit pool, one pacing record per origin, and one on-disk

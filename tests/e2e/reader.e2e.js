@@ -15,7 +15,12 @@ function check(name, ok, detail) {
 }
 
 async function open(browser, storage) {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
+  // The Reader's service worker answers its fetches itself once it takes
+  // control, and page.route() never sees those requests; how soon it takes
+  // control is a race, so a mocked job poll could slip past to the server.
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 }, acceptDownloads: true, serviceWorkers: "block",
+  });
   const page = await context.newPage();
   page.errors = [];
   page.on("pageerror", (e) => page.errors.push(e.message));

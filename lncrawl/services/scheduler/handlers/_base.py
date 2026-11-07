@@ -2,12 +2,15 @@ from abc import ABC, abstractmethod
 from functools import cached_property
 from threading import Event
 import traceback
-from typing import Any, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ....context import ctx
-from ....dao import Job, JobStatus
+from ....dao import Job, JobStatus, JobType
 from ....exceptions import AbortedException
 from ....utils.time_utils import current_timestamp
+
+# Child jobs a batch creates per transaction.
+CREATE_CHUNK: int = 500
 
 
 class HandlerException(Exception):
@@ -146,6 +149,98 @@ class BatchHandler(BaseHandler):
             return self._set_failure(e.message, e)
         except Exception as e:
             return self._set_failure("Failed to create requests", e)
+
+    def _run_children_inline(
+        self,
+        key: str,
+        keys: List[str],
+        child_type: JobType,
+        create: Callable[[List[str], List[str]], List[Job]],
+    ) -> None:
+        """Run one child job per key here, a few at a time, instead of queueing them.
+
+        Each child is still a job of its own, so its progress, failure and
+        cancellation show and count exactly as before. But no worker has to find
+        each one in the database, and the children share a few pooled crawlers
+        (``download_concurrency`` of them run at once):
+        at the same request rate this ran about three times as many chapters per
+        second as leaving them to the job queue.
+
+        ``create(keys, job_ids)`` makes the children for those keys with those ids,
+        in one go (see `JobService.fetch_chapters_under`). The ids
+        are claimed from the scheduler before the jobs exist, so an idle worker
+        cannot take them in between. Children an earlier run of this job made
+        (``extra[key]`` names their key) are reused rather than made again, so a
+        batch resumed after a restart carries on where it was.
+        """
+        from ....utils.text_tools import generate_uuid
+        from ..runner import JobRunner
+        from . import run_jobs_concurrently
+
+        def runnable() -> List[Job]:
+            # The same jobs a worker would pick: never started, or started and
+            # interrupted before counting anything. Running one that already
+            # counted progress again would count it twice.
+            return [
+                child
+                for child in ctx.jobs.get_children(self.job.id)
+                if child.status == JobStatus.PENDING
+                or (child.status == JobStatus.RUNNING and child.done == 0)
+            ]
+
+        jobs: Dict[str, Tuple[Job, Event]] = {
+            job.id: (job, job_signal) for job, job_signal in JobRunner.claim(runnable)
+        }
+        known = {child.extra.get(key) for child in ctx.jobs.get_children(self.job.id)}
+        missing = list(dict.fromkeys(item for item in keys if item not in known))
+        new_ids = {item: generate_uuid() for item in missing}
+        reserved = JobRunner.reserve(new_ids.values(), self.job.user_id, child_type)
+
+        workers = ctx.config.crawler.download_concurrency
+        try:
+            for start in range(0, len(missing), CREATE_CHUNK):
+                if self.signal.is_set():
+                    raise AbortedException()
+                chunk = missing[start : start + CREATE_CHUNK]
+                for job in create(chunk, [new_ids[item] for item in chunk]):
+                    jobs[job.id] = (job, reserved[job.id])
+
+            def run_here() -> None:
+                # whatever a worker did not get to (or everything, without one)
+                if self.signal.is_set():
+                    raise AbortedException()
+                left = {child.id for child in runnable()}
+                todo = [entry for job_id, entry in jobs.items() if job_id in left]
+                run_jobs_concurrently(todo, workers, self.signal)
+
+            # Chapter downloads are where the CPU goes, so they may run in a
+            # worker process (services/scheduler/workers.py).
+            site = self._download_site(child_type, jobs)
+            if site:
+                ctx.download_workers.run(site, list(jobs), workers, self.signal, run_here)
+            else:
+                run_jobs_concurrently(list(jobs.values()), workers, self.signal)
+            if self.signal.is_set():
+                raise AbortedException()
+        finally:
+            for job_id, (_, job_signal) in jobs.items():
+                JobRunner.release(job_id, job_signal)
+            for job_id, job_signal in reserved.items():
+                JobRunner.release(job_id, job_signal)  # no-op for those released above
+
+    def _download_site(
+        self, child_type: JobType, jobs: Dict[str, Tuple[Job, Event]]
+    ) -> Optional[str]:
+        """The site these children download from, if they may go to a worker."""
+        if child_type != JobType.CHAPTER or not jobs:
+            return None
+        novel_id = next(iter(jobs.values()))[0].extra.get("novel_id")
+        if not novel_id:
+            return None
+        try:
+            return ctx.novels.get(novel_id).domain or None
+        except Exception:
+            return None
 
 
 class FallbackHandler(BaseHandler):
