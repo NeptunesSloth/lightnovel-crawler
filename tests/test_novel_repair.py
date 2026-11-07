@@ -255,7 +255,9 @@ class NovelRepairTests(unittest.TestCase):
         self.ctx = SimpleNamespace(
             config=SimpleNamespace(
                 app=SimpleNamespace(app_dir=root),
-                crawler=SimpleNamespace(ignore_images=True, runner_concurrency=5),
+                crawler=SimpleNamespace(
+                    ignore_images=True, runner_concurrency=5, download_concurrency=4
+                ),
             ),
             db=SimpleNamespace(session=lambda: Session(self.engine, expire_on_commit=False)),
             users=SimpleNamespace(get=lambda user_id: self.user),

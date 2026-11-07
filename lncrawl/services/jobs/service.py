@@ -390,6 +390,7 @@ class JobService:
         *,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
+        job_id: Optional[str] = None,
         **data: Any,
     ) -> Job:
         chapter = ctx.chapters.get(chapter_id)
@@ -414,6 +415,7 @@ class JobService:
             parent_id=parent_id,
             depends_on=depends_on,
             type=JobType.CHAPTER_TRANSLATION,
+            job_id=job_id,
         )
 
     def translate_many_chapters(
@@ -554,6 +556,7 @@ class JobService:
         *,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
+        job_id: Optional[str] = None,
         **data: Any,
     ) -> Job:
         image = ctx.images.get(image_id)
@@ -569,6 +572,7 @@ class JobService:
             parent_id=parent_id,
             depends_on=depends_on,
             type=JobType.IMAGE,
+            job_id=job_id,
         )
 
     def fetch_many_images(
@@ -1138,6 +1142,7 @@ class JobService:
         data: dict,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
+        job_id: Optional[str] = None,
     ) -> Job:
         with ctx.db.session() as sess:
             if parent_id is None:
@@ -1151,6 +1156,8 @@ class JobService:
                 parent_job_id=parent_id,
                 priority=ctx.tier.job_priority(user),
             )
+            if job_id:
+                job.id = job_id  # reserved by a batch that runs it (JobRunner.reserve)
             sess.add(job)
 
             self._update_up(

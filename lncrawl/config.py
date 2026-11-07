@@ -664,6 +664,20 @@ class CrawlerConfig(_Section):
         self._set("runner_concurrency", v)
 
     @property
+    def download_concurrency(self) -> int:
+        """Download Concurrency.
+
+        How many chapters (or images, or chapter translations) one download fetches at the same
+        time. Raise it for a site that answers slowly but tolerates more requests at once; the
+        per-site request rate still applies. Default is `4`.
+        """
+        return max(1, int(self._get("download_concurrency", 4)))
+
+    @download_concurrency.setter
+    def download_concurrency(self, v: int) -> None:
+        self._set("download_concurrency", max(1, int(v)))
+
+    @property
     def runner_cooldown(self) -> int:
         """Runner Cooldown.
 

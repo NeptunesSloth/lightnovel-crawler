@@ -1,6 +1,9 @@
+from typing import List
+
 from ....context import ctx
+from ....dao import Job
 from ....enums import JobType
-from ._base import AbortedException, BatchHandler, HandlerException
+from ._base import BatchHandler, HandlerException
 
 
 class ChapterTranslationBatchHandler(BatchHandler):
@@ -17,23 +20,22 @@ class ChapterTranslationBatchHandler(BatchHandler):
         if not language:
             raise HandlerException("No target language")
 
-        added_chapters = set()
-        if self.job.is_running:
-            added_chapters = set([job.extra.get("chapter_id") for job in self.children])
-        else:
+        if not self.job.is_running:
             self._set_running()
 
-        for chapter_id in chapter_ids:
-            if chapter_id in added_chapters:
-                continue
+        def create(keys: List[str], job_ids: List[str]) -> List[Job]:
+            return [
+                ctx.jobs.translate_chapter(
+                    self.user,
+                    chapter_id,
+                    language,
+                    parent_id=self.job.id,
+                    job_id=job_id,
+                    novel_title=self.job.extra.get("novel_title"),
+                )
+                for chapter_id, job_id in zip(keys, job_ids)
+            ]
 
-            if self.signal.is_set():
-                raise AbortedException()
-
-            ctx.jobs.translate_chapter(
-                self.user,
-                chapter_id,
-                language,
-                parent_id=self.job.id,
-                novel_title=self.job.extra.get("novel_title"),
-            )
+        self._run_children_inline(
+            "chapter_id", list(chapter_ids), JobType.CHAPTER_TRANSLATION, create
+        )

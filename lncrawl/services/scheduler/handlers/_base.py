@@ -161,7 +161,8 @@ class BatchHandler(BaseHandler):
 
         Each child is still a job of its own, so its progress, failure and
         cancellation show and count exactly as before. But no worker has to find
-        each one in the database, and the children share a few pooled crawlers:
+        each one in the database, and the children share a few pooled crawlers
+        (``download_concurrency`` of them run at once):
         at the same request rate this ran about three times as many chapters per
         second as leaving them to the job queue.
 
@@ -172,7 +173,6 @@ class BatchHandler(BaseHandler):
         (``extra[key]`` names their key) are reused rather than made again, so a
         batch resumed after a restart carries on where it was.
         """
-        from ....core.crawler import DEFAULT_WORKERS
         from ....core.taskman import TaskManager
         from ....services.crawl_engine import crawl_items
         from ....utils.text_tools import generate_uuid
@@ -204,7 +204,8 @@ class BatchHandler(BaseHandler):
                 job_signal.set()
             return run_job(job, job_signal)
 
-        taskman = TaskManager(workers=DEFAULT_WORKERS, signal=self.signal)
+        workers = ctx.config.crawler.download_concurrency
+        taskman = TaskManager(workers=workers, signal=self.signal)
         try:
             for start in range(0, len(missing), CREATE_CHUNK):
                 if self.signal.is_set():
@@ -217,7 +218,7 @@ class BatchHandler(BaseHandler):
                 list(jobs),
                 lambda job_id: taskman.submit_task(run_child, job_id),
                 self.signal,
-                max_inflight=DEFAULT_WORKERS,
+                max_inflight=workers,
                 # Each child bounds its own requests; this only guards a hang.
                 idle_timeout=600,
             ):
