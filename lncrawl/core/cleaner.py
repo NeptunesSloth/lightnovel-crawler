@@ -2,7 +2,7 @@ from functools import lru_cache
 import itertools
 import re
 import sys
-from typing import Any, Dict, List, Set, Tuple, TypeVar, Union
+from typing import Any, Dict, FrozenSet, List, Set, Tuple, TypeVar, Union
 import unicodedata
 
 from bs4 import Comment, Tag
@@ -17,6 +17,43 @@ def _invisible_characters() -> Tuple[int, ...]:
     return tuple(
         code for code in range(sys.maxunicode) if unicodedata.category(chr(code)) in {"Cf", "Cc"}
     )
+
+
+_SIMPLE_SELECTOR = re.compile(r"(?P<tag>[a-zA-Z][\w-]*)?(?:(?P<kind>[.#])(?P<name>[\w-]+))?")
+
+
+def _split_selectors(selectors: FrozenSet[str]) -> Tuple[Any, ...]:
+    """Sort selectors into the simple kinds `_bad_css_matches` decides itself.
+
+    Returns (tags, classes, ids, (tag, class) pairs, (tag, id) pairs, and the
+    rest joined into one selector for soupsieve, or "").
+    """
+    tags: Set[str] = set()
+    classes: Set[str] = set()
+    ids: Set[str] = set()
+    tag_classes: Set[Tuple[str, str]] = set()
+    tag_ids: Set[Tuple[str, str]] = set()
+    rest: List[str] = []
+    for raw in selectors:
+        selector = raw.strip()
+        match = _SIMPLE_SELECTOR.fullmatch(selector) if selector else None
+        if not match or not (match["tag"] or match["kind"]):
+            if selector:
+                rest.append(selector)
+            continue
+        tag = (match["tag"] or "").lower()  # HTML tag names: the parser lowercases them
+        kind, name = match["kind"], match["name"]
+        if not kind:
+            tags.add(tag)
+        elif kind == "." and tag:
+            tag_classes.add((tag, name))
+        elif kind == ".":
+            classes.add(name)
+        elif tag:
+            tag_ids.add((tag, name))
+        else:
+            ids.add(name)
+    return tags, classes, ids, tag_classes, tag_ids, ",".join(sorted(rest))
 
 
 class TextCleaner:
@@ -178,7 +215,7 @@ class TextCleaner:
             return div
 
         if self.bad_css:
-            for bad in div.select(",".join(self.bad_css)):
+            for bad in self._bad_css_matches(div):
                 bad.extract()
 
         if self.bad_tag_text_pairs:
@@ -203,6 +240,44 @@ class TextCleaner:
 
         self.clean_attributes(div)
         return div  # type:ignore
+
+    def _bad_css_matches(self, div: Tag) -> List[Tag]:
+        """The elements under ``div`` that ``bad_css`` selects, as ``div.select`` gives.
+
+        Matching every selector against every element in soupsieve was most of
+        the cleaner's time. Most selectors are a tag, a class or an id (or a tag
+        with one of those), which a set lookup per element decides; only the rest
+        go to soupsieve, which then has a few selectors to try instead of dozens.
+        """
+        key = frozenset(self.bad_css)
+        plan = getattr(self, "_bad_css_plan", None)
+        if plan is None or plan[0] != key:
+            plan = (key, _split_selectors(key))
+            self._bad_css_plan = plan
+        tags, classes, ids, tag_classes, tag_ids, rest = plan[1]
+
+        found: List[Tag] = []
+        if tags or classes or ids or tag_classes or tag_ids:
+            for tag in div.find_all(True):
+                name = tag.name
+                if name in tags:
+                    found.append(tag)
+                    continue
+                if classes or tag_classes:
+                    tag_class = tag.get("class") or ()
+                    if isinstance(tag_class, str):
+                        tag_class = tag_class.split()
+                    if any(c in classes or (name, c) in tag_classes for c in tag_class):
+                        found.append(tag)
+                        continue
+                if ids or tag_ids:
+                    tag_id = tag.get("id")
+                    if tag_id and (tag_id in ids or (name, tag_id) in tag_ids):
+                        found.append(tag)
+        if rest:
+            seen = {id(tag) for tag in found}
+            found.extend(tag for tag in div.select(rest) if id(tag) not in seen)
+        return found
 
     def clean_text(self, text) -> str:
         text = str(text).strip()
