@@ -16,7 +16,9 @@ def has_chapter_content(body: str) -> bool:
     """Accept readable text or image pages, but not empty HTML wrappers."""
     if not body or not body.strip():
         return False
-    soup = BeautifulSoup(body, "html.parser")
+    # lxml: the same text as Python's own parser at a fraction of the cost, and
+    # this runs for every chapter downloaded, saved and checked for gaps.
+    soup = BeautifulSoup(body, "lxml")
     for element in soup.select("script, style, template"):
         element.decompose()
     text = soup.get_text(" ", strip=True).replace("\u200b", "").replace("\ufeff", "").strip()

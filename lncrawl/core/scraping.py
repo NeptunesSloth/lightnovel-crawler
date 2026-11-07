@@ -22,8 +22,9 @@ into a block.
 
 import logging
 import threading
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from lxml import html as lxml_html
 from scraper import (
     BrowserSolver,
     ExitKind,
@@ -33,6 +34,7 @@ from scraper import (
     ScraperConfig,
     SharedState,
     diagnosis,
+    session as scraper_session,
 )
 from scraper.memory import Memory
 
@@ -74,6 +76,40 @@ def _js_redirect(body: str) -> str:
 
 
 diagnosis.js_redirect = _js_redirect
+
+# The scraper checks each page's visible words against the site's usual ones to
+# spot block and challenge pages, and gets them by building a second
+# BeautifulSoup tree of every page it fetches. Profiled on a server download that
+# was a third of all its CPU, more than parsing the page for the crawler itself.
+# Walking an lxml tree gives the same words, script/style/noscript/template and
+# comments left out, about nine times faster.
+_slow_visible_text = scraper_session._visible_text
+_INVISIBLE = frozenset({"script", "style", "noscript", "template"})
+
+
+def _visible_text(html: str, parser: str) -> str:
+    try:
+        root = lxml_html.document_fromstring(html)
+    except Exception:  # empty or unparseable: the original copes with both
+        return _slow_visible_text(html, parser)
+    parts: List[str] = []
+    stack: List[Tuple[Any, bool]] = [(root, False)]
+    while stack:
+        element, closing = stack.pop()
+        if closing:
+            if element.tail and element is not root:
+                parts.append(element.tail)
+            continue
+        stack.append((element, True))
+        # comments and processing instructions have a non-string tag: only their tail is text
+        if isinstance(element.tag, str) and element.tag not in _INVISIBLE:
+            if element.text:
+                parts.append(element.text)
+            stack.extend((child, False) for child in reversed(element))
+    return " ".join(part.strip() for part in parts if part.strip())
+
+
+scraper_session._visible_text = _visible_text
 
 _lock = threading.RLock()
 _memory: Optional[Memory] = None
