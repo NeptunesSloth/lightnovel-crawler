@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import base64
 import hashlib
+from io import BytesIO
 import math
 import os
 from pathlib import Path
@@ -23,6 +25,15 @@ from .models import Chapter, Novel, SearchResult, Volume
 # holds up the next chapter. A source that must stay sequential calls
 # `self.taskman.init_executor(workers=1)` in `initialize()`.
 DEFAULT_WORKERS: int = 4
+
+
+def _is_whole_plain_jpeg(img: Any, data: bytes) -> bool:
+    """A JPEG in a colour mode kept as is, and not cut short (ends with its end marker)."""
+    return (
+        img.format == "JPEG"
+        and img.mode in ("L", "RGB")
+        and data.rstrip(b"\0\r\n ")[-2:] == b"\xff\xd9"
+    )
 
 
 class Crawler(ABC):
@@ -176,7 +187,18 @@ class Crawler(ABC):
             os.utime(output_file)
             return
 
-        img = self.scraper.get_image(url)
+        from PIL import Image
+
+        data = self._image_bytes(url)
+        img = Image.open(BytesIO(data))  # reads the header only
+        if _is_whole_plain_jpeg(img, data):
+            # Already what would be written: keep the site's bytes as they are.
+            # Decoding and re-encoding cost CPU on every page of a manga and
+            # lost a little quality each time.
+            with atomic_write(output_file, "wb") as tmp:
+                tmp.write(data)
+            return
+
         if img.mode not in ("L", "RGB", "YCbCr", "RGBX"):
             if img.mode == "RGBa":
                 img = img.convert("RGBA").convert("RGB")
@@ -184,7 +206,15 @@ class Crawler(ABC):
                 img = img.convert("RGB")
 
         with atomic_write(output_file) as tmp:
-            img.save(tmp, "JPEG", optimized=True)
+            img.save(tmp, "JPEG")
+
+    def _image_bytes(self, url: str) -> bytes:
+        """The image at ``url`` as fetched, the way ``scraper.get_image`` fetches it."""
+        if url.startswith("data:"):
+            return base64.b64decode(url.split("base64,")[-1])
+        headers = {"accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"}
+        response = self.scraper.fetch("GET", url, headers=headers, navigation=False)
+        return response.content
 
     def download_cover(self, cover_url: str, cover_file: Path) -> None:
         try:
