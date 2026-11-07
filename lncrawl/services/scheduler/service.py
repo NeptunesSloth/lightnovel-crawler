@@ -103,7 +103,9 @@ class JobScheduler:
                 # one; the cooldown is only for an empty queue. Pausing after every
                 # job capped a novel at about one chapter per second per worker,
                 # since each chapter (and each image) is a job of its own.
-                busy = run(self._signal)
+                # Only a runner reporting True took a job; anything else (the
+                # scrubber returns None) waits, so a loop can never spin.
+                busy = run(self._signal) is True
                 if not busy:
                     self._signal.wait(interval)
                 if self._signal.is_set():
