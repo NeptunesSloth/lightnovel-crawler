@@ -182,7 +182,8 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
       case "fetching": return ["Adding novel details", "", ""];
       case "checking-updates": return ["Checking for new chapters", "", ""];
       case "solving-challenge": return ["Getting past a bot check", "wait", "The site asked for a check; solving it in a browser."];
-      case "waiting-between-novels": return ["Short pause", "wait", "Easing off after an error (" + (ex.adaptive_delay || 0) + "s)."];
+      case "waiting-between-novels":
+        return ["Short pause", "wait", (ex.pause_reason === "polite" ? "Polite mode's pause between novels" : "Easing off after an error") + " (" + (ex.adaptive_delay || 0) + "s)."];
       case "retry-waiting":
         return ["Resting the site", "wait", (ex.quiet_rounds ? "The last round got nothing new, so it is giving the site a rest" : "Waiting briefly before the next round") + until + "."];
       case "cooling-down":

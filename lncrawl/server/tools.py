@@ -682,6 +682,13 @@ _TOOLS_HTML = """<!DOCTYPE html>
     return bits.length ? " [" + bits.join(", ") + "]" : "";
   }
 
+  // why a lane is pausing before its next novel: polite mode's own short pause,
+  // or a longer one because the site has been failing (older jobs never said)
+  function pauseNote(ex) {
+    var why = ex.pause_reason === "polite" ? "polite mode" : "after source errors";
+    return "pausing " + (ex.adaptive_delay || 0) + "s before the next novel (" + why + ")";
+  }
+
   // " at 14:05" for a wait that ends at resume_at
   function untilNote(ex) {
     if (!ex.resume_at) return "";
@@ -782,9 +789,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
           log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches + sitemap pages)", "log-info");
         } else if (status === "RUNNING" && ex.phase === "solving-challenge") {
           log("Site is blocking requests — solving the Cloudflare challenge in a browser…", "log-info");
-        } else if (status === "RUNNING" && ex.phase === "downloading" && ex.current_title) {
+        } else if (status === "RUNNING" && (ex.phase === "downloading" || ex.phase === "waiting-between-novels") && ex.current_title) {
+          // a pause between novels is one lane's: the others carry on, so show them all
           var resumed = ex.resumed ? " · " + ex.resumed + " reused from last run" : "";
-          log("Downloading " + job.done + "/" + job.total + ": " + nowNote(ex) + rateNote(ex) + resumed + paceNote(ex), "log-info");
+          log("Downloading " + job.done + "/" + job.total + ": " + nowNote(ex) + rateNote(ex) + resumed + paceNote(ex) +
+            (ex.phase === "waiting-between-novels" ? " · " + pauseNote(ex) : ""), "log-info");
           if (ex.last_fail_title && ex.last_fail_reason) {
             pollExport._lastFailure = pollExport._lastFailure || {};
             var failureKey = ex.last_fail_title + ":" + ex.last_fail_reason + ":" + (ex.last_fail_detail || "");
@@ -800,7 +809,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
             " — image " + (ex.current_images || 0) + "/" + (ex.current_total_images || 0) +
             rateNote(ex) + paceNote(ex), "log-info");
         } else if (status === "RUNNING" && ex.phase === "waiting-between-novels") {
-          log("Waiting " + (ex.adaptive_delay || 0) + " seconds before the next novel after source errors; downloaded chapters are retained.", "log-info");
+          log("Download " + job.done + "/" + job.total + ": " + pauseNote(ex) + "; downloaded chapters are kept.", "log-info");
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
           log("Round " + ((ex.retry || 0) + 1) + " for what's left — " +
             (ex.quiet_rounds ? "the site gave nothing new last round, so it's resting it" : "waiting briefly") +

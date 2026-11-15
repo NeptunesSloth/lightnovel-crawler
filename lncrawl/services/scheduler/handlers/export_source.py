@@ -391,6 +391,13 @@ def _find_desktop() -> Optional[Path]:
     return None
 
 
+def _name_from_url(novel_url: str) -> str:
+    """A readable name from a novel's address, until its real title is known."""
+    slug = unquote(novel_url.rstrip("/").rsplit("/", 1)[-1]).split("?", 1)[0]
+    words = re.sub(r"[-_]+", " ", slug).strip()
+    return words.title() if words else novel_url
+
+
 def _export_target(save_to: Optional[Path], domain: str, job_id: str) -> Tuple[str, Path]:
     """Where to write the export's zip: (what the job records, the full path).
 
@@ -845,6 +852,15 @@ class ExportSourceHandler(BaseHandler):
                 cur_title: List[str] = [""]
                 cached_chapters: List[Optional[int]] = [None]
 
+                # Shown from the start, by the name in its address, so a novel
+                # whose chapter list takes a minute to load is not invisible
+                # (and a pause before it does not look like it lasts that long).
+                loading = f"{_name_from_url(novel_url)} (loading its chapter list)"
+                with book:
+                    active[lane] = {"title": loading, "done": 0, "total": 0}
+                    self._set_extra(phase="downloading", current_title=loading)
+                    _publish_active(force=True)
+
                 # live status so a long run isn't a misleading 0%
                 def _on_novel(title: str, c_done: int, c_total: int) -> None:
                     with book:
@@ -1059,8 +1075,12 @@ class ExportSourceHandler(BaseHandler):
                     # polite mode off and no failures this is 0 (no wait).
                     delay = pacing["delay"]
                     if queue and delay > 0:
+                        # polite mode's own pause, or a longer one after errors
+                        reason = "errors" if delay > floor_delay else "polite"
                         self._set_extra(
-                            phase="waiting-between-novels", adaptive_delay=round(delay, 1)
+                            phase="waiting-between-novels",
+                            adaptive_delay=round(delay, 1),
+                            pause_reason=reason,
                         )
                         if self.signal.wait(delay):
                             raise AbortedException()
