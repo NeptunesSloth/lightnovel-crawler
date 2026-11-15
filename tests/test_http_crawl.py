@@ -318,6 +318,17 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(after["phase"], "downloading")
         self.assertIn("Example Gone", after["current_title"])  # named before its details load
 
+    def test_the_rate_asked_for_survives_the_run_and_a_stale_one_is_let_go(self) -> None:
+        asked = self.export(auto_tune=True, requests_per_sec=50)
+        self.assertEqual(asked.status, JobStatus.SUCCESS, asked.error)
+        self.assertEqual(asked.extra["requests_per_sec"], 50)  # still the cap on resume
+        self.assertIn("current_rps", asked.extra)  # the tuner's own, kept apart
+        # a job from before the split: its stored rate is where the tuner got to
+        older = self.export(auto_tune=True, requests_per_sec=50, found_by_discovery=False)
+        self.assertEqual(older.status, JobStatus.SUCCESS, older.error)
+        self.assertEqual(older.extra["requests_per_sec"], 0)
+        self.assertEqual(older.extra["current_rps"], 50)
+
     def test_real_novelfire_metadata_pagination_cover_and_discovery(self) -> None:
         urls = self.ctx.crawler.discover_novels(
             self.user.id,

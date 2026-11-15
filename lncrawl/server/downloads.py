@@ -256,7 +256,8 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
         c.appendChild(el("div", "line", "▸ page " + (ex.current_images || 0) + " of " + ex.current_total_images));
       }
       var pace = [];
-      if (ex.requests_per_sec) pace.push(ex.requests_per_sec + " requests/s");
+      var rps = ex.current_rps || ex.requests_per_sec;  // reached, or as asked on older jobs
+      if (rps) pace.push(rps + " requests/s");
       if (ex.chapters_per_min) pace.push(ex.chapters_per_min + " chapters/min");
       if (ex.eta_seconds != null && ex.eta_seconds >= 0) pace.push("about " + span(ex.eta_seconds) + " left at this pace");
       if (pace.length) c.appendChild(el("div", "line", pace.join(" · ")));

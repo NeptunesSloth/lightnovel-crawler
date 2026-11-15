@@ -677,7 +677,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
   function rateNote(ex) {
     var bits = [];
-    if (ex.requests_per_sec) bits.push(ex.requests_per_sec + " req/s");
+    // the rate the tuner has reached (older jobs kept it in requests_per_sec)
+    var rps = ex.current_rps || ex.requests_per_sec;
+    if (rps) bits.push(rps + " req/s");
     if (ex.adaptive_delay) bits.push("+" + ex.adaptive_delay + "s/novel");
     return bits.length ? " [" + bits.join(", ") + "]" : "";
   }

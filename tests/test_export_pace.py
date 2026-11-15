@@ -161,6 +161,39 @@ class PaceTests(unittest.TestCase):
         self.assertIsNone(estimate_left(0.0, [(0, 10)], 1, 10))
 
 
+class RatePlanTests(unittest.TestCase):
+    """Where a run's request rate starts, and the fastest it may go."""
+
+    def plan(self, extra: dict, remembered: float = 0.0):
+        from lncrawl.services.scheduler.handlers.export_source import _rate_plan
+
+        return _rate_plan(extra, remembered)
+
+    def test_a_resumed_job_is_not_capped_at_the_rate_the_tuner_had_reached(self) -> None:
+        # The tuner used to write its rate over the one asked for, and a resume
+        # read it back as the cap: an export slowed to 0.2 req/s resumed unable
+        # to go any faster (NovelFire, at 4 chapters a minute).
+        stale = {"auto_tune": True, "requests_per_sec": 0.2, "found_by_discovery": True}
+        self.assertEqual(self.plan(stale), (0.2, export_pace.RPS_MAX, True))
+
+    def test_a_rate_that_was_asked_for_stays_the_cap(self) -> None:
+        asked = {"auto_tune": True, "requests_per_sec": 1.0}
+        self.assertEqual(self.plan(asked), (1.0, 1.0, False))
+        # resumed after the split: carries on where it got to, still capped
+        resumed = {**asked, "found_by_discovery": True, "current_rps": 0.6}
+        self.assertEqual(self.plan(resumed), (0.6, 1.0, False))
+
+    def test_a_fixed_rate_is_never_reread_as_stale(self) -> None:
+        fixed = {"auto_tune": False, "requests_per_sec": 0.5, "found_by_discovery": True}
+        self.assertEqual(self.plan(fixed), (0.5, 0.5, False))
+
+    def test_an_auto_job_starts_where_it_or_the_site_last_got_to(self) -> None:
+        self.assertEqual(self.plan({"auto_tune": True}, remembered=1.5), (1.5, 5.0, False))
+        self.assertEqual(self.plan({"polite": True}), (1.0, 5.0, False))
+        resumed = {"found_by_discovery": True, "current_rps": 3.0}
+        self.assertEqual(self.plan(resumed, remembered=1.5), (3.0, 5.0, False))
+
+
 class LaneTests(unittest.TestCase):
     def test_novels_run_side_by_side(self) -> None:
         inside = []
