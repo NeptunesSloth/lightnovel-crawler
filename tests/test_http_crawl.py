@@ -245,6 +245,27 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(resumed.extra["resumed"], 1)
         self.assertEqual(self.counts, previous_requests)
 
+    def test_zip_is_written_only_to_the_chosen_folder(self) -> None:
+        chosen = self.root / "roomier-drive" / "novels"
+        job = self.export(save_dir=str(chosen))
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        saved = chosen / "fixture.test-novels.zip"
+        self.assertEqual(job.extra["export_file"], str(saved))
+        self.assertEqual(job.extra["saved_to"], str(saved))
+        self.assertEqual([path.name for path in chosen.iterdir()], [saved.name])  # no .part
+        with ZipFile(saved) as bundle:
+            self.assertTrue(any(name.endswith(".epub") for name in bundle.namelist()))
+        # no second copy in the data folder
+        self.assertFalse(self.ctx.files.resolve(f"exports/{job.id}.zip").exists())
+
+    def test_a_folder_that_cannot_be_written_stops_the_export_before_any_download(self) -> None:
+        not_a_folder = self.root / "file.txt"
+        not_a_folder.write_text("x")
+        job = self.export(save_dir=str(not_a_folder))
+        self.assertEqual(job.status, JobStatus.FAILED)
+        self.assertIn("Cannot save the zip to", job.error or "")
+        self.assertEqual(sum(self.counts.values()), 0)
+
     def test_unattended_library_download_over_real_http(self) -> None:
         job = self.export(until_done=True, library_only=True, keep_awake=False)
         self.assertEqual(job.status, JobStatus.SUCCESS, job.error)

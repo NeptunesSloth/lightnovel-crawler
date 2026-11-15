@@ -827,6 +827,7 @@ class JobService:
         parallel_novels: int = 2,
         until_done: bool = False,
         library_only: bool = False,
+        save_dir: Optional[str] = None,
         **data: Any,
     ) -> Job:
         domain = ctx.sources.get_domain(url)
@@ -850,6 +851,8 @@ class JobService:
         data["parallel_novels"] = max(1, min(4, int(parallel_novels)))
         data["until_done"] = bool(until_done)
         data["library_only"] = bool(library_only)
+        if save_dir:
+            data["save_dir"] = str(save_dir)
         if limit:
             data["limit"] = int(limit)
         # When specific novels are picked, export exactly those (skip discovery)

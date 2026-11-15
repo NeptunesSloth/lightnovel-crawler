@@ -57,10 +57,17 @@ class RateLimiter(object):
             start = self._next_at if self._next_at > now else now
             self._next_at = start + self.period
         remaining = start - now
-        while remaining > 0 and not self._closed:
-            step = min(_SLEEP_SLICE, remaining)
-            time.sleep(step)
-            remaining -= step
+        if remaining <= 0:
+            return
+        # waiting for our own slot is not the site being slow: stop the
+        # request's time limit meanwhile (see request_budget)
+        from ..core.request_budget import waiting_turn
+
+        with waiting_turn():
+            while remaining > 0 and not self._closed:
+                step = min(_SLEEP_SLICE, remaining)
+                time.sleep(step)
+                remaining -= step
 
     def shutdown(self) -> None:
         self._closed = True

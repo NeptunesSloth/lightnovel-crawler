@@ -92,6 +92,19 @@ class PaceTests(unittest.TestCase):
         self.assertEqual(pace.rate, export_pace.RPS_MAX)
         self.assertGreater(len(self.changes), 5)
 
+    def test_speed_comes_back_from_the_floor_at_the_floors_own_pace(self) -> None:
+        # The limiter lets requests through only as fast as the rate, so at the
+        # floor (one every 5s) a 30s window never held the 10 it needed to be
+        # judged: the NovelFire export sat at 0.2 req/s with nothing failing,
+        # and the remembered rate started every later run there too.
+        pace = self.pace(export_pace.RPS_MIN)
+        deadline = self.clock.now + 3600
+        while self.clock.now < deadline and pace.rate < export_pace.RPS_MAX:
+            self.clock.now += 1 / pace.rate
+            pace.report()
+        self.assertEqual(pace.rate, export_pace.RPS_MAX)
+        self.assertEqual(pace.slowdowns(), {})
+
     def test_a_refusal_is_reported_as_the_reason_for_a_slowdown(self) -> None:
         pace = self.pace(2.0)
         pace.report(refused())

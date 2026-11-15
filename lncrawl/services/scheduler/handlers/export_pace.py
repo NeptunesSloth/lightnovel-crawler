@@ -176,14 +176,19 @@ class PaceController:
         """At the end of a window, move the rate by how that window went."""
         if now - self._window_start < WINDOW:
             return
-        total = self._ok + self._slow
-        if total >= WINDOW_MIN:
-            share = self._slow / total
-            if share > SLOW_TOO_MANY:
-                self._cut("slow", now)
-            elif share <= SLOW_OK and 0 < self.rate < self.ceiling:
-                step = max(RAISE_MIN_STEP, self.rate * (RAISE_FACTOR - 1))
-                self._set(min(self.ceiling, self.rate + step))
+        total: int = self._ok + self._slow
+        if total < WINDOW_MIN:
+            # Too few to judge yet: keep counting rather than start over. Below
+            # WINDOW_MIN / WINDOW (about 0.33 req/s) the limiter cannot let that
+            # many through in one window, so discarding them here meant a rate
+            # that low could never be judged again, and so never rise.
+            return
+        share: float = self._slow / total
+        if share > SLOW_TOO_MANY:
+            self._cut("slow", now)
+        elif share <= SLOW_OK and 0 < self.rate < self.ceiling:
+            step: float = max(RAISE_MIN_STEP, self.rate * (RAISE_FACTOR - 1))
+            self._set(min(self.ceiling, self.rate + step))
         self._new_window(now)
 
     def slowdowns(self) -> dict:
