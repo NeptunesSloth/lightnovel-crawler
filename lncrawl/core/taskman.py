@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+import contextvars
 from threading import Event, Semaphore, Thread
 from typing import Callable, Generator, Iterable, List, Optional, Set, TypeVar
 
@@ -122,7 +123,10 @@ class TaskManager:
         if hasattr(self, "_limiter"):
             fn = self._limiter.wrap(fn)
 
-        f = self._submit(fn, *args, **kwargs)
+        # Run in a copy of the caller's context, so a task sent on behalf of a
+        # request with a time limit (a novel's chapter-list pages) is held to
+        # that limit, and its wait for a send slot stops the limit's clock.
+        f = self._submit(contextvars.copy_context().run, fn, *args, **kwargs)
         self._futures.add(f)
         f.add_done_callback(self._futures.remove)
 

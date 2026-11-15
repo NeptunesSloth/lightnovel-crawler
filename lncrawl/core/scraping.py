@@ -20,16 +20,19 @@ per-crawler, so two jobs on one site no longer pace themselves independently
 into a block.
 """
 
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 import logging
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 
 from lxml import html as lxml_html
 from scraper import (
     BrowserSolver,
     ExitKind,
     ExitSpec,
+    Pacer,
     PacingPolicy,
     Scraper,
     ScraperConfig,
@@ -41,7 +44,7 @@ from scraper.memory import Memory, OriginProfile
 
 from ..context import ctx
 from ..exceptions import AbortedException
-from .request_budget import current_budget
+from .request_budget import current_budget, waiting_turn
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +128,99 @@ def _extract_visible_text(html: str, parser: str) -> str:
 
 
 scraper_session._visible_text = _visible_text
+
+# The longest gap a slowdown remembered from an earlier run may impose on the
+# first requests of this one. A site that really needs longer refuses again
+# and the gap doubles from here, so this costs a refusal or two at most.
+CARRY_OVER_MAX = 2.0
+# Refusals closer together than this are one burst: the requests already in
+# flight when a site's window closed, all answered the same way.
+REFUSAL_BURST = 1.0
+
+
+class SitePacer(Pacer):
+    """The library's pacer, reacting to a refusal by slowing down a step.
+
+    NovelFire's chapter mirror allows a handful of requests every ten seconds
+    and answers the rest with 429 and ``Retry-After: 10``, the time until its
+    window reopens. The library took that number as the new average gap between
+    requests, one every ten seconds where the site takes about one a second, and
+    held a connection slot through each gap, so nothing else got through either.
+
+    It also could not recover. Every fetch first re-reads the gap saved on disk,
+    and the saved gap only drifts a tenth of the way towards the pacer's own on
+    every tenth success, so ten seconds came down about 1% per ten requests: in
+    practice never, and in every run after it too. An export measured against
+    the live site went from about 45 chapters a minute to 15.
+
+    Here a refusal widens the gap by the policy's backoff factor, once per burst
+    of refusals; the request that was refused still waits out Retry-After before
+    it is sent again. The saved gap seeds an origin once, capped at
+    CARRY_OVER_MAX, and from then on the pacer keeps its own count, so its easing
+    after successes actually takes effect. The gap is never shorter than the rate
+    the policy was made for.
+    """
+
+    def __init__(
+        self, policy: Optional[PacingPolicy] = None, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        super().__init__(policy)
+        self._clock = clock
+        self._seeded: Set[str] = set()
+        self._widened_at: Dict[str, float] = {}
+        self._quiet_until: Dict[str, float] = {}
+
+    def learn(self, origin: str, interval: float) -> None:
+        with self._lock:
+            if origin in self._seeded:
+                return
+            self._seeded.add(origin)
+            interval = min(max(interval, 0.0), CARRY_OVER_MAX)
+            self._interval[origin] = max(interval, self.policy.interval)
+
+    def throttled(self, origin: str, retry_after: Optional[float] = None) -> float:
+        policy = self.policy
+        now = self._clock()
+        with self._lock:
+            self._seeded.add(origin)
+            self._streak[origin] = 0
+            current = self._interval.get(origin, policy.interval) or policy.floor
+            if now < self._quiet_until.get(origin, 0.0):
+                return current  # the same closed window, refusing what was in flight
+            widened = min(max(current * policy.backoff_factor, policy.floor), policy.max_interval)
+            self._interval[origin] = widened
+            self._quiet_until[origin] = now + max(retry_after or 0.0, REFUSAL_BURST)
+            return widened
+
+
+def site_state(config: ScraperConfig, memory: Memory) -> SharedState:
+    """Shared scraper state for ``config`` over ``memory``, paced by a SitePacer."""
+    state = SharedState.create(config, memory=memory)
+    state.pacer = SitePacer(config.pacing)
+    return state
+
+
+def _pause_budget_while_paced(scraper: Any) -> None:
+    """Stop the request's time limit while it waits for a connection slot and its turn.
+
+    The library holds one of a couple of slots per address while it waits out
+    the site's gap, and a dozen download threads queue for them. That queue is
+    this program's own doing, not the site being slow, and counting it made
+    chapters and novel details time out while nothing had been asked yet.
+    """
+    paced = getattr(scraper, "_paced", None)
+    if paced is None:
+        return
+
+    @contextmanager
+    def paused(key: str, abort: Any) -> Iterator[None]:
+        with ExitStack() as stack:
+            with waiting_turn():
+                stack.enter_context(paced(key, abort))
+            yield
+
+    scraper._paced = paused
+
 
 _lock = threading.RLock()
 _memory: Optional[Memory] = None
@@ -289,7 +385,7 @@ def shared_state(requests_per_sec: Optional[float] = None) -> SharedState:
     with _lock:
         state = _states.get(rate)
         if state is None:
-            state = SharedState.create(scraper_config(rate), memory=memory())
+            state = site_state(scraper_config(rate), memory())
             _states[rate] = state
         return state
 
@@ -338,6 +434,7 @@ def new_scraper(
         return response
 
     setattr(scraper, "fetch", bounded_fetch)
+    _pause_budget_while_paced(scraper)
     if rate > 0 and origin:
         _hold_rate(scraper, origin, 1.0 / rate)
     return scraper
