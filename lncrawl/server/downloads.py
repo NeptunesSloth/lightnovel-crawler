@@ -171,6 +171,7 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
   function state(j) {
     var ex = j.extra || {};
     if (j.status === "PAUSED") return ["Paused", "paused", "Resume to carry on where it stopped."];
+    if (j.status === "PENDING" && ex.phase === "starting") return ["Starting", "wait", "Loading a download process for it; the first one can take a minute."];
     if (j.status === "PENDING") return ["Queued", "queued", "Starts when a slot is free — one download per site, a few sites at once."];
     if (j.status === "SUCCESS") return ["Done", "ok", ""];
     if (j.status === "FAILED") return ["Failed", "bad", ""];

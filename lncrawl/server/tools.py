@@ -773,7 +773,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
         var status = statusName(job.status);
         var ex = job.extra || {};
         if (status === "RUNNING") setExportControls(id, id);
-        if (status === "PENDING") {
+        if (status === "PENDING" && ex.phase === "starting") {
+          // taken off the queue; a download process is loading the app for it
+          log("Starting — loading a download process for it (the first one can take a minute)…", "log-info");
+        } else if (status === "PENDING") {
           explainQueued(id, ex.domain);
         } else if (status === "RUNNING" && ex.phase === "discovering") {
           log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches + sitemap pages)", "log-info");

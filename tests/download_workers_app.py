@@ -112,8 +112,14 @@ def main() -> None:
     logging.getLogger().addHandler(Collect())
     logging.getLogger().setLevel(logging.INFO)
 
+    if mode == "export-slow-boot":
+        # the worker's start is held up (see test_download_workers); give up on it fast
+        from lncrawl.services.scheduler import workers as worker_pool
+
+        worker_pool.BOOT_SECONDS = 2.0
+
     roots = []
-    if mode in ("export", "export-cancel"):
+    if mode in ("export", "export-cancel", "export-slow-boot"):
         # a bulk download: one unattended library-only export per site
         roots = ctx.jobs.bulk_download(user, [origin + "book/example" for origin in origins])
     else:
@@ -126,8 +132,10 @@ def main() -> None:
     started = time.monotonic()
     workers_seen = 0
     killed = False
+    phases = set()
     while time.monotonic() - started < 120:
         jobs = [ctx.jobs.get(root.id) for root in roots]
+        phases.update(str((job.extra or {}).get("phase")) for job in jobs)
         if all(job.is_done for job in jobs):
             break
         alive = [w for w in ctx.download_workers._workers if w.process.is_alive()]
@@ -143,6 +151,7 @@ def main() -> None:
             killed = True
         time.sleep(0.1)
 
+    seconds = time.monotonic() - started
     ctx.scheduler.stop()  # workers report back and stop before anything is measured
     ctx.download_workers.close()
 
@@ -157,6 +166,8 @@ def main() -> None:
                 "available": saved_chapters(),
                 "workers_seen": workers_seen,
                 "killed": killed,
+                "seconds": round(seconds, 1),
+                "phases": sorted(phases),
                 "logs_from_workers": len(from_workers),
                 "profiles_kept": [
                     host for host in hosts if profiles.get(host, {}).get("successes")
