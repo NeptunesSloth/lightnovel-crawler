@@ -71,6 +71,10 @@ class JobRunner:
         try:
             site = _sites.get(job.id) if job.type == JobType.EXPORT_SOURCE else None
             if site:
+                # It is still marked waiting until a worker process has loaded
+                # the app and begun, which can take a while; say it is starting
+                # rather than leave it looking stuck in the queue.
+                ctx.jobs.update_extra(job.id, {"phase": "starting"})
                 ctx.download_workers.run(
                     site,
                     [job.id],

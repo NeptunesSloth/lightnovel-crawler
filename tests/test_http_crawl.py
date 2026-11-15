@@ -289,6 +289,46 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(job.extra["failed"], 1)
         self.assertIn("active_novels", job.extra)
 
+    def test_the_pause_between_novels_says_why_and_ends_when_the_next_one_starts(self) -> None:
+        # The page said "Waiting 3 seconds ... after source errors" for over a
+        # minute: the pause was polite mode's, and the phase stayed set while
+        # the next novel's chapter list loaded.
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        from lncrawl.services.scheduler.handlers.export_source import ExportSourceHandler
+
+        updates: list = []
+        original = ExportSourceHandler._set_extra
+
+        def record(handler, **values):
+            updates.append(values)
+            return original(handler, **values)
+
+        with (
+            patch(f"{module}.POLITE_DELAY", 0.01),
+            patch.object(ExportSourceHandler, "_set_extra", record),
+        ):
+            job = self.export(
+                urls=[self.novel_url, self.novel_url + "-gone"], polite=True, parallel_novels=1
+            )
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        pauses = [i for i, u in enumerate(updates) if u.get("phase") == "waiting-between-novels"]
+        self.assertTrue(pauses)
+        self.assertEqual(updates[pauses[0]].get("pause_reason"), "polite")
+        after = next(u for u in updates[pauses[0] + 1 :] if "phase" in u)
+        self.assertEqual(after["phase"], "downloading")
+        self.assertIn("Example Gone", after["current_title"])  # named before its details load
+
+    def test_the_rate_asked_for_survives_the_run_and_a_stale_one_is_let_go(self) -> None:
+        asked = self.export(auto_tune=True, requests_per_sec=50)
+        self.assertEqual(asked.status, JobStatus.SUCCESS, asked.error)
+        self.assertEqual(asked.extra["requests_per_sec"], 50)  # still the cap on resume
+        self.assertIn("current_rps", asked.extra)  # the tuner's own, kept apart
+        # a job from before the split: its stored rate is where the tuner got to
+        older = self.export(auto_tune=True, requests_per_sec=50, found_by_discovery=False)
+        self.assertEqual(older.status, JobStatus.SUCCESS, older.error)
+        self.assertEqual(older.extra["requests_per_sec"], 0)
+        self.assertEqual(older.extra["current_rps"], 50)
+
     def test_real_novelfire_metadata_pagination_cover_and_discovery(self) -> None:
         urls = self.ctx.crawler.discover_novels(
             self.user.id,

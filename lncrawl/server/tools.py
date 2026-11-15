@@ -677,9 +677,18 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
   function rateNote(ex) {
     var bits = [];
-    if (ex.requests_per_sec) bits.push(ex.requests_per_sec + " req/s");
+    // the rate the tuner has reached (older jobs kept it in requests_per_sec)
+    var rps = ex.current_rps || ex.requests_per_sec;
+    if (rps) bits.push(rps + " req/s");
     if (ex.adaptive_delay) bits.push("+" + ex.adaptive_delay + "s/novel");
     return bits.length ? " [" + bits.join(", ") + "]" : "";
+  }
+
+  // why a lane is pausing before its next novel: polite mode's own short pause,
+  // or a longer one because the site has been failing (older jobs never said)
+  function pauseNote(ex) {
+    var why = ex.pause_reason === "polite" ? "polite mode" : "after source errors";
+    return "pausing " + (ex.adaptive_delay || 0) + "s before the next novel (" + why + ")";
   }
 
   // " at 14:05" for a wait that ends at resume_at
@@ -773,15 +782,20 @@ _TOOLS_HTML = """<!DOCTYPE html>
         var status = statusName(job.status);
         var ex = job.extra || {};
         if (status === "RUNNING") setExportControls(id, id);
-        if (status === "PENDING") {
+        if (status === "PENDING" && ex.phase === "starting") {
+          // taken off the queue; a download process is loading the app for it
+          log("Starting — loading a download process for it (the first one can take a minute)…", "log-info");
+        } else if (status === "PENDING") {
           explainQueued(id, ex.domain);
         } else if (status === "RUNNING" && ex.phase === "discovering") {
           log("Discovering novels… " + (ex.found || 0) + " found (" + job.done + "/" + job.total + " searches + sitemap pages)", "log-info");
         } else if (status === "RUNNING" && ex.phase === "solving-challenge") {
           log("Site is blocking requests — solving the Cloudflare challenge in a browser…", "log-info");
-        } else if (status === "RUNNING" && ex.phase === "downloading" && ex.current_title) {
+        } else if (status === "RUNNING" && (ex.phase === "downloading" || ex.phase === "waiting-between-novels") && ex.current_title) {
+          // a pause between novels is one lane's: the others carry on, so show them all
           var resumed = ex.resumed ? " · " + ex.resumed + " reused from last run" : "";
-          log("Downloading " + job.done + "/" + job.total + ": " + nowNote(ex) + rateNote(ex) + resumed + paceNote(ex), "log-info");
+          log("Downloading " + job.done + "/" + job.total + ": " + nowNote(ex) + rateNote(ex) + resumed + paceNote(ex) +
+            (ex.phase === "waiting-between-novels" ? " · " + pauseNote(ex) : ""), "log-info");
           if (ex.last_fail_title && ex.last_fail_reason) {
             pollExport._lastFailure = pollExport._lastFailure || {};
             var failureKey = ex.last_fail_title + ":" + ex.last_fail_reason + ":" + (ex.last_fail_detail || "");
@@ -797,7 +811,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
             " — image " + (ex.current_images || 0) + "/" + (ex.current_total_images || 0) +
             rateNote(ex) + paceNote(ex), "log-info");
         } else if (status === "RUNNING" && ex.phase === "waiting-between-novels") {
-          log("Waiting " + (ex.adaptive_delay || 0) + " seconds before the next novel after source errors; downloaded chapters are retained.", "log-info");
+          log("Download " + job.done + "/" + job.total + ": " + pauseNote(ex) + "; downloaded chapters are kept.", "log-info");
         } else if (status === "RUNNING" && ex.phase === "retry-waiting") {
           log("Round " + ((ex.retry || 0) + 1) + " for what's left — " +
             (ex.quiet_rounds ? "the site gave nothing new last round, so it's resting it" : "waiting briefly") +

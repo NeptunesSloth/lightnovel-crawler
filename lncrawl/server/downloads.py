@@ -171,6 +171,7 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
   function state(j) {
     var ex = j.extra || {};
     if (j.status === "PAUSED") return ["Paused", "paused", "Resume to carry on where it stopped."];
+    if (j.status === "PENDING" && ex.phase === "starting") return ["Starting", "wait", "Loading a download process for it; the first one can take a minute."];
     if (j.status === "PENDING") return ["Queued", "queued", "Starts when a slot is free — one download per site, a few sites at once."];
     if (j.status === "SUCCESS") return ["Done", "ok", ""];
     if (j.status === "FAILED") return ["Failed", "bad", ""];
@@ -181,7 +182,8 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
       case "fetching": return ["Adding novel details", "", ""];
       case "checking-updates": return ["Checking for new chapters", "", ""];
       case "solving-challenge": return ["Getting past a bot check", "wait", "The site asked for a check; solving it in a browser."];
-      case "waiting-between-novels": return ["Short pause", "wait", "Easing off after an error (" + (ex.adaptive_delay || 0) + "s)."];
+      case "waiting-between-novels":
+        return ["Short pause", "wait", (ex.pause_reason === "polite" ? "Polite mode's pause between novels" : "Easing off after an error") + " (" + (ex.adaptive_delay || 0) + "s)."];
       case "retry-waiting":
         return ["Resting the site", "wait", (ex.quiet_rounds ? "The last round got nothing new, so it is giving the site a rest" : "Waiting briefly before the next round") + until + "."];
       case "cooling-down":
@@ -254,7 +256,8 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
         c.appendChild(el("div", "line", "▸ page " + (ex.current_images || 0) + " of " + ex.current_total_images));
       }
       var pace = [];
-      if (ex.requests_per_sec) pace.push(ex.requests_per_sec + " requests/s");
+      var rps = ex.current_rps || ex.requests_per_sec;  // reached, or as asked on older jobs
+      if (rps) pace.push(rps + " requests/s");
       if (ex.chapters_per_min) pace.push(ex.chapters_per_min + " chapters/min");
       if (ex.eta_seconds != null && ex.eta_seconds >= 0) pace.push("about " + span(ex.eta_seconds) + " left at this pace");
       if (pace.length) c.appendChild(el("div", "line", pace.join(" · ")));

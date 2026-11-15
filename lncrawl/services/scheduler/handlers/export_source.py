@@ -10,7 +10,7 @@ import sys
 import threading
 from time import monotonic
 import traceback
-from typing import Callable, Dict, List, Optional, Set, Tuple, TypedDict
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypedDict
 from urllib.parse import quote, unquote
 import zipfile
 
@@ -286,6 +286,34 @@ def _load_tuned_rps(domain: str) -> float:
         return 0.0
 
 
+def _rate_plan(extra: Dict[str, Any], remembered: float) -> Tuple[float, float, bool]:
+    """(rate this run starts at, fastest it may go, whether the stored request is stale).
+
+    ``requests_per_sec`` is the rate the user asked for, a cap; the tuner keeps
+    the rate it has reached in ``current_rps``. Before the two were split the
+    tuner wrote over the request, so an auto-tuned job that has already run and
+    has no ``current_rps`` no longer knows what was asked: what is stored is
+    only where it got to, and read as a cap it held a run slowed to 0.2 req/s
+    there for good, on every resume and every restart after an error.
+    ``remembered`` is the rate the last run on this site finished at.
+    """
+    auto = bool(extra.get("auto_tune", True))
+    asked = float(extra.get("requests_per_sec", 0) or 0)
+    reached = float(extra.get("current_rps", 0) or 0)
+    if auto and asked > 0 and "current_rps" not in extra and "found_by_discovery" in extra:
+        # never below it, though: it was the request itself if the rate never moved
+        return asked, max(asked, RPS_MAX), True
+    ceiling = asked if asked > 0 else RPS_MAX
+    start = asked
+    if extra.get("polite") and start <= 0:
+        start = POLITE_REQUESTS_PER_SEC
+    if auto and reached > 0:
+        start = min(reached, ceiling)  # carry on where this job got to
+    elif auto and asked <= 0 and remembered > 0:
+        start = remembered  # where the last run on this site got to
+    return start, ceiling, False
+
+
 def _save_manifest(domain: str, novels: Dict[str, dict], tuned_rps: float = 0) -> None:
     """Persist checkpoints atomically; never silently lose resumability."""
     path = _manifest_path(domain)
@@ -389,6 +417,13 @@ def _find_desktop() -> Optional[Path]:
         if path.is_dir():
             return path
     return None
+
+
+def _name_from_url(novel_url: str) -> str:
+    """A readable name from a novel's address, until its real title is known."""
+    slug = unquote(novel_url.rstrip("/").rsplit("/", 1)[-1]).split("?", 1)[0]
+    words = re.sub(r"[-_]+", " ", slug).strip()
+    return words.title() if words else novel_url
 
 
 def _export_target(save_to: Optional[Path], domain: str, job_id: str) -> Tuple[str, Path]:
@@ -624,12 +659,6 @@ class ExportSourceHandler(BaseHandler):
         # Sitemap mining is what lifts discovery past the one page of results a
         # source's search returns; only turned off when a site's sitemap is junk.
         use_sitemap = bool(self.job.extra.get("use_sitemap", True))
-        # How fast to fire chapter/image requests. Polite mode defaults to a gentle
-        # rate; a value can be set explicitly to go slower (flagged IP) or faster.
-        explicit_rps = float(self.job.extra.get("requests_per_sec", 0) or 0)
-        requests_per_sec = explicit_rps
-        if polite and requests_per_sec <= 0:
-            requests_per_sec = POLITE_REQUESTS_PER_SEC
         auto_tune = bool(self.job.extra.get("auto_tune", True))
         update_only = bool(self.job.extra.get("update_only", False))
         # A folder the zip goes to instead of the data folder and the Desktop.
@@ -642,14 +671,21 @@ class ExportSourceHandler(BaseHandler):
                 save_to = writable_folder(save_dir)
             except (OSError, ValueError) as error:
                 raise HandlerException(f"Cannot save the zip to {save_dir}: {error}") from error
-        # Speed memory: unless a rate was set explicitly, start at the rate the
-        # auto-tuner settled on last run, so a known-touchy site isn't re-blocked
-        # while the tuner re-learns from scratch.
-        if auto_tune and not explicit_rps:
-            saved_rps = _load_tuned_rps(self.job.extra.get("domain") or "")
-            if saved_rps > 0:
-                requests_per_sec = saved_rps
-                ctx.logger.info(f"Starting at remembered rate: {saved_rps} req/s")
+        # How fast to fire chapter/image requests: the rate asked for is a cap
+        # (polite mode's default is a gentle start); unless one was asked for,
+        # start where this job, or else the last run on this site, got to, so a
+        # known-touchy site isn't re-blocked while the tuner re-learns.
+        remembered = _load_tuned_rps(domain) if auto_tune else 0.0
+        requests_per_sec, ceiling, stale = _rate_plan(self.job.extra, remembered)
+        if stale:
+            # an older job, whose request the tuner overwrote: from here on the
+            # request stays as asked (none known) and the tuner keeps its own
+            self._set_extra(requests_per_sec=0, current_rps=requests_per_sec)
+            ctx.logger.info(f"Resuming at {requests_per_sec} req/s, free to speed up from there")
+        elif requests_per_sec and requests_per_sec == remembered:
+            ctx.logger.info(f"Starting at remembered rate: {remembered} req/s")
+        # every run records it, which is what tells a job from before the split
+        self._set_extra(current_rps=requests_per_sec)
 
         # Seed the de-dupe set with titles already in the library from *other*
         # sources, so a story grabbed from one site isn't redone from another.
@@ -674,8 +710,8 @@ class ExportSourceHandler(BaseHandler):
         self.pace = PaceController(
             requests_per_sec,
             auto=auto_tune,
-            ceiling=explicit_rps if explicit_rps > 0 else RPS_MAX,
-            on_change=lambda rate: self._set_extra(requests_per_sec=rate),
+            ceiling=ceiling,
+            on_change=lambda rate: self._set_extra(current_rps=rate),
         )
         self.pace.attach(crawler.taskman)
         lanes: List = [crawler]
@@ -844,6 +880,15 @@ class ExportSourceHandler(BaseHandler):
                 # remember the title for live failure reporting (set once known)
                 cur_title: List[str] = [""]
                 cached_chapters: List[Optional[int]] = [None]
+
+                # Shown from the start, by the name in its address, so a novel
+                # whose chapter list takes a minute to load is not invisible
+                # (and a pause before it does not look like it lasts that long).
+                loading = f"{_name_from_url(novel_url)} (loading its chapter list)"
+                with book:
+                    active[lane] = {"title": loading, "done": 0, "total": 0}
+                    self._set_extra(phase="downloading", current_title=loading)
+                    _publish_active(force=True)
 
                 # live status so a long run isn't a misleading 0%
                 def _on_novel(title: str, c_done: int, c_total: int) -> None:
@@ -1059,8 +1104,12 @@ class ExportSourceHandler(BaseHandler):
                     # polite mode off and no failures this is 0 (no wait).
                     delay = pacing["delay"]
                     if queue and delay > 0:
+                        # polite mode's own pause, or a longer one after errors
+                        reason = "errors" if delay > floor_delay else "polite"
                         self._set_extra(
-                            phase="waiting-between-novels", adaptive_delay=round(delay, 1)
+                            phase="waiting-between-novels",
+                            adaptive_delay=round(delay, 1),
+                            pause_reason=reason,
                         )
                         if self.signal.wait(delay):
                             raise AbortedException()

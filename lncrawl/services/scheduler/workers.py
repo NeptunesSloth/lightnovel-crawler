@@ -30,14 +30,16 @@ Rules that keep this from changing what a site sees:
 """
 
 from collections import Counter
+from contextlib import contextmanager
 import itertools
 import logging
 import multiprocessing
 import os
 import queue
+import sys
 from threading import Event, Lock, Thread
 from time import monotonic
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from ...context import ctx
 
@@ -51,6 +53,38 @@ CANCEL_GRACE_SECONDS: float = 30.0
 STOP_SECONDS: float = 10.0
 # How often a worker sends what it learned about its sites during a long run.
 PROFILE_SYNC_SECONDS: float = 60.0
+# How long a new worker may take to start (load the app, its database and its
+# sources) before its jobs are run in this process instead. Until a worker has
+# started, a job handed to it shows as waiting with nothing to say why, and a
+# start that hung would have held it there for good.
+BOOT_SECONDS: float = 120.0
+# Windows: start the process without a console window of its own. The desktop
+# app frees its console at launch, so each worker otherwise opened a new black
+# window, empty but for warnings, and closing it killed the downloads in it.
+_CREATE_NO_WINDOW = 0x08000000
+
+
+@contextmanager
+def _without_console_window() -> Iterator[None]:
+    """While starting a worker on Windows, give it no console window."""
+    if sys.platform != "win32":
+        yield
+        return
+    import _winapi  # type: ignore[import-not-found]
+
+    create = _winapi.CreateProcess
+
+    def windowless(*args: Any, **kwargs: Any) -> Any:
+        # multiprocessing passes the creation flags as the sixth argument
+        if len(args) > 5 and isinstance(args[5], int):
+            args = (*args[:5], args[5] | _CREATE_NO_WINDOW, *args[6:])
+        return create(*args, **kwargs)
+
+    _winapi.CreateProcess = windowless
+    try:
+        yield
+    finally:
+        _winapi.CreateProcess = create
 
 
 def worker_limit() -> int:
@@ -74,7 +108,10 @@ class _Worker:
             name="lncrawl-download-worker",
             daemon=True,
         )
-        self.process.start()
+        with _without_console_window():
+            self.process.start()
+        self.started_at: float = monotonic()
+        self.ready = Event()  # set once the worker has loaded the app
         self.site: Optional[str] = None
         self.active: int = 0
         self.idle_since: float = monotonic()
@@ -110,7 +147,9 @@ class _Worker:
                 continue
             except (EOFError, OSError):
                 break
-            if message[0] == "profiles":
+            if message[0] == "ready":
+                self.ready.set()
+            elif message[0] == "profiles":
                 from ...core.scraping import merge_profiles
 
                 try:
@@ -144,6 +183,12 @@ class _Worker:
                 logging.getLogger(record.name).handle(record)
             except Exception:
                 pass
+
+    def abandon(self) -> None:
+        """Stop a worker that never started, before its jobs are run elsewhere."""
+        self.alive = False
+        self.process.terminate()
+        self.process.join(STOP_SECONDS)
 
     def stop(self) -> None:
         self.alive = False
@@ -224,6 +269,14 @@ class DownloadWorkers:
         # Like a job run here, this returns once the jobs have stopped: until
         # then the worker is still on this site and must not be given another.
         while not done.wait(0.5):
+            if not worker.ready.is_set() and monotonic() - worker.started_at > BOOT_SECONDS:
+                # stopped before it can begin, so the jobs never run twice
+                logger.warning(
+                    f"Download worker for {site} did not start in {BOOT_SECONDS:g}s; "
+                    "downloading in the app instead"
+                )
+                worker.abandon()
+                return signal.is_set()
             if signal.is_set():
                 if cancelled_at is None:
                     worker.cancel(request_id)
@@ -324,6 +377,7 @@ def _worker_main(requests: Any, responses: Any, logs: Any, boot: Dict[str, Any])
         root.removeHandler(handler)
     root.addHandler(QueueHandler(logs))
     root.setLevel(int(boot.get("root_level") or logging.WARNING))
+    responses.put(("ready",))
 
     # Read what the app has learned about sites; never write it back over the
     # main process's copy (each write replaces the whole file). What changes

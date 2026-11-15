@@ -169,7 +169,8 @@ class ServerErrors:
         status.HTTP_422_UNPROCESSABLE_CONTENT, "No archive was uploaded"
     )
     archive_too_large = ServerError(
-        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "The uploaded archive is too large"
+        413,
+        "The uploaded archive is too large",  # Starlette renamed the constant; the number is the same
     )
     no_chapters_to_download = ServerError(
         status.HTTP_422_UNPROCESSABLE_CONTENT, "No chapters to download"
