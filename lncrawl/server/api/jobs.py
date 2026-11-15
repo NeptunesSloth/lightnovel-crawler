@@ -1,3 +1,4 @@
+from pathlib import Path as FilePath
 import re
 from typing import Any, Dict, List, Optional
 
@@ -5,9 +6,9 @@ from fastapi import APIRouter, Body, Path, Query, Security
 from fastapi.responses import FileResponse
 
 from ...context import ctx
-from ...dao import Job, JobPriority, JobStatus, JobType, User
+from ...dao import Job, JobPriority, JobStatus, JobType, User, UserRole
 from ...exceptions import ServerErrors
-from ...utils.file_tools import safe_filename
+from ...utils.file_tools import safe_filename, writable_folder
 from ..models import (
     BulkDownloadRequest,
     DiscoverSourceRequest,
@@ -404,9 +405,22 @@ def export_source(
     user: User = Security(ensure_user),
     body: ExportSourceRequest = Body(),
 ) -> Job:
+    save_dir: Optional[str] = (body.save_dir or "").strip() or None
+    if save_dir:
+        # a folder on the server's own disks: not for every account to choose
+        if user.role != UserRole.ADMIN:
+            raise ServerErrors.forbidden
+        # checked now, not when the zip is written at the end of a days-long run
+        try:
+            save_dir = str(writable_folder(save_dir))
+        except (OSError, ValueError) as error:
+            raise ServerErrors.invalid_input.with_extra(
+                f"Cannot save the zip to {save_dir}: {error}"
+            ) from error
     return ctx.jobs.export_source(
         user,
         str(body.url),
+        save_dir=save_dir,
         format=body.format,
         limit=body.limit,
         retries=body.retries,
@@ -437,6 +451,13 @@ def list_source(
     return ctx.jobs.list_source(user, str(body.url))
 
 
+def _export_path(export_file: str) -> FilePath:
+    """Where an export's zip is: a chosen folder's full path, or one in the data folder."""
+    path = FilePath(export_file)
+    # files.resolve() reads "/mnt/ssd/x.zip" as a data-folder path on Linux and macOS
+    return path if path.is_absolute() else ctx.files.resolve(export_file)
+
+
 @router.get("/{job_id}/export", summary="Download the zip produced by an export-source job")
 def download_export(
     user: User = Security(ensure_user),
@@ -447,7 +468,7 @@ def download_export(
     export_file = job.extra.get("export_file")
     if not export_file:
         raise ServerErrors.no_such_file
-    path = ctx.files.resolve(export_file)
+    path = _export_path(export_file)
     if not path.is_file():
         raise ServerErrors.no_such_file
     filename = job.extra.get("export_name") or "novels.zip"

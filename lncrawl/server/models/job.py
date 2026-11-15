@@ -159,6 +159,13 @@ class ExportSourceRequest(BaseModel):
         "a search only returns one page of results, so turning this off limits an export to "
         "the few dozen novels the seed searches return",
     )
+    save_dir: Optional[str] = Field(
+        default=None,
+        max_length=1024,
+        description="Folder on the machine running the app to write the finished zip to, "
+        "e.g. a drive with more room (admins only). The zip is written there and nowhere "
+        "else; left empty, it is kept in the data folder and copied to the Desktop",
+    )
 
 
 class ListSourceRequest(BaseModel):

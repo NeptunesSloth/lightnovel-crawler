@@ -19,7 +19,7 @@ from typing_extensions import NotRequired
 
 from ....context import ctx
 from ....enums import JobStatus, JobType, OutputFormat
-from ....utils.file_tools import atomic_write, safe_filename
+from ....utils.file_tools import atomic_write, safe_filename, writable_folder
 from ....utils.keep_awake import keep_awake
 from ....utils.notify import notify_finished
 from ....utils.time_utils import current_timestamp
@@ -331,9 +331,13 @@ def _restore_archived_books(domain: str, manifest: Dict[str, dict]) -> None:
     if not wanted:
         return
     exports = ctx.files.resolve("exports")
-    for archive in sorted(
-        exports.glob("*.zip"), key=lambda file: file.stat().st_mtime, reverse=True
-    ):
+    # ZIPs kept in the data folder, and any written to a folder the user chose
+    archives: Set[Path] = set(exports.glob("*.zip"))
+    for record in manifest.values():
+        saved = record.get("archive") if isinstance(record, dict) else None
+        if saved and Path(saved).is_file():
+            archives.add(Path(saved))
+    for archive in sorted(archives, key=lambda file: file.stat().st_mtime, reverse=True):
         try:
             with zipfile.ZipFile(archive) as book:
                 members = set(book.namelist())
@@ -385,6 +389,21 @@ def _find_desktop() -> Optional[Path]:
         if path.is_dir():
             return path
     return None
+
+
+def _export_target(save_to: Optional[Path], domain: str, job_id: str) -> Tuple[str, Path]:
+    """Where to write the export's zip: (what the job records, the full path).
+
+    In the data folder unless a folder was chosen; there it is named after the
+    site, and never written over another file already there.
+    """
+    if save_to is None:
+        stored = f"exports/{job_id}.zip"
+        return stored, ctx.files.resolve(stored)
+    path = save_to / f"{domain}-novels.zip"
+    if path.exists():
+        path = save_to / f"{path.stem}-{job_id[:8]}{path.suffix}"
+    return str(path), path
 
 
 def _copy_to_desktop(src: Path, name: str) -> Optional[str]:
@@ -613,6 +632,16 @@ class ExportSourceHandler(BaseHandler):
             requests_per_sec = POLITE_REQUESTS_PER_SEC
         auto_tune = bool(self.job.extra.get("auto_tune", True))
         update_only = bool(self.job.extra.get("update_only", False))
+        # A folder the zip goes to instead of the data folder and the Desktop.
+        # Checked before anything downloads: a run can take days, and a drive
+        # unplugged since the job was made should say so now, not at the end.
+        save_to: Optional[Path] = None
+        save_dir = str(self.job.extra.get("save_dir") or "")
+        if save_dir and not library_only:
+            try:
+                save_to = writable_folder(save_dir)
+            except (OSError, ValueError) as error:
+                raise HandlerException(f"Cannot save the zip to {save_dir}: {error}") from error
         # Speed memory: unless a rate was set explicitly, start at the rate the
         # auto-tuner settled on last run, so a known-touchy site isn't re-blocked
         # while the tuner re-learns from scratch.
@@ -1195,12 +1224,14 @@ class ExportSourceHandler(BaseHandler):
                 raise HandlerException("Could not export any novel from the source")
 
             partial_paths = set(partial.values())
-            export_rel = f"exports/{self.job.id}.zip"
-            export_path = ctx.files.resolve(export_rel)
+            export_rel, export_path = _export_target(save_to, domain, self.job.id)
             export_path.parent.mkdir(parents=True, exist_ok=True)
+            # written under a temporary name: a half-written zip is never left
+            # looking like a finished one
+            writing = export_path.with_name(f"{export_path.name}.part")
             index_entries: List[Tuple[str, str, str]] = []
             zipped = 0
-            with zipfile.ZipFile(export_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            with zipfile.ZipFile(writing, "w", zipfile.ZIP_DEFLATED) as zf:
                 used: set = set()
                 for file in files:
                     arcname = file.name
@@ -1225,9 +1256,11 @@ class ExportSourceHandler(BaseHandler):
                     index_entries.append((arcname, file.stem, status))
                 # a clickable offline index of everything in the archive
                 zf.writestr("index.html", _build_index_html(domain, index_entries))
-            _save_manifest(domain, manifest)
             if not zipped:
+                writing.unlink(missing_ok=True)
                 raise HandlerException("Could not add any novel to the export zip")
+            os.replace(writing, export_path)
+            _save_manifest(domain, manifest)
 
             # report counts from what actually made it into the zip, so a file
             # that couldn't be written isn't silently counted as complete
@@ -1236,7 +1269,13 @@ class ExportSourceHandler(BaseHandler):
             zip_skipped = len(files) - zipped
 
             export_name = f"{domain}-novels.zip"
-            saved_to = _copy_to_desktop(export_path, export_name)
+            if save_to is not None:
+                # already where it was asked to go; another copy is the space
+                # the folder was chosen to save
+                export_name = export_path.name
+                saved_to: Optional[str] = str(export_path)
+            else:
+                saved_to = _copy_to_desktop(export_path, export_name)
 
             self._set_extra(
                 export_file=export_rel,
@@ -1261,7 +1300,9 @@ class ExportSourceHandler(BaseHandler):
             )
             if zip_skipped:
                 summary += f" {zip_skipped} could not be added to the zip."
-            if saved_to:
+            if saved_to and save_to is not None:
+                summary += f" Saved to {saved_to}."
+            elif saved_to:
                 summary += " Saved to your Desktop."
             self._notify_finish(summary)
         finally:

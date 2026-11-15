@@ -161,6 +161,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
           <option value="txt">TXT (text only)</option>
         </select>
       </div>
+      <div style="flex:3">
+        <label for="exp-savedir">Save the ZIP to folder</label>
+        <input id="exp-savedir" type="text" placeholder="blank = Desktop, e.g. D:\\Novels" />
+      </div>
     </div>
     <details>
       <summary>Advanced options — you don't need these</summary>
@@ -831,8 +835,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
           (extra.fail_reasons || []).forEach(function (fr) {
             log("  " + fr.count + "× " + fr.reason, "log-err");
           });
-          if (extra.saved_to) log("Saved to Desktop: " + extra.saved_to, "log-ok");
-          if (extra.export_file) downloadBlob(id, extra.export_name);
+          if (extra.saved_to) log((extra.save_dir ? "Saved to: " : "Saved to Desktop: ") + extra.saved_to, "log-ok");
+          // a ZIP already in the folder that was picked for it needs no second copy
+          if (extra.export_file && !extra.save_dir) downloadBlob(id, extra.export_name);
           loadLibrary(window._lncrawlUserId);
         } else {
           setExportControls(null, id);
@@ -952,6 +957,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
     body.update_only = document.getElementById("exp-update").checked;
     body.use_sitemap = document.getElementById("exp-sitemap").checked;
     body.parallel_novels = parseInt(document.getElementById("exp-lanes").value, 10) || 2;
+    // a roomier drive: the ZIP is written there only, not also to the Desktop
+    var saveDir = document.getElementById("exp-savedir").value.trim();
+    if (saveDir && !body.library_only) body.save_dir = saveDir;
     return body;
   }
 

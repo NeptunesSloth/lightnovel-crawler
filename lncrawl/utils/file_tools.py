@@ -176,6 +176,22 @@ def safe_filename(name: str) -> str:
     return name or "untitled"
 
 
+def writable_folder(folder: str) -> Path:
+    """``folder`` as a path that exists and can be written to now.
+
+    Made if missing. Raises ValueError for a relative path (relative to what the
+    server happens to run in is never what was meant) and OSError, with the
+    reason, when the folder cannot be made or written to.
+    """
+    path = Path(folder).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"{folder} is not a full path to a folder")
+    path.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path, prefix=".lncrawl-write-check-"):
+        pass
+    return path
+
+
 def open_folder(folder_path: Union[str, Path]) -> None:
     if Platform.windows:
         os.system(f'explorer.exe "{folder_path}"')
