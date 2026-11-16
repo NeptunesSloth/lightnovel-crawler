@@ -194,6 +194,27 @@ class RatePlanTests(unittest.TestCase):
         self.assertEqual(self.plan(resumed, remembered=1.5), (3.0, 5.0, False))
 
 
+class ImagePacingTests(unittest.TestCase):
+    """Whether a run's page images wait for the page rate or only their host."""
+
+    def unpaced(self, extra: dict) -> bool:
+        from lncrawl.services.scheduler.handlers.export_source import _images_unpaced
+
+        return _images_unpaced(extra)
+
+    def test_left_to_their_host_when_the_app_chooses_the_speed(self) -> None:
+        self.assertTrue(self.unpaced({}))
+        self.assertTrue(self.unpaced({"auto_tune": True, "current_rps": 2.5}))
+        # an older job, whose stored rate is only where the tuner had got to
+        stale = {"auto_tune": True, "requests_per_sec": 0.2, "found_by_discovery": True}
+        self.assertTrue(self.unpaced(stale))
+
+    def test_held_to_the_rate_when_the_user_asked_for_one(self) -> None:
+        self.assertFalse(self.unpaced({"polite": True}))
+        self.assertFalse(self.unpaced({"requests_per_sec": 2, "current_rps": 2}))
+        self.assertFalse(self.unpaced({"auto_tune": False, "requests_per_sec": 3}))
+
+
 class LaneTests(unittest.TestCase):
     def test_novels_run_side_by_side(self) -> None:
         inside = []
