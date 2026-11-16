@@ -17,6 +17,7 @@ from sqlmodel import Session, SQLModel, create_engine
 from lncrawl.core import Crawler
 from lncrawl.dao import Chapter, Job, Novel, User, Volume
 from lncrawl.enums import JobPriority, JobStatus, JobType
+from lncrawl.exceptions import AbortedException
 from lncrawl.server.api.jobs import router as jobs_router
 from lncrawl.server.api.novels import router
 from lncrawl.server.security import ensure_user
@@ -410,6 +411,27 @@ class NovelRepairTests(unittest.TestCase):
         self.assertEqual(repaired.status, JobStatus.SUCCESS, repaired.error)
         self.assertTrue(repaired.extra["completeness"]["complete"])
         self.assertNotIn("download_error", self.ctx.chapters.get("chapter-3").extra)
+
+    def test_a_chapter_job_stopped_before_it_fetched_is_run_again(self) -> None:
+        # A job stopped part-way stays "running" with nothing counted. Picked
+        # up again, it was called done because it had no child jobs left to
+        # wait for, without its chapter ever being downloaded: the batch said
+        # success with a chapter missing, and the EPUB was not rebuilt.
+        recover = self.source.download_chapter
+        stopped = []
+
+        def download(chapter):
+            if chapter.id == 3 and not stopped:
+                stopped.append(chapter.id)
+                raise AbortedException()
+            recover(chapter)
+
+        self.source.download_chapter = download
+        job = self.repair()
+        self.assertEqual(stopped, [3])
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertTrue(job.extra["completeness"]["complete"])
+        self.assertEqual(self.downloads.count(3), 1)  # fetched once it was run again
 
     def test_empty_downloads_stay_empty_and_do_not_create_epub(self) -> None:
         self.source.download_chapter = lambda chapter: setattr(chapter, "body", "<div></div>")

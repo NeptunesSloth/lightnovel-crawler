@@ -117,9 +117,14 @@ def main() -> None:
         from lncrawl.services.scheduler import workers as worker_pool
 
         worker_pool.BOOT_SECONDS = 2.0
+    if mode == "export-stuck-worker":
+        # the worker starts but never begins its job; give up on that fast
+        from lncrawl.services.scheduler import workers as worker_pool
+
+        worker_pool.BEGIN_SECONDS = 3.0
 
     roots = []
-    if mode in ("export", "export-cancel", "export-slow-boot"):
+    if mode in ("export", "export-cancel", "export-slow-boot", "export-stuck-worker"):
         # a bulk download: one unattended library-only export per site
         roots = ctx.jobs.bulk_download(user, [origin + "book/example" for origin in origins])
     else:
@@ -133,7 +138,8 @@ def main() -> None:
     workers_seen = 0
     killed = False
     phases = set()
-    while time.monotonic() - started < 120:
+    wait = float(os.environ.get("LNCRAWL_TEST_WAIT") or 120)
+    while time.monotonic() - started < wait:
         jobs = [ctx.jobs.get(root.id) for root in roots]
         phases.update(str((job.extra or {}).get("phase")) for job in jobs)
         if all(job.is_done for job in jobs):
@@ -152,6 +158,15 @@ def main() -> None:
         time.sleep(0.1)
 
     seconds = time.monotonic() - started
+    if not all(ctx.jobs.get(root.id).is_done for root in roots):
+        # Never finished. Say so and leave at once: stopping the scheduler would
+        # wait on whatever is stuck, and nothing after it is worth measuring.
+        statuses = [ctx.jobs.get(root.id).status.name for root in roots]
+        print(json.dumps({"statuses": statuses, "seconds": round(seconds, 1), "stuck": True}))
+        sys.stdout.flush()
+        for worker in list(ctx.download_workers._workers):
+            worker.process.kill()  # or they hold this process's output open
+        os._exit(0)
     ctx.scheduler.stop()  # workers report back and stop before anything is measured
     ctx.download_workers.close()
 

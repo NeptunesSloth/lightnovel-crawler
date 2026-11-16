@@ -58,6 +58,11 @@ PROFILE_SYNC_SECONDS: float = 60.0
 # started, a job handed to it shows as waiting with nothing to say why, and a
 # start that hung would have held it there for good.
 BOOT_SECONDS: float = 120.0
+# How long a worker that has started may take to begin a job it was given
+# (import the handlers, read the job) before the job is run in this process
+# instead. A worker can load the app and still be unable to run anything, as
+# the packaged app's were, and "ready" alone did not show it.
+BEGIN_SECONDS: float = 60.0
 # Windows: start the process without a console window of its own. The desktop
 # app frees its console at launch, so each worker otherwise opened a new black
 # window, empty but for warnings, and closing it killed the downloads in it.
@@ -117,6 +122,7 @@ class _Worker:
         self.idle_since: float = monotonic()
         self.alive: bool = True
         self.pending: Dict[int, Tuple[Event, List[Optional[str]]]] = {}
+        self.began: Dict[int, Event] = {}  # set once the worker is running that request
         self._pending_lock = Lock()
         Thread(target=self._read, name="lncrawl-worker-reader", daemon=True).start()
         Thread(target=self._read_logs, name="lncrawl-worker-logs", daemon=True).start()
@@ -126,6 +132,7 @@ class _Worker:
         result: List[Optional[str]] = []
         with self._pending_lock:
             self.pending[request_id] = (done, result)
+            self.began[request_id] = Event()
         if not self.alive:
             result.append("worker process is not running")
             done.set()
@@ -149,6 +156,11 @@ class _Worker:
                 break
             if message[0] == "ready":
                 self.ready.set()
+            elif message[0] == "began":
+                with self._pending_lock:
+                    began = self.began.get(message[1])
+                if began is not None:
+                    began.set()
             elif message[0] == "profiles":
                 from ...core.scraping import merge_profiles
 
@@ -160,6 +172,7 @@ class _Worker:
                 _, request_id, error = message
                 with self._pending_lock:
                     entry = self.pending.pop(request_id, None)
+                    self.began.pop(request_id, None)
                 if entry is not None:
                     entry[1].append(error)
                     entry[0].set()
@@ -264,19 +277,35 @@ class DownloadWorkers:
     ) -> bool:
         request_id = next(self._ids)
         done, result = worker.submit(request_id, job_ids, concurrency)
+        began = worker.began.get(request_id)
+        given_at: float = monotonic()
         cancelled_at: Optional[float] = None
         warned = False
         # Like a job run here, this returns once the jobs have stopped: until
         # then the worker is still on this site and must not be given another.
         while not done.wait(0.5):
-            if not worker.ready.is_set() and monotonic() - worker.started_at > BOOT_SECONDS:
-                # stopped before it can begin, so the jobs never run twice
-                logger.warning(
-                    f"Download worker for {site} did not start in {BOOT_SECONDS:g}s; "
-                    "downloading in the app instead"
-                )
-                worker.abandon()
-                return signal.is_set()
+            if not worker.ready.is_set():
+                if monotonic() - worker.started_at > BOOT_SECONDS:
+                    # stopped before it can begin, so the jobs never run twice
+                    logger.warning(
+                        f"Download worker for {site} did not start in {BOOT_SECONDS:g}s; "
+                        "downloading in the app instead"
+                    )
+                    worker.abandon()
+                    return signal.is_set()
+                given_at = monotonic()  # its time to begin counts from when it is up
+            elif began is not None and not began.is_set():
+                if worker.active > 1:
+                    # Busy with other work (a site's export, say), which giving up
+                    # on it would kill too: its time to begin starts after that.
+                    given_at = monotonic()
+                elif monotonic() - given_at > BEGIN_SECONDS:
+                    logger.warning(
+                        f"Download worker for {site} started but did not begin its work in "
+                        f"{BEGIN_SECONDS:g}s; downloading in the app instead"
+                    )
+                    worker.abandon()
+                    return signal.is_set()
             if signal.is_set():
                 if cancelled_at is None:
                     worker.cancel(request_id)
@@ -415,7 +444,7 @@ def _worker_main(requests: Any, responses: Any, logs: Any, boot: Dict[str, Any])
     def execute(request_id: int, job_ids: List[str], concurrency: int, signal: Event) -> None:
         error: Optional[str] = None
         try:
-            _run_jobs(job_ids, concurrency, signal)
+            _run_jobs(job_ids, concurrency, signal, lambda: responses.put(("began", request_id)))
         except BaseException as e:  # reported to the main process, which falls back
             error = repr(e)
         finally:
@@ -463,10 +492,16 @@ def _worker_main(requests: Any, responses: Any, logs: Any, boot: Dict[str, Any])
     ctx.destroy()
 
 
-def _run_jobs(job_ids: List[str], concurrency: int, signal: Event) -> None:
+def _run_jobs(
+    job_ids: List[str], concurrency: int, signal: Event, began: Callable[[], object]
+) -> None:
     from ...exceptions import AbortedException
     from .handlers import run_job, run_jobs_concurrently
 
+    # The handlers are imported, which is where the packaged app's workers hung:
+    # from here on it is working. The main process gives up on one that never
+    # gets this far. (Reading a big batch's jobs below can take a while.)
+    began()
     jobs = []
     for job_id in job_ids:
         job = ctx.jobs.get(job_id)

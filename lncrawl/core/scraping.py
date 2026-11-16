@@ -20,12 +20,15 @@ per-crawler, so two jobs on one site no longer pace themselves independently
 into a block.
 """
 
+from collections import deque
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict
 import logging
+import math
 import threading
 import time
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Set, Tuple
 
 from lxml import html as lxml_html
 from scraper import (
@@ -131,44 +134,87 @@ scraper_session._visible_text = _visible_text
 
 # The longest gap a slowdown remembered from an earlier run may impose on the
 # first requests of this one. A site that really needs longer refuses again
-# and the gap doubles from here, so this costs a refusal or two at most.
+# and the gap grows from here, so this costs a refusal or two at most.
 CARRY_OVER_MAX = 2.0
 # Refusals closer together than this are one burst: the requests already in
 # flight when a site's window closed, all answered the same way.
 REFUSAL_BURST = 1.0
+# The longest a site's "come back later" holds every request to it. Held for a
+# 4-minute Retry-After, nothing completed for two and the export's watchdog
+# stopped the run. After this, requests go again: a site still closed refuses
+# them, and the request that was refused still waits the rest out itself.
+MAX_SITE_BLOCK = 60.0
+# A wait longer than one block is a closure, not a counting window: refusals
+# until it ends are that same closure, and slow nothing further. Remembered at
+# most this long, so a nonsense Retry-After cannot hold a site's pace for good.
+MAX_CLOSURE = 3600.0
+# How far under the pace a site's counter allows to go. A site that lets ten
+# requests through and then says "wait ten seconds" takes ten per ten seconds;
+# 15% under that leaves room for requests not arriving perfectly evenly.
+LIMIT_MARGIN = 1.15
+# The least a refusal widens the gap. A second refusal this soon after the
+# last one means that correction was not enough, and doubles it instead.
+REFUSED_STEP = 1.08
+REPEAT_WINDOW = 60.0
+# Easing stops this far short of a pace that was refused, for this long; after
+# that it may try faster again, in case the limit was relaxed or the refusal
+# was someone else's doing (a browser open on the same site).
+TOO_FAST_MARGIN = 1.05
+TOO_FAST_TTL = 600.0
+# How uneven the gaps to a counting site are: enough not to tick like a clock,
+# little enough that its window never holds one request more than planned.
+EVEN_JITTER = 0.1
+# How many recent successes per site are remembered, to count what a window held.
+PASSED_KEPT = 512
 
 
 class SitePacer(Pacer):
-    """The library's pacer, reacting to a refusal by slowing down a step.
+    """Per-site request pacing that finds a site's limit and stays just under it.
 
-    NovelFire's chapter mirror allows a handful of requests every ten seconds
-    and answers the rest with 429 and ``Retry-After: 10``, the time until its
-    window reopens. The library took that number as the new average gap between
-    requests, one every ten seconds where the site takes about one a second, and
-    held a connection slot through each gap, so nothing else got through either.
+    Measured on NovelFire and its chapter mirror: each host lets ten requests
+    through, answers the eleventh with 429 and ``Retry-After: 10``, and refuses
+    everything for those ten seconds. The two hosts count separately, and a
+    steady 0.9 requests a second to both at once is never refused: about 54
+    chapters a minute. An export got 15 per novel being downloaded, because
+    the mirror was refusing 4 requests in 10 and every refusal parks a download
+    thread for its ten seconds. Three things in the library's pacer cause that:
 
-    It also could not recover. Every fetch first re-reads the gap saved on disk,
-    and the saved gap only drifts a tenth of the way towards the pacer's own on
-    every tenth success, so ten seconds came down about 1% per ten requests: in
-    practice never, and in every run after it too. An export measured against
-    the live site went from about 45 chapters a minute to 15.
+    - Each waiting thread times itself from the last request sent, so two go
+      out per gap, and the gaps are deliberately uneven, so a ten-second window
+      regularly holds an eleventh request.
+    - A refusal doubles the gap and successes ease it back 10% at a time, with
+      nothing to say where the limit was, so it keeps walking back into it.
+    - Requests already waiting go out while the site is still saying wait, and
+      are refused too.
 
-    Here a refusal widens the gap by the policy's backoff factor, once per burst
-    of refusals; the request that was refused still waits out Retry-After before
-    it is sent again. The saved gap seeds an origin once, capped at
-    CARRY_OVER_MAX, and from then on the pacer keeps its own count, so its easing
-    after successes actually takes effect. The gap is never shorter than the rate
-    the policy was made for.
+    (It also took Retry-After as the new gap and could not recover from it,
+    because every fetch re-reads the gap saved on disk; that was fixed first.)
+
+    Here a thread reserves the site's next free turn before it sleeps, so the
+    pace holds however many threads wait. A refusal that names a wait says what
+    the site counts, the requests it let through in that time: the gap is set
+    LIMIT_MARGIN under that at once, and nothing is sent to the site until the
+    wait is over. A site that has refused this way is paced evenly from then
+    on. Successes ease the gap as in the library, but never back to a pace that
+    was refused (TOO_FAST_MARGIN, for TOO_FAST_TTL).
+
+    A gap remembered from an earlier run seeds a site once, capped at
+    CARRY_OVER_MAX, and is never shorter than the rate the policy was made for.
     """
 
     def __init__(
         self, policy: Optional[PacingPolicy] = None, clock: Callable[[], float] = time.monotonic
     ) -> None:
         super().__init__(policy)
-        self._clock = clock
+        self._clock = clock  # wait() sleeps, so it needs a clock that runs
         self._seeded: Set[str] = set()
-        self._widened_at: Dict[str, float] = {}
-        self._quiet_until: Dict[str, float] = {}
+        self._next_at: Dict[str, float] = {}  # the next free turn
+        self._block_until: Dict[str, float] = {}  # the site said to wait until then
+        self._burst_until: Dict[str, float] = {}  # refusals before this are one burst
+        self._passed: Dict[str, Deque[float]] = {}  # when recent requests succeeded
+        self._too_fast: Dict[str, Tuple[float, float]] = {}  # (a gap that was refused, when)
+        self._counting: Set[str] = set()  # sites that refused with a wait: paced evenly
+        self._closed_until: Dict[str, float] = {}  # the end of the closure a site named
 
     def learn(self, origin: str, interval: float) -> None:
         with self._lock:
@@ -181,16 +227,118 @@ class SitePacer(Pacer):
     def throttled(self, origin: str, retry_after: Optional[float] = None) -> float:
         policy = self.policy
         now = self._clock()
+        named: float = 0.0  # the wait the site named, if it is a number of seconds
+        if retry_after is not None and math.isfinite(retry_after) and retry_after > 0:
+            named = retry_after
+        wait: float = min(named, MAX_SITE_BLOCK)  # "inf" or an hour must not hold it for good
         with self._lock:
             self._seeded.add(origin)
             self._streak[origin] = 0
             current = self._interval.get(origin, policy.interval) or policy.floor
-            if now < self._quiet_until.get(origin, 0.0):
+            last = self._burst_until.get(origin)
+            if last is not None and now < last:
                 return current  # the same closed window, refusing what was in flight
-            widened = min(max(current * policy.backoff_factor, policy.floor), policy.max_interval)
+            if wait and now < self._closed_until.get(origin, 0.0):
+                # still the closure the site named before, longer than one block:
+                # hold it again, and leave the pace as it was
+                self._block_until[origin] = now + wait
+                self._burst_until[origin] = now + max(wait, REFUSAL_BURST)
+                return current
+            repeat = last is not None and now - last < REPEAT_WINDOW
+            widened = current * policy.backoff_factor
+            refused_gap = current
+            if wait:
+                was_even = origin in self._counting
+                self._counting.add(origin)
+                self._block_until[origin] = now + wait
+                self._closed_until[origin] = now + min(named, MAX_CLOSURE)
+                passed = sum(1 for at in self._passed.get(origin, ()) if now - at <= wait)
+                # A wait no longer than a block is the rest of a counting window,
+                # which says how many it takes; a longer one is a penalty, which
+                # says nothing about pace, so the gap only steps up.
+                if passed >= 3 and not repeat and named <= MAX_SITE_BLOCK:
+                    allowed = wait / passed  # what the site let through before refusing
+                    widened = max(allowed * LIMIT_MARGIN, current * REFUSED_STEP)
+                    # Uneven gaps trip a counter at a slower average than even
+                    # ones would, so only an evenly kept pace is itself to blame.
+                    refused_gap = max(current, allowed) if was_even else allowed
+                # Refused again soon after a block: the correction was not enough,
+                # and what got through since says little (most of that time was
+                # the block itself), so the gap doubles.
+            widened = min(max(widened, policy.floor, policy.interval), policy.max_interval)
             self._interval[origin] = widened
-            self._quiet_until[origin] = now + max(retry_after or 0.0, REFUSAL_BURST)
+            self._too_fast[origin] = (min(refused_gap, policy.max_interval), now)
+            self._burst_until[origin] = now + max(wait, REFUSAL_BURST)
             return widened
+
+    def eased(self, origin: str) -> float:
+        policy = self.policy
+        now = self._clock()
+        with self._lock:
+            self._passed.setdefault(origin, deque(maxlen=PASSED_KEPT)).append(now)
+            current = self._interval.get(origin, policy.interval)
+            if current <= policy.interval:
+                return current
+            streak = self._streak.get(origin, 0) + 1
+            if streak < policy.recover_after:
+                self._streak[origin] = streak
+                return current
+            self._streak[origin] = 0
+            lowest = policy.interval
+            refused = self._too_fast.get(origin)
+            if refused is not None and now - refused[1] < TOO_FAST_TTL:
+                lowest = max(lowest, refused[0] * TOO_FAST_MARGIN)
+            narrowed = min(max(current * policy.recover_factor, lowest), policy.max_interval)
+            self._interval[origin] = narrowed
+            return narrowed
+
+    def _turn_gap(self, origin: str) -> float:
+        """The gap to leave after the turn being taken now."""
+        mean = self.interval_for(origin)
+        if mean <= 0:
+            return 0.0
+        with self._lock:
+            even = origin in self._counting
+        if not even:
+            return self.gap(origin)  # the library's uneven, browsing-like gaps
+        jitter = self._random.uniform(1 - EVEN_JITTER, 1 + EVEN_JITTER)
+        return max(mean * jitter, self.policy.floor)
+
+    def wait(self, origin: str, signal: Any = None) -> float:
+        """Sleep until this caller's turn to send to ``origin``; seconds slept.
+
+        The turn is reserved before sleeping, so threads waiting together are
+        spread a gap apart instead of waking at once. A turn that comes up
+        while the site has said to wait is taken again after the wait. A caller
+        stopped while waiting gives its turn back, if no one has reserved one
+        after it, so the next caller does not wait for it as well.
+        """
+        waited = 0.0
+        while True:
+            if signal is not None and signal.is_set():
+                raise AbortedException("aborted while pacing")
+            gap = self._turn_gap(origin)
+            with self._lock:
+                now = self._clock()
+                turn = max(now, self._next_at.get(origin, 0.0), self._block_until.get(origin, 0.0))
+                self._next_at[origin] = turn + gap
+            while True:
+                remaining = turn - self._clock()
+                if remaining <= 0:
+                    break
+                if signal is not None and signal.is_set():
+                    with self._lock:
+                        if self._next_at.get(origin) == turn + gap:
+                            self._next_at[origin] = turn
+                    raise AbortedException("aborted while pacing")
+                time.sleep(min(0.25, remaining))
+            waited += max(0.0, turn - now)
+            with self._lock:
+                refused_meanwhile = self._clock() < self._block_until.get(origin, 0.0)
+            if not refused_meanwhile:
+                break
+        self.mark(origin)
+        return waited
 
 
 def site_state(config: ScraperConfig, memory: Memory) -> SharedState:
@@ -200,13 +348,51 @@ def site_state(config: ScraperConfig, memory: Memory) -> SharedState:
     return state
 
 
-def _pause_budget_while_paced(scraper: Any) -> None:
-    """Stop the request's time limit while it waits for a connection slot and its turn.
+# How many connections page images may use to one host at once. The library
+# allows two per site, which suits a site's pages. Images are static files,
+# usually on an image host of their own: weebcentral's answered 12 a second
+# over two connections, 28 over four and 40 over eight, nothing refused. Four
+# is fewer than the six a browser opens to load the same pages of a chapter.
+IMAGE_CONNECTIONS = 4
+
+_image_fetch: ContextVar[bool] = ContextVar("lncrawl_image_fetch", default=False)
+_image_gates: Dict[str, threading.BoundedSemaphore] = {}
+_image_gates_lock = threading.Lock()
+
+
+@contextmanager
+def fetching_image() -> Iterator[None]:
+    """Mark the fetches made inside as image downloads (see IMAGE_CONNECTIONS)."""
+    token = _image_fetch.set(True)
+    try:
+        yield
+    finally:
+        _image_fetch.reset(token)
+
+
+def is_image_fetch() -> bool:
+    return _image_fetch.get()
+
+
+def _image_gate(key: str) -> threading.BoundedSemaphore:
+    """The connections images may use to the site ``key``, for the whole process."""
+    with _image_gates_lock:
+        gate = _image_gates.get(key)
+        if gate is None:
+            gate = _image_gates[key] = threading.BoundedSemaphore(IMAGE_CONNECTIONS)
+        return gate
+
+
+def _install_pacing(scraper: Any) -> None:
+    """Make ``scraper`` wait for its turns this program's way, with the time limit stopped.
 
     The library holds one of a couple of slots per address while it waits out
     the site's gap, and a dozen download threads queue for them. That queue is
     this program's own doing, not the site being slow, and counting it made
     chapters and novel details time out while nothing had been asked yet.
+
+    An image download takes one of the site's image connections instead of
+    the library's two, and its turn on the site's clock the same way.
     """
     paced = getattr(scraper, "_paced", None)
     if paced is None:
@@ -214,6 +400,22 @@ def _pause_budget_while_paced(scraper: Any) -> None:
 
     @contextmanager
     def paused(key: str, abort: Any) -> Iterator[None]:
+        pacer = getattr(scraper, "pacer", None)
+        if is_image_fetch() and pacer is not None:
+            gate = _image_gate(key)
+            with waiting_turn():
+                while not gate.acquire(timeout=0.25):
+                    scraper._check_signal(abort)
+                try:
+                    pacer.wait(key, abort)
+                except BaseException:
+                    gate.release()
+                    raise
+            try:
+                yield
+            finally:
+                gate.release()
+            return
         with ExitStack() as stack:
             with waiting_turn():
                 stack.enter_context(paced(key, abort))
@@ -434,7 +636,7 @@ def new_scraper(
         return response
 
     setattr(scraper, "fetch", bounded_fetch)
-    _pause_budget_while_paced(scraper)
+    _install_pacing(scraper)
     if rate > 0 and origin:
         _hold_rate(scraper, origin, 1.0 / rate)
     return scraper

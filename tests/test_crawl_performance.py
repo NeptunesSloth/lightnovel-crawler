@@ -193,6 +193,69 @@ class PendingChapterTests(unittest.TestCase):
         self.assertEqual(images.call_args_list[0].args, (1, 3))
         self.assertEqual(images.call_args_list[-1].args, (3, 3))
 
+    def test_manga_pages_on_an_image_host_are_left_to_its_own_pacing(self) -> None:
+        # The export's request rate is for the site. Held to it, a manga's page
+        # images came at 5 a second at most, where their image host answered 47
+        # a second without refusing any. Images on the site's own host still
+        # take their turn, and only those tell the rate how the site is doing.
+        def done_future(*args, **kwargs):
+            future: Future = Future()
+            future.set_result(None)
+            return future
+
+        crawler = SimpleNamespace(
+            base_url=["https://example.com/"],
+            taskman=SimpleNamespace(
+                submit_task=MagicMock(side_effect=done_future),
+                submit_unpaced=MagicMock(side_effect=done_future),
+            ),
+        )
+        images = {
+            "a": "https://images.example.net/1.jpg",
+            "b": "https://images.example.net/2.jpg",
+            "c": "https://example.com/3.jpg",
+        }
+        ctx = SimpleNamespace(
+            crawler=SimpleNamespace(
+                pending_chapter_ids=MagicMock(return_value=["chapter"]),
+                pending_image_ids=MagicMock(return_value=["a", "b", "c"]),
+                fetch_image=MagicMock(),
+                fetch_chapter=MagicMock(),
+            ),
+            novels=SimpleNamespace(
+                find_by_url=MagicMock(
+                    return_value=SimpleNamespace(id="novel", title="Manga", synopsis="A synopsis.")
+                )
+            ),
+            chapters=SimpleNamespace(
+                list_ids=MagicMock(return_value=["chapter"]),
+                get_many=MagicMock(return_value=[SimpleNamespace(is_available=True)]),
+            ),
+            images=SimpleNamespace(
+                list_ids=MagicMock(return_value=list(images)),
+                get_many=lambda ids: [SimpleNamespace(id=i, url=images[i]) for i in ids],
+            ),
+            files=SimpleNamespace(resolve=lambda file: Path(file)),
+        )
+        reported = MagicMock()
+        with patch("lncrawl.services.scheduler.handlers.export_source.ctx", ctx):
+            _download_novel(
+                crawler,
+                "user",
+                "https://example.com/manga",
+                OutputFormat.epub,
+                Event(),
+                on_result=reported,
+                build=False,
+                images_unpaced=True,
+            )
+        sent = [call.args[2] for call in crawler.taskman.submit_unpaced.call_args_list]
+        self.assertEqual(sorted(sent), ["a", "b"])  # the image host's
+        paced = [call.args[2:3] for call in crawler.taskman.submit_task.call_args_list]
+        self.assertIn(("c",), paced)  # the site's own, with the chapter page
+        # the chapter and the site's own image, not the image host's two
+        self.assertEqual(reported.call_count, 2)
+
     def test_only_missing_or_empty_chapters_are_queued(self) -> None:
         chapters = [
             SimpleNamespace(id="cached", extra={"crawler_version": 2}, is_available=True),

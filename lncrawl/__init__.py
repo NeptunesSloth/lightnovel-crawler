@@ -16,11 +16,6 @@ if is_frozen:
     path = os.path.realpath(os.path.abspath(__file__))
     sys.path.insert(0, os.path.dirname(os.path.dirname(path)))
 
-    with suppress(Exception):
-        import multiprocessing
-
-        multiprocessing.freeze_support()
-
 # Remove colors from terminal (Windows frozen builds and CI environments don't support ANSI)
 if os.getenv("CI") or (is_frozen and sys.platform == "win32"):
     os.environ["TERM"] = "dumb"
@@ -28,6 +23,18 @@ if os.getenv("CI") or (is_frozen and sys.platform == "win32"):
 
 
 def main():
+    if is_frozen:
+        # A download worker is this same executable, started again by
+        # multiprocessing: this call runs the worker and exits. It has to be
+        # made here, once `import lncrawl` has finished. It used to be made at
+        # import time, so a worker spent its whole life inside that import, and
+        # Python 3.13+ makes every other thread wait for a package that is
+        # still being imported: the thread given a job waited for ever on its
+        # first import, and no export handed to a worker ever started.
+        import multiprocessing
+
+        multiprocessing.freeze_support()
+
     if os.environ.get("LNCRAWL_PYLSP") == "1":
         # Start pylsp server
         from pylsp import __main__ as _pylsp_main

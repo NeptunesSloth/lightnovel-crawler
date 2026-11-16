@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 from typing_extensions import NotRequired
 
 from ....context import ctx
+from ....core.crawler import is_own_host
 from ....enums import JobStatus, JobType, OutputFormat
 from ....utils.file_tools import atomic_write, safe_filename, writable_folder
 from ....utils.keep_awake import keep_awake
@@ -312,6 +313,24 @@ def _rate_plan(extra: Dict[str, Any], remembered: float) -> Tuple[float, float, 
     elif auto and asked <= 0 and remembered > 0:
         start = remembered  # where the last run on this site got to
     return start, ceiling, False
+
+
+def _images_unpaced(extra: Dict[str, Any]) -> bool:
+    """Whether a run's page images are left to their host instead of the run's rate.
+
+    The rate an export keeps is for requests to a site's pages, which is what
+    sites limit. Held to it too, a manga's page images came at 5 a second at
+    most (the fastest the tuner goes), where the image host answered 47 a
+    second with nothing refused. So when the app is choosing the speed, images
+    take no turn on the rate: each image host is still paced on its own
+    (SitePacer backs off one that refuses) and gets a few connections, not
+    more. A rate the user asked for, or polite mode, still holds everything.
+    """
+    if extra.get("polite") or not extra.get("auto_tune", True):
+        return False
+    _, _, stale = _rate_plan(extra, 0.0)
+    asked = float(extra.get("requests_per_sec", 0) or 0)
+    return stale or asked <= 0
 
 
 def _save_manifest(domain: str, novels: Dict[str, dict], tuned_rps: float = 0) -> None:
@@ -684,6 +703,7 @@ class ExportSourceHandler(BaseHandler):
             ctx.logger.info(f"Resuming at {requests_per_sec} req/s, free to speed up from there")
         elif requests_per_sec and requests_per_sec == remembered:
             ctx.logger.info(f"Starting at remembered rate: {remembered} req/s")
+        images_unpaced = _images_unpaced(self.job.extra)
         # every run records it, which is what tells a job from before the split
         self._set_extra(current_rps=requests_per_sec)
 
@@ -932,6 +952,7 @@ class ExportSourceHandler(BaseHandler):
                         _on_images,
                         self.pace.report,
                         build=not library_only,
+                        images_unpaced=images_unpaced,
                     )
                 except ExportStalledError:
                     with book:
@@ -1398,6 +1419,7 @@ def _download_novel(
     on_images: Optional[Callable[[int, int], None]] = None,
     on_result: Optional[Callable[..., None]] = None,
     build: bool = True,
+    images_unpaced: bool = False,
 ) -> NovelResult:
     """Download a novel and build its ebook.
 
@@ -1413,6 +1435,8 @@ def _download_novel(
     ``on_result(error, count=True)`` hears about every chapter and image as it
     finishes, which is what the request rate is tuned from. ``build`` False
     stops once the chapters are in the library, without making an ebook.
+    ``images_unpaced`` sends page images without a turn on the request rate
+    (see `_images_unpaced`).
     """
     # Reuse already-fetched metadata: on retry rounds (and re-runs) the novel and
     # its chapter list are already in the DB, so skip re-downloading the info page
@@ -1487,10 +1511,27 @@ def _download_novel(
                 last_emit[0] = monotonic()
                 on_images(done + i_cached, i_total)
 
+        # Only images on an image host of their own skip the site's rate; those
+        # on the site's own host take their turn like its pages, and only those
+        # tell the rate how the site is doing.
+        own: Set[str] = set(pending_images)
+        if images_unpaced:
+            own = set()
+            for offset in range(0, len(pending_images), 500):
+                for image in ctx.images.get_many(pending_images[offset : offset + 500]):
+                    if is_own_host(crawler, image.url):
+                        own.add(image.id)
+
+        def send_image(fn, *args, **kwargs):
+            image_id = args[1]
+            if image_id in own:
+                return crawler.taskman.submit_task(fn, *args, **kwargs)
+            return crawler.taskman.submit_unpaced(fn, *args, **kwargs)
+
         try:
             for outcome in crawl_items(
                 pending_images,
-                lambda image_id: crawler.taskman.submit_task(
+                lambda image_id: send_image(
                     ctx.crawler.fetch_image,
                     user_id,
                     image_id,
@@ -1502,7 +1543,7 @@ def _download_novel(
                 idle_timeout=STALL_TIMEOUT,
                 on_progress=_image_tick,
             ):
-                if on_result:
+                if on_result and outcome.item_id in own:
                     on_result(outcome.error, count=False)
         except CrawlStalledError as error:
             raise ExportStalledError(str(error)) from error

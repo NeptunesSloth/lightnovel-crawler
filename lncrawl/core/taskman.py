@@ -117,10 +117,22 @@ class TaskManager:
         Returns:
             A Future representing the given call.
         """
+        return self._send(fn, True, args, kwargs)
+
+    def submit_unpaced(self, fn: Callable[..., T], *args, **kwargs) -> Future[T]:
+        """Like `submit_task`, but the call does not wait for a turn on the rate.
+
+        For work the rate is not meant for: an export's rate paces requests for
+        a site's pages, while a manga's page images are left to their own
+        host's pacing and connection limit (see core/scraping.py).
+        """
+        return self._send(fn, False, args, kwargs)
+
+    def _send(self, fn: Callable[..., T], paced: bool, args: tuple, kwargs: dict) -> Future[T]:
         if not self._submit:
             raise Exception("No executor is available")
 
-        if hasattr(self, "_limiter"):
+        if paced and hasattr(self, "_limiter"):
             fn = self._limiter.wrap(fn)
 
         # Run in a copy of the caller's context, so a task sent on behalf of a

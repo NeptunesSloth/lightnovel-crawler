@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import base64
+from contextlib import nullcontext
 import hashlib
 from io import BytesIO
 import math
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
+from urllib.parse import urlsplit
 
 from pydantic.networks import HttpUrl
 
@@ -34,6 +36,30 @@ def _is_whole_plain_jpeg(img: Any, data: bytes) -> bool:
         and img.mode in ("L", "RGB")
         and data.rstrip(b"\0\r\n ")[-2:] == b"\xff\xd9"
     )
+
+
+def _bare_host(url: str) -> str:
+    host = (urlsplit(url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def is_own_host(crawler: Any, url: str) -> bool:
+    """Whether ``url`` is on one of the site's own hosts or their subdomains.
+
+    The site's hosts are those in the crawler's ``base_url``. An address with
+    no host counts as the site's own, so it is never treated more loosely.
+    """
+    host = _bare_host(url)
+    if not host:
+        return True
+    bases = getattr(crawler, "base_url", None) or []
+    if isinstance(bases, str):
+        bases = [bases]
+    for base in bases:
+        own = _bare_host(str(base))
+        if own and (host == own or host.endswith("." + own)):
+            return True
+    return False
 
 
 class Crawler(ABC):
@@ -212,8 +238,14 @@ class Crawler(ABC):
         """The image at ``url`` as fetched, the way ``scraper.get_image`` fetches it."""
         if url.startswith("data:"):
             return base64.b64decode(url.split("base64,")[-1])
+        from .scraping import fetching_image
+
         headers = {"accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"}
-        response = self.scraper.fetch("GET", url, headers=headers, navigation=False)
+        # An image host of its own may get a few more connections; the site's
+        # own host keeps the two every request to it gets.
+        marked = nullcontext() if is_own_host(self, url) else fetching_image()
+        with marked:
+            response = self.scraper.fetch("GET", url, headers=headers, navigation=False)
         return response.content
 
     def download_cover(self, cover_url: str, cover_file: Path) -> None:
