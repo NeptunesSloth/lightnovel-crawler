@@ -27,19 +27,68 @@ if "--multiprocessing-fork" in sys.argv:
 """
 
 
+# A worker that loads the app and says it is ready, then never begins its job.
+STUCK_WORKER = """
+import sys
+import time
+
+if "--multiprocessing-fork" in sys.argv:
+    import lncrawl.services.scheduler.workers as workers
+
+    workers._run_jobs = lambda *args, **kwargs: time.sleep(3600)
+"""
+# The packaged app: every process is the one frozen executable, whose entry is
+# lncrawl/__main__.py, and a worker is that executable started again.
+PACKAGED_APP = """
+import sys
+
+sys.frozen = True
+import multiprocessing
+
+multiprocessing.set_executable({exe!r})
+"""
+PACKAGED_EXE = """#!{python}
+import runpy
+import sys
+
+sys.frozen = True
+runpy.run_path({entry!r}, run_name="__main__")
+"""
+
+
 class DownloadWorkerTests(unittest.TestCase):
-    def run_app(self, workers: int, mode: str, chapters: int = 30, boot_delay: int = 0) -> dict:
+    def run_app(
+        self,
+        workers: int,
+        mode: str,
+        chapters: int = 30,
+        boot_delay: int = 0,
+        hook: str = "",
+        packaged: bool = False,
+        wait: int = 120,
+    ) -> dict:
         with TemporaryDirectory() as data, TemporaryDirectory() as hooks:
             path = str(ROOT)
             if boot_delay:
                 # hold up ctx.setup in the worker processes only, as a slow or
                 # stuck start of the packaged Windows app would
-                Path(hooks, "sitecustomize.py").write_text(SLOW_BOOT.format(delay=boot_delay))
+                hook = SLOW_BOOT.format(delay=boot_delay)
+            if packaged:
+                exe = Path(hooks, "lncrawl-packaged")
+                exe.write_text(
+                    PACKAGED_EXE.format(
+                        python=sys.executable, entry=str(ROOT / "lncrawl" / "__main__.py")
+                    )
+                )
+                exe.chmod(0o755)
+                hook = PACKAGED_APP.format(exe=str(exe)) + hook
+            if hook:
+                Path(hooks, "sitecustomize.py").write_text(hook)
                 path = os.pathsep.join([hooks, path])
             result = subprocess.run(
                 [sys.executable, str(APP), data, str(workers), str(chapters), mode],
                 cwd=ROOT,
-                env=dict(os.environ, PYTHONPATH=path),
+                env=dict(os.environ, PYTHONPATH=path, LNCRAWL_TEST_WAIT=str(wait)),
                 capture_output=True,
                 text=True,
                 timeout=180,
@@ -79,6 +128,30 @@ class DownloadWorkerTests(unittest.TestCase):
         self.assertEqual(outcome["available"], 60)
         self.assertLess(outcome["seconds"], 25)  # not waiting out the 30s start
         self.assertIn("starting", outcome["phases"])  # said so meanwhile
+
+    @unittest.skipUnless(
+        sys.version_info >= (3, 13) and sys.platform != "win32",
+        "starts a frozen app's worker the way Python 3.13+ does off Windows",
+    )
+    def test_exports_run_in_the_workers_of_the_packaged_app(self) -> None:
+        # In the packaged app a worker ran its whole life from inside the app's
+        # own `import lncrawl` (freeze_support was called there). Python 3.13+
+        # makes other threads wait for a package that is still being imported,
+        # so the thread given the job waited for ever on its first import: the
+        # export sat at "Starting" and never downloaded anything.
+        outcome = self.run_app(workers=2, mode="export", packaged=True, wait=100)
+        self.assertEqual(outcome["statuses"], ["SUCCESS", "SUCCESS"])
+        self.assertEqual(outcome["available"], 60)
+        self.assertEqual(outcome["workers_seen"], 2)
+        # done by the workers themselves, not by the app after giving up on them
+        self.assertLess(outcome["seconds"], 40)
+
+    def test_an_export_its_worker_never_begins_runs_in_the_app_instead(self) -> None:
+        # A worker can load the app, say it is ready, and still never begin
+        # the job. Nothing noticed, and the export waited on it for good.
+        outcome = self.run_app(workers=2, mode="export-stuck-worker", hook=STUCK_WORKER, wait=60)
+        self.assertEqual(outcome["statuses"], ["SUCCESS", "SUCCESS"])
+        self.assertEqual(outcome["available"], 60)
 
     def test_a_worker_that_dies_is_finished_in_process(self) -> None:
         outcome = self.run_app(workers=2, mode="kill")
