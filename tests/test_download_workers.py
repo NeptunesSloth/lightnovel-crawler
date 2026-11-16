@@ -160,6 +160,45 @@ class DownloadWorkerTests(unittest.TestCase):
         self.assertEqual(outcome["available"], 60)
 
 
+class BeginTimeoutTests(unittest.TestCase):
+    def run_on(self, active: int) -> tuple:
+        from threading import Event, Timer
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from lncrawl.services.scheduler import workers
+
+        done = Event()
+        Timer(1.2, done.set).start()  # the worker gets to it in the end
+        worker = SimpleNamespace(
+            ready=Event(),
+            began={1: Event()},  # never says it began this one
+            started_at=0.0,
+            active=active,
+            submit=lambda request_id, job_ids, concurrency: (done, [None]),
+            cancel=MagicMock(),
+            abandon=MagicMock(),
+        )
+        worker.ready.set()
+        pool = workers.DownloadWorkers()
+        pool._ids = iter([1])
+        with patch.object(workers, "BEGIN_SECONDS", 0.3):
+            finished = pool._run_on(worker, "site", ["job"], 1, Event())
+        return finished, worker.abandon.called
+
+    def test_a_worker_that_never_begins_its_only_work_is_given_up(self) -> None:
+        finished, abandoned = self.run_on(active=1)
+        self.assertTrue(abandoned)
+        self.assertFalse(finished)
+
+    def test_a_worker_busy_with_other_work_is_not_given_up(self) -> None:
+        # It already runs this site's export; giving up on it for a batch that
+        # waits its turn there would kill that export as well.
+        finished, abandoned = self.run_on(active=2)
+        self.assertFalse(abandoned)
+        self.assertTrue(finished)
+
+
 class ConsoleWindowTests(unittest.TestCase):
     def test_a_worker_starts_without_a_console_window_of_its_own_on_windows(self) -> None:
         # The desktop app frees its console, so each worker opened an empty

@@ -295,7 +295,11 @@ class DownloadWorkers:
                     return signal.is_set()
                 given_at = monotonic()  # its time to begin counts from when it is up
             elif began is not None and not began.is_set():
-                if monotonic() - given_at > BEGIN_SECONDS:
+                if worker.active > 1:
+                    # Busy with other work (a site's export, say), which giving up
+                    # on it would kill too: its time to begin starts after that.
+                    given_at = monotonic()
+                elif monotonic() - given_at > BEGIN_SECONDS:
                     logger.warning(
                         f"Download worker for {site} started but did not begin its work in "
                         f"{BEGIN_SECONDS:g}s; downloading in the app instead"
@@ -494,14 +498,15 @@ def _run_jobs(
     from ...exceptions import AbortedException
     from .handlers import run_job, run_jobs_concurrently
 
+    # The handlers are imported, which is where the packaged app's workers hung:
+    # from here on it is working. The main process gives up on one that never
+    # gets this far. (Reading a big batch's jobs below can take a while.)
+    began()
     jobs = []
     for job_id in job_ids:
         job = ctx.jobs.get(job_id)
         if not job.is_done:  # e.g. cancelled on its own since it was handed over
             jobs.append((job, signal))
-    # The handlers are imported and the jobs read: from here on it is working.
-    # The main process gives up on a worker that never gets this far.
-    began()
     try:
         if len(jobs) == 1:
             # one job (an export): run as is, without the batch's stall guard,
