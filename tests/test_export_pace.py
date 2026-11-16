@@ -248,6 +248,16 @@ class BrowserGuardTests(unittest.TestCase):
             self.assertIn("Python 3.10", str(caught.exception))
             webdriver.warmup_nodriver()  # a no-op, not an import crash
 
+    def test_the_browser_component_can_be_imported(self) -> None:
+        # nodriver 0.50.3 to 0.50.5 shipped cdp/network.py with a byte that is
+        # not UTF-8, so Python refused to import it at all: every source that
+        # opens pages in a browser, and every bot check, failed in the app.
+        from lncrawl import webdriver
+
+        if not webdriver.BROWSER_PAGES_SUPPORTED:
+            self.skipTest("nodriver needs Python 3.10 or newer")
+        webdriver._force_import_cdp()
+
 
 if __name__ == "__main__":
     unittest.main()
