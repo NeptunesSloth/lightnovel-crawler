@@ -80,6 +80,111 @@ class SitePacerTests(unittest.TestCase):
         pacer.learn("other", 30.0)
         self.assertEqual(pacer.interval_for("other"), 5.0)
 
+    def test_the_pace_is_worked_out_from_what_the_site_let_through(self) -> None:
+        # NovelFire: 10 requests pass, the 11th gets "429, Retry-After: 10". That
+        # says ten per ten seconds, so one refusal is enough to find the pace;
+        # doubling up from a twentieth of a second took five, 10s blocked each.
+        clock = Clock()
+        pacer = SitePacer(pacing_for(0), clock=clock)
+        for _ in range(10):
+            clock.now += 0.2
+            pacer.eased("site")
+        gap = pacer.throttled("site", retry_after=10)
+        self.assertGreater(gap, 1.0)  # under ten per ten seconds
+        self.assertLess(gap, 1.3)  # and not much under
+
+    def test_easing_stops_just_short_of_the_pace_that_was_refused(self) -> None:
+        clock = Clock()
+        pacer = SitePacer(pacing_for(0), clock=clock)
+
+        def succeed(count: int) -> None:
+            for _ in range(count):
+                clock.now += max(pacer.interval_for("site"), 0.2)
+                pacer.eased("site")
+
+        succeed(10)
+        pacer.throttled("site", retry_after=10)  # ten in ten seconds was the limit
+        clock.now += 10
+        succeed(400)
+        settled = pacer.interval_for("site")
+        self.assertGreater(settled, 1.0)  # never back to the pace that was refused
+        self.assertLess(settled, 1.1)  # but right up close to it
+        # and it is only remembered for a while, in case the site's limit eased
+        clock.now += scraping.TOO_FAST_TTL + 1
+        succeed(400)
+        self.assertLess(pacer.interval_for("site"), 1.0)
+
+    def test_a_refusal_while_pacing_unevenly_does_not_blame_that_pace(self) -> None:
+        # A gap remembered from last run is kept the library's uneven way until
+        # the site shows it counts. Uneven gaps trip a counter at a slower
+        # average, so that average says nothing about what an even pace may be.
+        clock = Clock()
+        pacer = SitePacer(pacing_for(0), clock=clock)
+        pacer.learn("site", 1.5)
+        for _ in range(9):
+            clock.now += 1.0  # a burst of short gaps: ten land inside ten seconds
+            pacer.eased("site")
+        clock.now += 0.5
+        pacer.eased("site")
+        pacer.throttled("site", retry_after=10)
+        clock.now += 10
+        for _ in range(400):
+            clock.now += pacer.interval_for("site")
+            pacer.eased("site")
+        self.assertLess(pacer.interval_for("site"), 1.1)  # not held at 1.5
+
+    def test_refused_again_straight_away_backs_off_harder(self) -> None:
+        # a site whose window is longer than its Retry-After: what passed in the
+        # last few seconds says little, so a quick second refusal doubles
+        clock = Clock()
+        pacer = SitePacer(pacing_for(0), clock=clock)
+        for _ in range(10):
+            clock.now += 0.1
+            pacer.eased("site")
+        first = pacer.throttled("site", retry_after=5)
+        clock.now += 5
+        for _ in range(8):
+            clock.now += first
+            pacer.eased("site")
+        self.assertAlmostEqual(pacer.throttled("site", retry_after=5), first * 2, places=3)
+
+    def test_nothing_is_sent_while_the_site_says_wait(self) -> None:
+        pacer = SitePacer(pacing_for(0))
+        pacer.throttled("site", retry_after=0.4)
+        started = time.monotonic()
+        pacer.wait("site")
+        self.assertGreaterEqual(time.monotonic() - started, 0.35)
+        started = time.monotonic()
+        pacer.wait("other")  # another site is not held up by it
+        self.assertLess(time.monotonic() - started, 0.3)
+
+    def test_threads_take_turns_so_the_pace_holds_however_many_wait(self) -> None:
+        # The library's pacer let each waiting thread time itself from the last
+        # request sent, so two went out per gap: twice the pace, and a refusal.
+        pacer = SitePacer(PacingPolicy(interval=0.03, floor=0.01))
+        pacer.throttled("site", retry_after=0.01)  # a site that counts: paced evenly
+        time.sleep(0.05)
+        sent: List[float] = []
+        lock = threading.Lock()
+
+        def worker() -> None:
+            for _ in range(5):
+                pacer.wait("site")
+                with lock:
+                    sent.append(time.monotonic())
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        started = time.monotonic()
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        gap = pacer.interval_for("site")
+        sent.sort()
+        closest = min(b - a for a, b in zip(sent, sent[1:]))
+        self.assertGreater(closest, gap * 0.6)
+        self.assertGreater(time.monotonic() - started, 39 * gap * 0.85)
+
 
 class _WindowedSite(BaseHTTPRequestHandler):
     """Allows LIMIT requests per WINDOW seconds; the rest get 429 + Retry-After."""
@@ -90,6 +195,7 @@ class _WindowedSite(BaseHTTPRequestHandler):
     window_start = 0.0
     used = 0
     served: List[float] = []
+    refused = 0
 
     def do_GET(self) -> None:
         cls = type(self)
@@ -101,6 +207,8 @@ class _WindowedSite(BaseHTTPRequestHandler):
             if allowed:
                 cls.used += 1
                 cls.served.append(now)
+            else:
+                cls.refused += 1
             wait = max(1, math.ceil(cls.window_start + cls.WINDOW - now))
         if not allowed:
             self.send_response(429)
@@ -123,6 +231,7 @@ class WindowedSiteTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
         _WindowedSite.served = []
+        _WindowedSite.refused = 0
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _WindowedSite)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.shutdown)
@@ -130,23 +239,29 @@ class WindowedSiteTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.origin = f"http://127.0.0.1:{self.server.server_port}/"
 
-    def test_a_windowed_limit_is_followed_instead_of_slept_through(self) -> None:
+    def scraper(self, origin: str) -> Scraper:
         config = ScraperConfig(
             pacing=pacing_for(0),
             data_dir=Path(self.directory.name),
             raise_for_status=False,
         )
-        state = site_state(config, Memory(config.memory_path))
-        scraper = Scraper(origin=self.origin, config=config, state=state)
+        scraper = Scraper(
+            origin=origin, config=config, state=site_state(config, Memory(config.memory_path))
+        )
         self.addCleanup(scraper.close)
-        for page in range(18):
+        return scraper
+
+    def test_a_windowed_limit_is_found_and_followed(self) -> None:
+        scraper = self.scraper(self.origin)
+        for page in range(40):
             response = scraper.fetch("GET", f"{self.origin}chapter-{page}")
             self.assertEqual(response.status_code, 200)
-        # The site takes 6 every 2 seconds. Taking Retry-After (up to 2s) as the
-        # gap leaves it near one request every 2s; stepping up from fast settles
-        # within a doubling of the site's 1/3s.
-        interval = state.pacer.interval_for(scraper.memory.key(self.origin))
-        self.assertLess(interval, 1.0)
+        # The site takes 6 every 2 seconds. One refusal says so; the library
+        # took its Retry-After as the gap (one request every 1-2s), and doubling
+        # up from nothing was refused again and again on the way.
+        interval = scraper.pacer.interval_for(scraper.memory.key(self.origin))
+        self.assertLess(interval, 0.8)
+        self.assertLessEqual(_WindowedSite.refused, 3)
 
 
 @contextmanager
