@@ -134,10 +134,11 @@ class BatchHandler(BaseHandler):
 
         if self.job.is_running:
             self.children = ctx.jobs.get_children(self.job.id)
-            for job in self.children:
-                if not job.is_done:
-                    break
-            else:
+            # Picked up again with every child finished: nothing is left to do.
+            # With no children at all it was stopped before it got that far (a
+            # chapter job, before its download). Calling that done marked the
+            # chapter fetched when it never was; run() carries on instead.
+            if self.children and all(job.is_done for job in self.children):
                 return self._set_success()
 
         try:
