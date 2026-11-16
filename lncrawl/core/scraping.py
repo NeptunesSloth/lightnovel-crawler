@@ -152,17 +152,14 @@ MAX_CLOSURE = 3600.0
 # requests through and then says "wait ten seconds" takes ten per ten seconds;
 # 15% under that leaves room for requests not arriving perfectly evenly.
 LIMIT_MARGIN = 1.15
-# The least a refusal widens the gap. A second refusal this soon after the
-# last one means that correction was not enough, and doubles it instead.
+# The least a refusal widens the gap. A refusal before a whole window has
+# passed since the site reopened doubles it instead (see SitePacer.throttled).
 REFUSED_STEP = 1.08
-REPEAT_WINDOW = 60.0
 # Easing stops this far short of a pace that was refused, for this long; after
 # that it may try faster again, in case the limit was relaxed or the refusal
-# was someone else's doing (a browser open on the same site). Measured on
-# weebcentral: 5% short was refused again within the minute, and each repeat
-# doubled the gap, so it sat at half the site's limit; 15% short (the margin
-# kept under a counted limit) held 1.8 requests a second, refused by none.
-TOO_FAST_MARGIN = LIMIT_MARGIN
+# was someone else's doing (a browser open on the same site). 15% short cost
+# NovelFire's mirror 7% for a whole run and still did not stop it refusing.
+TOO_FAST_MARGIN = 1.05
 TOO_FAST_TTL = 600.0
 # Successes per 10% easing step. The library waits for ten, so that probing back
 # down cannot outrun a site's window; here a refused pace is remembered and
@@ -252,7 +249,9 @@ class SitePacer(Pacer):
                 self._block_until[origin] = now + wait
                 self._burst_until[origin] = now + max(wait, REFUSAL_BURST)
                 return current
-            repeat = last is not None and now - last < REPEAT_WINDOW
+            # What got through is the site's count only once a whole window has
+            # passed since it last reopened; before that it is mostly the block.
+            counted = last is None or now - last >= wait
             widened = current * policy.backoff_factor
             refused_gap = current
             if wait:
@@ -263,16 +262,19 @@ class SitePacer(Pacer):
                 passed = sum(1 for at in self._passed.get(origin, ()) if now - at <= wait)
                 # A wait no longer than a block is the rest of a counting window,
                 # which says how many it takes; a longer one is a penalty, which
-                # says nothing about pace, so the gap only steps up.
-                if passed >= 3 and not repeat and named <= MAX_SITE_BLOCK:
+                # says nothing about pace, so the gap only steps up. Sites let a
+                # burst through at first (NovelFire's mirror 16, weebcentral 44,
+                # against 10 and about 25 after), so later refusals correct the
+                # first estimate by their count, not 5% at a time.
+                if passed >= 3 and counted and named <= MAX_SITE_BLOCK:
                     allowed = wait / passed  # what the site let through before refusing
                     widened = max(allowed * LIMIT_MARGIN, current * REFUSED_STEP)
                     # Uneven gaps trip a counter at a slower average than even
                     # ones would, so only an evenly kept pace is itself to blame.
                     refused_gap = max(current, allowed) if was_even else allowed
-                # Refused again soon after a block: the correction was not enough,
-                # and what got through since says little (most of that time was
-                # the block itself), so the gap doubles.
+                # Refused again before a whole window since the block: the
+                # correction was not enough, and what got through since says
+                # little (most of that time was the block itself), so it doubles.
             widened = min(max(widened, policy.floor, policy.interval), policy.max_interval)
             self._interval[origin] = widened
             self._too_fast[origin] = (min(refused_gap, policy.max_interval), now)

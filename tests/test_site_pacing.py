@@ -106,10 +106,7 @@ class SitePacerTests(unittest.TestCase):
         self.assertGreater(gap, 1.0)  # under ten per ten seconds
         self.assertLess(gap, 1.3)  # and not much under
 
-    def test_easing_stops_a_safe_margin_short_of_the_pace_that_was_refused(self) -> None:
-        # Live on weebcentral, easing back to 5% under a refused pace was refused
-        # again within the minute, and each repeat doubled the gap: it sat at
-        # half the site's limit. Stopping 15% under held the limit for minutes.
+    def test_easing_stops_just_short_of_the_pace_that_was_refused(self) -> None:
         clock = Clock()
         pacer = SitePacer(pacing_for(0), clock=clock)
 
@@ -123,8 +120,8 @@ class SitePacerTests(unittest.TestCase):
         clock.now += 10
         succeed(400)
         settled = pacer.interval_for("site")
-        self.assertGreater(settled, 1.1)  # well clear of the pace that was refused
-        self.assertLess(settled, 1.2)  # but not further than that
+        self.assertGreater(settled, 1.0)  # never back to the pace that was refused
+        self.assertLess(settled, 1.1)  # but right up close to it
         # and it is only remembered for a while, in case the site's limit eased
         clock.now += scraping.TOO_FAST_TTL + 1
         succeed(400)
@@ -147,8 +144,7 @@ class SitePacerTests(unittest.TestCase):
         for _ in range(400):
             clock.now += pacer.interval_for("site")
             pacer.eased("site")
-        # 15% under the ten in ten seconds it counted, not held 15% under 1.5
-        self.assertLess(pacer.interval_for("site"), 1.2)
+        self.assertLess(pacer.interval_for("site"), 1.1)  # not held at 1.5
 
     def test_refused_again_straight_away_backs_off_harder(self) -> None:
         # a site whose window is longer than its Retry-After: what passed in the
@@ -163,7 +159,34 @@ class SitePacerTests(unittest.TestCase):
         for _ in range(8):
             clock.now += first
             pacer.eased("site")
-        self.assertAlmostEqual(pacer.throttled("site", retry_after=5), first * 2, places=3)
+        before = pacer.interval_for("site")
+        self.assertAlmostEqual(pacer.throttled("site", retry_after=5), before * 2, places=3)
+
+    def test_refused_again_a_full_window_after_reopening_goes_by_the_count(self) -> None:
+        # NovelFire's mirror let 16 through at first, then held to 10 in 10
+        # seconds. Each later refusal came a full window after it reopened, so
+        # what got through was the site's real count, but it was ignored for a
+        # minute after the last refusal and the pace crept up 5% a refusal:
+        # eight refusals, each blocking every download for ten seconds.
+        clock = Clock()
+        pacer = SitePacer(pacing_for(0), clock=clock)
+        for _ in range(16):  # the burst it let through at the start
+            clock.now += 0.2
+            pacer.eased("site")
+        pacer.throttled("site", retry_after=10)
+        clock.now += 10
+        for _ in range(20):  # twenty seconds at the ten in ten it really allows
+            clock.now += 1.0
+            pacer.eased("site")
+        clock.now += 0.5  # the eleventh in its window
+        pacer.throttled("site", retry_after=10)
+        clock.now += 10
+        for _ in range(400):
+            clock.now += pacer.interval_for("site")
+            pacer.eased("site")
+        settled = pacer.interval_for("site")
+        self.assertGreater(settled, 1.0)  # under the ten in ten seconds it counted
+        self.assertLess(settled, 1.1)
 
     def test_a_long_wait_holds_the_site_only_for_a_while(self) -> None:
         # A site saying "come back in 4 minutes" held every request to it for
@@ -222,7 +245,8 @@ class SitePacerTests(unittest.TestCase):
         for _ in range(3):
             clock.now += first
             pacer.eased("site")
-        self.assertAlmostEqual(pacer.throttled("site", retry_after=10), first * 2, places=3)
+        before = pacer.interval_for("site")
+        self.assertAlmostEqual(pacer.throttled("site", retry_after=10), before * 2, places=3)
 
     def test_easing_never_goes_past_the_longest_gap(self) -> None:
         clock = Clock()
