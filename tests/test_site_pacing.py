@@ -19,6 +19,7 @@ import time
 from types import SimpleNamespace
 from typing import Iterator, List
 import unittest
+import unittest.mock
 
 from scraper import PacingPolicy, Scraper, ScraperConfig
 from scraper.memory import Memory
@@ -147,6 +148,90 @@ class SitePacerTests(unittest.TestCase):
             clock.now += first
             pacer.eased("site")
         self.assertAlmostEqual(pacer.throttled("site", retry_after=5), first * 2, places=3)
+
+    def test_a_long_wait_holds_the_site_only_for_a_while(self) -> None:
+        # A site saying "come back in 4 minutes" held every request to it for
+        # the whole 4 minutes. Nothing completed for two, and the export's
+        # watchdog stopped a run that finished fine before the pacer held it.
+        pacer = SitePacer(pacing_for(0))
+        with unittest.mock.patch.object(scraping, "MAX_SITE_BLOCK", 0.3):
+            pacer.throttled("site", retry_after=240)
+            started = time.monotonic()
+            pacer.wait("site")
+        self.assertGreaterEqual(time.monotonic() - started, 0.25)
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_refusals_during_a_long_closure_do_not_slow_the_site_further(self) -> None:
+        # A site closed for 4 minutes is held for one minute at a time, and
+        # the requests sent after each minute are refused again. Read as new
+        # refusals, each doubled the gap: by the time the site reopened it was
+        # sent one request a minute. They are the closure it already named.
+        clock = Clock()
+        pacer = SitePacer(pacing_for(0), clock=clock)
+        for _ in range(10):
+            clock.now += 0.2
+            pacer.eased("site")
+        first = pacer.throttled("site", retry_after=240)
+        self.assertLess(first, 1.0)  # a penalty, not a window: no 24s-per-request estimate
+        for left in (180, 120, 60):
+            clock.now += scraping.MAX_SITE_BLOCK
+            self.assertEqual(pacer.throttled("site", retry_after=left), first)
+        clock.now += 61  # the site has reopened: a refusal now is a new one
+        self.assertGreater(pacer.throttled("site", retry_after=10), first)
+
+    def test_a_wait_that_is_not_a_number_of_seconds_holds_nothing(self) -> None:
+        # "Retry-After: inf" held the site for the life of the process.
+        for nonsense in (float("inf"), float("nan"), -5.0):
+            with self.subTest(retry_after=nonsense):
+                pacer = SitePacer(pacing_for(0))
+                pacer.throttled("site", retry_after=nonsense)
+                stop = threading.Event()
+                waiter = threading.Thread(target=pacer.wait, args=("site", stop), daemon=True)
+                waiter.start()
+                waiter.join(1.0)
+                held = waiter.is_alive()
+                stop.set()  # let a held one go, so a failure does not hang the run
+                self.assertFalse(held)
+
+    def test_refused_again_right_after_a_block_doubles_the_gap(self) -> None:
+        # The estimate divides the site's wait by what got through, which right
+        # after a block is only the few sent since: 3 in 10s read as a 3.8s gap.
+        clock = Clock()
+        pacer = SitePacer(pacing_for(0), clock=clock)
+        for _ in range(10):
+            clock.now += 0.2
+            pacer.eased("site")
+        first = pacer.throttled("site", retry_after=10)
+        clock.now += 10
+        for _ in range(3):
+            clock.now += first
+            pacer.eased("site")
+        self.assertAlmostEqual(pacer.throttled("site", retry_after=10), first * 2, places=3)
+
+    def test_easing_never_goes_past_the_longest_gap(self) -> None:
+        clock = Clock()
+        pacer = SitePacer(PacingPolicy(interval=0.0, floor=0.05, max_interval=120.0), clock=clock)
+        pacer.learn("site", 1.0)
+        for _ in range(12):
+            pacer.throttled("site")  # refused again and again: up to the longest gap
+            clock.now += 61
+        for _ in range(10):  # ten successes, while the refusal is remembered
+            clock.now += 1
+            pacer.eased("site")
+        self.assertLessEqual(pacer.interval_for("site"), 120.0)
+
+    def test_a_turn_given_up_is_given_back(self) -> None:
+        # A request cancelled while waiting kept its turn, so the next one
+        # waited for it as well.
+        pacer = SitePacer(PacingPolicy(interval=0.5, floor=0.5, ceiling=0.5, pause_chance=0))
+        pacer.wait("site")  # the first goes at once
+        cancel = threading.Event()
+        threading.Timer(0.1, cancel.set).start()
+        with self.assertRaises(Exception):
+            pacer.wait("site", cancel)  # would go at +0.5, cancelled at +0.1
+        started = time.monotonic()
+        pacer.wait("site")  # takes the +0.5 turn back, not +1.0
+        self.assertLess(time.monotonic() - started, 0.6)
 
     def test_nothing_is_sent_while_the_site_says_wait(self) -> None:
         pacer = SitePacer(pacing_for(0))
@@ -312,7 +397,7 @@ class ImageConnectionTests(unittest.TestCase):
         scraper = Scraper(
             origin=origin, config=config, state=site_state(config, Memory(config.memory_path))
         )
-        scraping._pause_budget_while_paced(scraper)
+        scraping._install_pacing(scraper)
         self.addCleanup(scraper.close)
         scraper.fetch("GET", f"{origin}page/first")  # the visit to the site itself
 
@@ -380,7 +465,7 @@ class BudgetPauseTests(unittest.TestCase):
 
     def test_waiting_at_the_scrapers_connection_gate_does_not_use_up_the_limit(self) -> None:
         fake = SimpleNamespace(_paced=lambda key, abort: _slow_gate(0.2))
-        scraping._pause_budget_while_paced(fake)
+        scraping._install_pacing(fake)
         with request_budget(threading.Event(), 0.1) as budget:
             with fake._paced("site", None):
                 budget.remaining()
