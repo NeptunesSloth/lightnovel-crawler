@@ -159,6 +159,11 @@ class ExportSourceRequest(BaseModel):
         "a search only returns one page of results, so turning this off limits an export to "
         "the few dozen novels the seed searches return",
     )
+    complete_only: bool = Field(
+        default=False,
+        description="Only put novels with every chapter downloaded in the zip; partly "
+        "downloaded ones stay in the library and out of the zip",
+    )
     save_dir: Optional[str] = Field(
         default=None,
         max_length=1024,

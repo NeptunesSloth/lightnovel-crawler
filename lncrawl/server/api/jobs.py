@@ -421,6 +421,7 @@ def export_source(
         user,
         str(body.url),
         save_dir=save_dir,
+        complete_only=body.complete_only,
         format=body.format,
         limit=body.limit,
         retries=body.retries,

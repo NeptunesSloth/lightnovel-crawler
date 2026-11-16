@@ -149,7 +149,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <input id="exp-untildone" type="checkbox" checked />
       <label for="exp-untildone" style="margin:0">Keep going until everything is downloaded (recommended — safe to leave for days)</label>
     </div>
-    <div class="row hidden" id="exp-zip-opts">
+    <div class="hidden" id="exp-zip-opts">
+    <div class="row">
       <div style="flex:2">
         <label for="exp-format">E-book format</label>
         <select id="exp-format">
@@ -165,6 +166,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <label for="exp-savedir">Save the ZIP to folder</label>
         <input id="exp-savedir" type="text" placeholder="blank = Desktop, e.g. D:\\Novels" />
       </div>
+    </div>
+    <div class="row checkbox">
+      <input id="exp-completeonly" type="checkbox" />
+      <label for="exp-completeonly" style="margin:0">Only fully downloaded novels in the ZIP (partly downloaded ones stay in the library)</label>
+    </div>
     </div>
     <details>
       <summary>Advanced options — you don't need these</summary>
@@ -836,6 +842,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           var parts = [(extra.complete != null ? extra.complete : extra.exported || 0) + " complete"];
           if (extra.incomplete) parts.push(extra.incomplete + " partial");
           if (extra.skipped) parts.push(extra.skipped + " skipped (already had)");
+          if (extra.left_out) parts.push(extra.left_out + " partly downloaded left out of the ZIP (in your library)");
           if (extra.failed) parts.push(extra.failed + " failed");
           log((extra.library_only ? "Done — in your library: " : "Export done: ") + parts.join(", ") +
             " of " + (extra.total_novels || 0) + "." + (extra.library_only ? " Open the Reader to read them." : ""),
@@ -974,6 +981,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     // a roomier drive: the ZIP is written there only, not also to the Desktop
     var saveDir = document.getElementById("exp-savedir").value.trim();
     if (saveDir && !body.library_only) body.save_dir = saveDir;
+    if (!body.library_only && document.getElementById("exp-completeonly").checked) body.complete_only = true;
     return body;
   }
 

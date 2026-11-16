@@ -52,9 +52,10 @@ class HttpCrawlTests(unittest.TestCase):
         self.counts = Counter()
         self.slow = set()
         self.notices = set()
+        self.empty = set()  # always answered without the story, so never downloaded
         self.fail_once = set()
         self.js_redirected = set()
-        counts, slow, notices = self.counts, self.slow, self.notices
+        counts, slow, notices, empty = self.counts, self.slow, self.notices, self.empty
         fail_once, js_redirected = self.fail_once, self.js_redirected
         cover = BytesIO()
         Image.new("RGB", (2, 2), "blue").save(cover, format="JPEG")
@@ -95,7 +96,7 @@ class HttpCrawlTests(unittest.TestCase):
                     f"<h2>Chapter {serial}: A title</h2><p>Real story text for chapter {serial}.</p>"
                     "</div></div></body></html>"
                 ).encode()
-                if self.path in notices and counts[self.path] == 1:
+                if self.path in empty or (self.path in notices and counts[self.path] == 1):
                     from lncrawl.utils.chapter_content import NOVELFIRE_LOGIN_NOTICE
 
                     body = f'<div id="content"><p>{NOVELFIRE_LOGIN_NOTICE}</p></div>'.encode()
@@ -257,6 +258,26 @@ class HttpCrawlTests(unittest.TestCase):
             self.assertTrue(any(name.endswith(".epub") for name in bundle.namelist()))
         # no second copy in the data folder
         self.assertFalse(self.ctx.files.resolve(f"exports/{job.id}.zip").exists())
+
+    def test_complete_only_keeps_a_fully_downloaded_novel_in_the_zip(self) -> None:
+        job = self.export(complete_only=True)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["complete"], 1)
+        self.assertEqual(job.extra.get("left_out"), 0)
+        with ZipFile(self.ctx.files.resolve(job.extra["export_file"])) as bundle:
+            self.assertTrue(any(name.endswith(".epub") for name in bundle.namelist()))
+
+    def test_complete_only_leaves_a_partly_downloaded_novel_out_of_the_zip(self) -> None:
+        self.empty.add("/chapter-4")  # one chapter never comes
+        partial = self.export()
+        self.assertEqual(partial.status, JobStatus.SUCCESS, partial.error)
+        self.assertEqual(partial.extra["incomplete"], 1)  # by default it goes in, marked partial
+        job = self.export(complete_only=True)
+        self.assertNotIn("export_file", job.extra)  # nothing fully downloaded: no zip
+        self.assertEqual(job.extra["left_out"], 1)
+        self.assertIn("fully downloaded", job.error or "")
+        # still downloaded as far as it goes, in the library
+        self.assertEqual(self.ctx.chapters.completeness("novel").downloaded, 3)
 
     def test_a_folder_that_cannot_be_written_stops_the_export_before_any_download(self) -> None:
         not_a_folder = self.root / "file.txt"

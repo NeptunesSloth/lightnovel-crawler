@@ -680,6 +680,9 @@ class ExportSourceHandler(BaseHandler):
         use_sitemap = bool(self.job.extra.get("use_sitemap", True))
         auto_tune = bool(self.job.extra.get("auto_tune", True))
         update_only = bool(self.job.extra.get("update_only", False))
+        # only novels with every chapter downloaded go in the zip; the rest stay
+        # in the library as far as they got
+        complete_only = bool(self.job.extra.get("complete_only", False))
         # A folder the zip goes to instead of the data folder and the Desktop.
         # Checked before anything downloads: a run can take days, and a drive
         # unplugged since the job was made should say so now, not at the end.
@@ -1227,8 +1230,13 @@ class ExportSourceHandler(BaseHandler):
             # novel we stopped retrying early — because it stopped improving — is
             # still included as an incomplete book rather than silently dropped.
             files: List[Path] = list(complete.values())
+            left_out = 0  # partly downloaded, kept out of the zip (complete_only)
             for novel_url, partial_file in partial.items():
-                if novel_url not in complete:
+                if novel_url in complete:
+                    continue
+                if complete_only:
+                    left_out += 1
+                else:
                     files.append(partial_file)
             # a novel is "failed" only if it produced no book at all (no partial)
             failed = sum(1 for u in pending if u not in partial)
@@ -1275,11 +1283,20 @@ class ExportSourceHandler(BaseHandler):
                 self._set_extra(
                     exported=0,
                     incomplete=0,
+                    left_out=left_out,
                     failed=failed,
                     skipped=len(skipped),
                     total_novels=total,
                     fail_reasons=fail_reasons,
                 )
+                if left_out:
+                    message = (
+                        f"None of the {total} novel(s) is fully downloaded yet, so there is "
+                        f"nothing to put in the zip; {left_out} partly downloaded are in your "
+                        "library. Run it again to fill in the missing chapters."
+                    )
+                    self._notify_finish(f"{domain}: {message}")
+                    raise HandlerException(message)
                 # if everything was a known duplicate, that's a success, not an error
                 if skipped and not failed:
                     self._notify_finish(
@@ -1358,6 +1375,7 @@ class ExportSourceHandler(BaseHandler):
                 failed=failed,
                 skipped=len(skipped),
                 zip_skipped=zip_skipped,
+                left_out=left_out,
                 total_novels=total,
                 fail_reasons=fail_reasons,
             )
@@ -1370,6 +1388,8 @@ class ExportSourceHandler(BaseHandler):
             )
             if zip_skipped:
                 summary += f" {zip_skipped} could not be added to the zip."
+            if left_out:
+                summary += f" {left_out} partly downloaded left out (they are in your library)."
             if saved_to and save_to is not None:
                 summary += f" Saved to {saved_to}."
             elif saved_to:
