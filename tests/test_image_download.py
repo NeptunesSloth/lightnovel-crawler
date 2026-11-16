@@ -45,8 +45,9 @@ class ImageDownloadTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.download(data[: len(data) // 2])
 
-    def test_an_image_is_fetched_as_an_image(self) -> None:
-        # so the scraper can give it one of the extra image connections
+    def test_only_an_image_on_another_host_gets_the_image_connections(self) -> None:
+        # The site's own host keeps the two connections every request to it
+        # gets; an image host of its own gets a few more.
         from lncrawl.core import scraping
 
         seen = []
@@ -55,9 +56,17 @@ class ImageDownloadTests(unittest.TestCase):
             seen.append(scraping.is_image_fetch())
             return SimpleNamespace(content=encode("RGB", "JPEG"))
 
-        crawler = SimpleNamespace(scraper=SimpleNamespace(fetch=fetch))
-        Crawler._image_bytes(crawler, "https://example.com/a")
-        self.assertEqual(seen, [True])
+        crawler = SimpleNamespace(
+            scraper=SimpleNamespace(fetch=fetch),
+            base_url=["https://www.example.com/", "https://example.org/"],
+        )
+        for url in (
+            "https://images.example.net/a.jpg",  # an image host
+            "https://example.com/a.jpg",  # the site
+            "https://cdn.example.org/a.jpg",  # the site's own subdomain
+        ):
+            Crawler._image_bytes(crawler, url)
+        self.assertEqual(seen, [True, False, False])
         self.assertFalse(scraping.is_image_fetch())
 
     def test_a_data_url(self) -> None:

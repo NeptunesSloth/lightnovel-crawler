@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 from typing_extensions import NotRequired
 
 from ....context import ctx
+from ....core.crawler import is_own_host
 from ....enums import JobStatus, JobType, OutputFormat
 from ....utils.file_tools import atomic_write, safe_filename, writable_folder
 from ....utils.keep_awake import keep_awake
@@ -1510,9 +1511,23 @@ def _download_novel(
                 last_emit[0] = monotonic()
                 on_images(done + i_cached, i_total)
 
-        send_image = (
-            crawler.taskman.submit_unpaced if images_unpaced else crawler.taskman.submit_task
-        )
+        # Only images on an image host of their own skip the site's rate; those
+        # on the site's own host take their turn like its pages, and only those
+        # tell the rate how the site is doing.
+        own: Set[str] = set(pending_images)
+        if images_unpaced:
+            own = set()
+            for offset in range(0, len(pending_images), 500):
+                for image in ctx.images.get_many(pending_images[offset : offset + 500]):
+                    if is_own_host(crawler, image.url):
+                        own.add(image.id)
+
+        def send_image(fn, *args, **kwargs):
+            image_id = args[1]
+            if image_id in own:
+                return crawler.taskman.submit_task(fn, *args, **kwargs)
+            return crawler.taskman.submit_unpaced(fn, *args, **kwargs)
+
         try:
             for outcome in crawl_items(
                 pending_images,
@@ -1528,7 +1543,7 @@ def _download_novel(
                 idle_timeout=STALL_TIMEOUT,
                 on_progress=_image_tick,
             ):
-                if on_result:
+                if on_result and outcome.item_id in own:
                     on_result(outcome.error, count=False)
         except CrawlStalledError as error:
             raise ExportStalledError(str(error)) from error
