@@ -158,9 +158,17 @@ REFUSED_STEP = 1.08
 REPEAT_WINDOW = 60.0
 # Easing stops this far short of a pace that was refused, for this long; after
 # that it may try faster again, in case the limit was relaxed or the refusal
-# was someone else's doing (a browser open on the same site).
-TOO_FAST_MARGIN = 1.05
+# was someone else's doing (a browser open on the same site). Measured on
+# weebcentral: 5% short was refused again within the minute, and each repeat
+# doubled the gap, so it sat at half the site's limit; 15% short (the margin
+# kept under a counted limit) held 1.8 requests a second, refused by none.
+TOO_FAST_MARGIN = LIMIT_MARGIN
 TOO_FAST_TTL = 600.0
+# Successes per 10% easing step. The library waits for ten, so that probing back
+# down cannot outrun a site's window; here a refused pace is remembered and
+# easing stops short of it (above), so that wait only slows the climb: from a
+# gap remembered from the last run it took five minutes to reach the limit.
+RECOVER_AFTER = 3
 # How uneven the gaps to a counting site are: enough not to tick like a clock,
 # little enough that its window never holds one request more than planned.
 EVEN_JITTER = 0.1
@@ -438,12 +446,14 @@ def pacing_for(requests_per_sec: float) -> PacingPolicy:
     what someone who picked a rate asked for.
     """
     if requests_per_sec <= 0:
-        return PacingPolicy(interval=0.0, floor=PACING_FLOOR)
+        return PacingPolicy(interval=0.0, floor=PACING_FLOOR, recover_after=RECOVER_AFTER)
     interval = 1.0 / requests_per_sec
     # The floor clamps the short tail of the gap distribution. Left at its
     # default it becomes the real limit for any rate above about 3/s, so it has
     # to scale with the interval it is a floor for.
-    return PacingPolicy(interval=interval, floor=min(0.35, interval / 4))
+    return PacingPolicy(
+        interval=interval, floor=min(0.35, interval / 4), recover_after=RECOVER_AFTER
+    )
 
 
 def _parse_exit(entry: str) -> Optional[ExitSpec]:

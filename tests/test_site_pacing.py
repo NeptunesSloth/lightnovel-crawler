@@ -74,6 +74,18 @@ class SitePacerTests(unittest.TestCase):
         pacer.learn("site", 10.0)
         self.assertEqual(pacer.interval_for("site"), CARRY_OVER_MAX)
 
+    def test_a_remembered_slowdown_is_shed_within_a_few_dozen_successes(self) -> None:
+        # A run starts at the gap the last one ended on, up to CARRY_OVER_MAX.
+        # Ten successes per 10% step took five minutes to climb back to a
+        # site's limit; nothing refused means nothing to hold it back for.
+        clock = Clock()
+        pacer = SitePacer(pacing_for(0), clock=clock)
+        pacer.learn("site", CARRY_OVER_MAX)
+        for _ in range(45):
+            clock.now += pacer.interval_for("site")
+            pacer.eased("site")
+        self.assertLess(pacer.interval_for("site"), 0.5)
+
     def test_never_faster_than_the_rate_asked_for(self) -> None:
         pacer = SitePacer(pacing_for(0.2))  # one request per 5s
         pacer.learn("site", 0.5)
@@ -94,7 +106,10 @@ class SitePacerTests(unittest.TestCase):
         self.assertGreater(gap, 1.0)  # under ten per ten seconds
         self.assertLess(gap, 1.3)  # and not much under
 
-    def test_easing_stops_just_short_of_the_pace_that_was_refused(self) -> None:
+    def test_easing_stops_a_safe_margin_short_of_the_pace_that_was_refused(self) -> None:
+        # Live on weebcentral, easing back to 5% under a refused pace was refused
+        # again within the minute, and each repeat doubled the gap: it sat at
+        # half the site's limit. Stopping 15% under held the limit for minutes.
         clock = Clock()
         pacer = SitePacer(pacing_for(0), clock=clock)
 
@@ -108,8 +123,8 @@ class SitePacerTests(unittest.TestCase):
         clock.now += 10
         succeed(400)
         settled = pacer.interval_for("site")
-        self.assertGreater(settled, 1.0)  # never back to the pace that was refused
-        self.assertLess(settled, 1.1)  # but right up close to it
+        self.assertGreater(settled, 1.1)  # well clear of the pace that was refused
+        self.assertLess(settled, 1.2)  # but not further than that
         # and it is only remembered for a while, in case the site's limit eased
         clock.now += scraping.TOO_FAST_TTL + 1
         succeed(400)
@@ -132,7 +147,8 @@ class SitePacerTests(unittest.TestCase):
         for _ in range(400):
             clock.now += pacer.interval_for("site")
             pacer.eased("site")
-        self.assertLess(pacer.interval_for("site"), 1.1)  # not held at 1.5
+        # 15% under the ten in ten seconds it counted, not held 15% under 1.5
+        self.assertLess(pacer.interval_for("site"), 1.2)
 
     def test_refused_again_straight_away_backs_off_harder(self) -> None:
         # a site whose window is longer than its Retry-After: what passed in the
