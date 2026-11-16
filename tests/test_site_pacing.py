@@ -264,6 +264,76 @@ class WindowedSiteTests(unittest.TestCase):
         self.assertLessEqual(_WindowedSite.refused, 3)
 
 
+class _SlowSite(BaseHTTPRequestHandler):
+    """Takes a moment to answer, and notes how many requests it had at once."""
+
+    lock = threading.Lock()
+    now = {"image": 0, "page": 0}
+    most = {"image": 0, "page": 0}
+
+    def do_GET(self) -> None:
+        cls = type(self)
+        kind = "image" if self.path.startswith("/img") else "page"
+        with cls.lock:
+            cls.now[kind] += 1
+            cls.most[kind] = max(cls.most[kind], cls.now[kind])
+        time.sleep(0.15)
+        with cls.lock:
+            cls.now[kind] -= 1
+        body = b"<html><body><p>" + b"text " * 50 + b"</p></body></html>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args) -> None:
+        pass
+
+
+class ImageConnectionTests(unittest.TestCase):
+    def test_page_images_load_over_more_connections_than_pages(self) -> None:
+        # A manga's page images come from an image host that answered 12 a
+        # second over two connections, 28 over four and 40 over eight, with
+        # nothing refused. The library's two connections per site are right for
+        # a site's pages; images load over a few more, as a browser loads them.
+        os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
+        _SlowSite.now = {"image": 0, "page": 0}
+        _SlowSite.most = {"image": 0, "page": 0}
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _SlowSite)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        origin = f"http://127.0.0.1:{server.server_port}/"
+        config = ScraperConfig(
+            pacing=pacing_for(0), data_dir=Path(directory.name), raise_for_status=False
+        )
+        scraper = Scraper(
+            origin=origin, config=config, state=site_state(config, Memory(config.memory_path))
+        )
+        scraping._pause_budget_while_paced(scraper)
+        self.addCleanup(scraper.close)
+        scraper.fetch("GET", f"{origin}page/first")  # the visit to the site itself
+
+        def fetch(kind: str, number: int) -> None:
+            if kind == "image":
+                with scraping.fetching_image():
+                    scraper.fetch("GET", f"{origin}img/{number}", navigation=False)
+            else:
+                scraper.fetch("GET", f"{origin}page/{number}")
+
+        for kind in ("image", "page"):
+            threads = [threading.Thread(target=fetch, args=(kind, number)) for number in range(12)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(_SlowSite.most["image"], scraping.IMAGE_CONNECTIONS)
+        self.assertGreater(scraping.IMAGE_CONNECTIONS, 2)
+        self.assertLessEqual(_SlowSite.most["page"], 2)
+
+
 @contextmanager
 def _slow_gate(seconds: float) -> Iterator[None]:
     time.sleep(seconds)
@@ -294,6 +364,18 @@ class BudgetPauseTests(unittest.TestCase):
             seen = [future.result(timeout=5) for future in futures]
             # four slots take about 0.75s to come round; none of it was the site's
             budget.remaining()
+        self.assertTrue(all(task_budget is budget for task_budget in seen))
+
+    def test_a_task_can_be_sent_without_waiting_for_the_rate(self) -> None:
+        from lncrawl.core.taskman import TaskManager
+
+        taskman = TaskManager(workers=4, ratelimit=1.0)  # one a second
+        self.addCleanup(taskman.close)
+        with request_budget(threading.Event(), 5) as budget:
+            started = time.monotonic()
+            futures = [taskman.submit_unpaced(current_budget) for _ in range(4)]
+            seen = [future.result(timeout=5) for future in futures]
+        self.assertLess(time.monotonic() - started, 1.0)  # not three seconds of turns
         self.assertTrue(all(task_budget is budget for task_budget in seen))
 
     def test_waiting_at_the_scrapers_connection_gate_does_not_use_up_the_limit(self) -> None:

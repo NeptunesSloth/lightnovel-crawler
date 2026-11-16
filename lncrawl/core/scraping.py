@@ -22,6 +22,7 @@ into a block.
 
 from collections import deque
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict
 import logging
 import threading
@@ -316,6 +317,41 @@ def site_state(config: ScraperConfig, memory: Memory) -> SharedState:
     return state
 
 
+# How many connections page images may use to one host at once. The library
+# allows two per site, which suits a site's pages. Images are static files,
+# usually on an image host of their own: weebcentral's answered 12 a second
+# over two connections, 28 over four and 40 over eight, nothing refused. Four
+# is fewer than the six a browser opens to load the same pages of a chapter.
+IMAGE_CONNECTIONS = 4
+
+_image_fetch: ContextVar[bool] = ContextVar("lncrawl_image_fetch", default=False)
+_image_gates: Dict[str, threading.BoundedSemaphore] = {}
+_image_gates_lock = threading.Lock()
+
+
+@contextmanager
+def fetching_image() -> Iterator[None]:
+    """Mark the fetches made inside as image downloads (see IMAGE_CONNECTIONS)."""
+    token = _image_fetch.set(True)
+    try:
+        yield
+    finally:
+        _image_fetch.reset(token)
+
+
+def is_image_fetch() -> bool:
+    return _image_fetch.get()
+
+
+def _image_gate(key: str) -> threading.BoundedSemaphore:
+    """The connections images may use to the site ``key``, for the whole process."""
+    with _image_gates_lock:
+        gate = _image_gates.get(key)
+        if gate is None:
+            gate = _image_gates[key] = threading.BoundedSemaphore(IMAGE_CONNECTIONS)
+        return gate
+
+
 def _pause_budget_while_paced(scraper: Any) -> None:
     """Stop the request's time limit while it waits for a connection slot and its turn.
 
@@ -323,6 +359,9 @@ def _pause_budget_while_paced(scraper: Any) -> None:
     the site's gap, and a dozen download threads queue for them. That queue is
     this program's own doing, not the site being slow, and counting it made
     chapters and novel details time out while nothing had been asked yet.
+
+    An image download takes one of the site's image connections instead of
+    the library's two, and its turn on the site's clock the same way.
     """
     paced = getattr(scraper, "_paced", None)
     if paced is None:
@@ -330,6 +369,22 @@ def _pause_budget_while_paced(scraper: Any) -> None:
 
     @contextmanager
     def paused(key: str, abort: Any) -> Iterator[None]:
+        pacer = getattr(scraper, "pacer", None)
+        if is_image_fetch() and pacer is not None:
+            gate = _image_gate(key)
+            with waiting_turn():
+                while not gate.acquire(timeout=0.25):
+                    scraper._check_signal(abort)
+                try:
+                    pacer.wait(key, abort)
+                except BaseException:
+                    gate.release()
+                    raise
+            try:
+                yield
+            finally:
+                gate.release()
+            return
         with ExitStack() as stack:
             with waiting_turn():
                 stack.enter_context(paced(key, abort))

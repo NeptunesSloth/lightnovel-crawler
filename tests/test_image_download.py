@@ -45,6 +45,21 @@ class ImageDownloadTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.download(data[: len(data) // 2])
 
+    def test_an_image_is_fetched_as_an_image(self) -> None:
+        # so the scraper can give it one of the extra image connections
+        from lncrawl.core import scraping
+
+        seen = []
+
+        def fetch(*args, **kwargs):
+            seen.append(scraping.is_image_fetch())
+            return SimpleNamespace(content=encode("RGB", "JPEG"))
+
+        crawler = SimpleNamespace(scraper=SimpleNamespace(fetch=fetch))
+        Crawler._image_bytes(crawler, "https://example.com/a")
+        self.assertEqual(seen, [True])
+        self.assertFalse(scraping.is_image_fetch())
+
     def test_a_data_url(self) -> None:
         import base64
 

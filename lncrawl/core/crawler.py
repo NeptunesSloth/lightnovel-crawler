@@ -212,8 +212,11 @@ class Crawler(ABC):
         """The image at ``url`` as fetched, the way ``scraper.get_image`` fetches it."""
         if url.startswith("data:"):
             return base64.b64decode(url.split("base64,")[-1])
+        from .scraping import fetching_image
+
         headers = {"accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"}
-        response = self.scraper.fetch("GET", url, headers=headers, navigation=False)
+        with fetching_image():  # may use the image connections, not just the site's two
+            response = self.scraper.fetch("GET", url, headers=headers, navigation=False)
         return response.content
 
     def download_cover(self, cover_url: str, cover_file: Path) -> None:
