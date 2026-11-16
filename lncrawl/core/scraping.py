@@ -152,15 +152,20 @@ MAX_CLOSURE = 3600.0
 # requests through and then says "wait ten seconds" takes ten per ten seconds;
 # 15% under that leaves room for requests not arriving perfectly evenly.
 LIMIT_MARGIN = 1.15
-# The least a refusal widens the gap. A second refusal this soon after the
-# last one means that correction was not enough, and doubles it instead.
+# The least a refusal widens the gap. A refusal before a whole window has
+# passed since the site reopened doubles it instead (see SitePacer.throttled).
 REFUSED_STEP = 1.08
-REPEAT_WINDOW = 60.0
 # Easing stops this far short of a pace that was refused, for this long; after
 # that it may try faster again, in case the limit was relaxed or the refusal
-# was someone else's doing (a browser open on the same site).
+# was someone else's doing (a browser open on the same site). 15% short cost
+# NovelFire's mirror 7% for a whole run and still did not stop it refusing.
 TOO_FAST_MARGIN = 1.05
 TOO_FAST_TTL = 600.0
+# Successes per 10% easing step. The library waits for ten, so that probing back
+# down cannot outrun a site's window; here a refused pace is remembered and
+# easing stops short of it (above), so that wait only slows the climb: from a
+# gap remembered from the last run it took five minutes to reach the limit.
+RECOVER_AFTER = 3
 # How uneven the gaps to a counting site are: enough not to tick like a clock,
 # little enough that its window never holds one request more than planned.
 EVEN_JITTER = 0.1
@@ -244,7 +249,9 @@ class SitePacer(Pacer):
                 self._block_until[origin] = now + wait
                 self._burst_until[origin] = now + max(wait, REFUSAL_BURST)
                 return current
-            repeat = last is not None and now - last < REPEAT_WINDOW
+            # What got through is the site's count only once a whole window has
+            # passed since it last reopened; before that it is mostly the block.
+            counted = last is None or now - last >= wait
             widened = current * policy.backoff_factor
             refused_gap = current
             if wait:
@@ -255,16 +262,19 @@ class SitePacer(Pacer):
                 passed = sum(1 for at in self._passed.get(origin, ()) if now - at <= wait)
                 # A wait no longer than a block is the rest of a counting window,
                 # which says how many it takes; a longer one is a penalty, which
-                # says nothing about pace, so the gap only steps up.
-                if passed >= 3 and not repeat and named <= MAX_SITE_BLOCK:
+                # says nothing about pace, so the gap only steps up. Sites let a
+                # burst through at first (NovelFire's mirror 16, weebcentral 44,
+                # against 10 and about 25 after), so later refusals correct the
+                # first estimate by their count, not 5% at a time.
+                if passed >= 3 and counted and named <= MAX_SITE_BLOCK:
                     allowed = wait / passed  # what the site let through before refusing
                     widened = max(allowed * LIMIT_MARGIN, current * REFUSED_STEP)
                     # Uneven gaps trip a counter at a slower average than even
                     # ones would, so only an evenly kept pace is itself to blame.
                     refused_gap = max(current, allowed) if was_even else allowed
-                # Refused again soon after a block: the correction was not enough,
-                # and what got through since says little (most of that time was
-                # the block itself), so the gap doubles.
+                # Refused again before a whole window since the block: the
+                # correction was not enough, and what got through since says
+                # little (most of that time was the block itself), so it doubles.
             widened = min(max(widened, policy.floor, policy.interval), policy.max_interval)
             self._interval[origin] = widened
             self._too_fast[origin] = (min(refused_gap, policy.max_interval), now)
@@ -438,12 +448,14 @@ def pacing_for(requests_per_sec: float) -> PacingPolicy:
     what someone who picked a rate asked for.
     """
     if requests_per_sec <= 0:
-        return PacingPolicy(interval=0.0, floor=PACING_FLOOR)
+        return PacingPolicy(interval=0.0, floor=PACING_FLOOR, recover_after=RECOVER_AFTER)
     interval = 1.0 / requests_per_sec
     # The floor clamps the short tail of the gap distribution. Left at its
     # default it becomes the real limit for any rate above about 3/s, so it has
     # to scale with the interval it is a floor for.
-    return PacingPolicy(interval=interval, floor=min(0.35, interval / 4))
+    return PacingPolicy(
+        interval=interval, floor=min(0.35, interval / 4), recover_after=RECOVER_AFTER
+    )
 
 
 def _parse_exit(entry: str) -> Optional[ExitSpec]:

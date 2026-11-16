@@ -828,6 +828,7 @@ class JobService:
         until_done: bool = False,
         library_only: bool = False,
         save_dir: Optional[str] = None,
+        complete_only: bool = False,
         **data: Any,
     ) -> Job:
         domain = ctx.sources.get_domain(url)
@@ -853,6 +854,8 @@ class JobService:
         data["library_only"] = bool(library_only)
         if save_dir:
             data["save_dir"] = str(save_dir)
+        if complete_only:
+            data["complete_only"] = True
         if limit:
             data["limit"] = int(limit)
         # When specific novels are picked, export exactly those (skip discovery)
