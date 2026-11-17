@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import sys
 import time
 from typing import Annotated, Any, Callable, Type, TypeVar, cast
 import uuid
@@ -14,12 +15,16 @@ import uuid
 import dotenv
 import typer
 
+from .relocation import LibraryMissing, resolve
+
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).parent.absolute()
-APP_DIR = Path(
+# Where the app looks for its data: LNCRAWL_DATA_PATH, or the system's place for
+# application data.
+BASE_DIR = Path(
     os.getenv("LNCRAWL_DATA_PATH")
     or typer.get_app_dir(
         "LNCrawl",
@@ -27,6 +32,28 @@ APP_DIR = Path(
         roaming=True,
     )
 ).absolute()
+
+
+def _data_folder() -> Path:
+    """The data folder: ``BASE_DIR``, or where its library was moved to from the app."""
+    try:
+        return resolve(BASE_DIR)
+    except LibraryMissing as error:
+        # Starting from BASE_DIR instead would show an empty library and start
+        # filling the old drive again. The desktop app has no console to say so.
+        if os.name == "nt" and getattr(sys, "frozen", False):
+            try:
+                import ctypes
+
+                ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined]
+                    None, str(error), "Lightnovel Crawler", 0x10
+                )
+            except Exception:
+                pass
+        raise SystemExit(str(error)) from error
+
+
+APP_DIR = _data_folder()
 DEFAULT_CONFIG_FILE = APP_DIR / "config.json"
 
 
@@ -279,6 +306,11 @@ class AppConfig(_Section):
     @cached_property
     def app_dir(self) -> Path:
         return APP_DIR
+
+    @property
+    def base_dir(self) -> Path:
+        """Where the app starts looking; the same as `app_dir` unless the library was moved."""
+        return BASE_DIR
 
     @property
     def openai_key(self) -> Annotated[str, Sensitive]:

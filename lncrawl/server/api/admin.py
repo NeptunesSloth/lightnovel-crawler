@@ -24,7 +24,7 @@ from ..models.activity import (
     GlobalActivitySummary,
     TopUserActivity,
 )
-from ..models.library import LibraryExportRequest
+from ..models.library import LibraryExportRequest, LibraryMoveRequest
 
 # The root router
 router = APIRouter()
@@ -137,6 +137,31 @@ def export_library_to_folder(body: LibraryExportRequest = Body()) -> Dict[str, A
         "left_out": len(left_out),
         "left_out_titles": sorted(left_out, key=str.lower)[:50],
     }
+
+
+@router.get("/library/location", summary="Where the library is, and any move under way")
+def library_location() -> Dict[str, Any]:
+    return ctx.library_move.status()
+
+
+@router.post("/library/move", summary="Move the whole library to a folder on another drive")
+def move_library(body: LibraryMoveRequest = Body()) -> Dict[str, Any]:
+    """Copy the library to ``folder`` while downloads are paused.
+
+    The library stays in use where it is until the copy is complete; the next
+    start of the app switches to the new folder and removes the old copy.
+    """
+    try:
+        return ctx.library_move.start(body.folder.strip())
+    except (OSError, ValueError) as error:
+        raise ServerErrors.invalid_input.with_extra(
+            f"Cannot move the library to {body.folder}: {error}"
+        ) from error
+
+
+@router.delete("/library/move", summary="Cancel a move; the library stays where it is")
+def cancel_library_move() -> Dict[str, Any]:
+    return ctx.library_move.cancel()
 
 
 @router.post("/backup", summary="Create a full backup zip (database + downloaded library)")

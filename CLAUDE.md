@@ -45,7 +45,7 @@ Two things in one package: a **CLI scraper** that produces e-books, and a **Fast
 
 `ctx.setup()` boots logger → config → DB (Alembic migrations) → admin user → sources. `ctx.destroy()` closes all open services.
 
-Services: `config`, `logger`, `db`, `mail`, `http`, `files`, `sources`, `users`, `novels`, `tags`, `secrets`, `volumes`, `chapters`, `images`, `artifacts`, `jobs`, `history`, `libraries`, `feedback`, `announcements`, `activity`, `recommendations`, `translator`, `crawler`, `binder`, `lsp`, `scheduler`, `job_notifier`, `tier`, `admin`, `github`.
+Services: `config`, `logger`, `db`, `mail`, `http`, `files`, `sources`, `users`, `novels`, `tags`, `secrets`, `volumes`, `chapters`, `images`, `artifacts`, `jobs`, `history`, `libraries`, `feedback`, `announcements`, `activity`, `recommendations`, `translator`, `crawler`, `binder`, `lsp`, `scheduler`, `job_notifier`, `library_move`, `tier`, `admin`, `github`.
 
 Notable ones:
 
@@ -94,6 +94,8 @@ Routers in [lncrawl/server/api/](lncrawl/server/api/), aggregated in `__init__.p
 ### Configuration
 
 [lncrawl/config.py](lncrawl/config.py): typed config. Data dir: `LNCRAWL_DATA_PATH` env var, else `typer.get_app_dir("LNCrawl")` (= `%APPDATA%\LNCrawl` on Windows). Properties marked `Sensitive` are redacted in the admin API.
+
+The library can be moved to another drive from the app (Tools → Storage). [lncrawl/relocation.py](lncrawl/relocation.py) holds the rules: the folder the app starts in (`BASE_DIR`) keeps a `library-location.json` marker, `config.py` follows it to `APP_DIR` at import, and the old copy is only removed after a restart has switched to the new one. `ctx.library_move` runs the copy and the cleanup.
 
 ## Conventions
 

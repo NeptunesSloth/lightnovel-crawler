@@ -37,3 +37,12 @@ class LibraryExportRequest(BaseModel):
         default=False,
         description="Only novels with every chapter downloaded, in a book that holds them all",
     )
+
+
+class LibraryMoveRequest(BaseModel):
+    folder: str = Field(
+        min_length=1,
+        max_length=1024,
+        description="Folder on the machine running the app to move the whole library to "
+        "(chapters, pages, e-books, exports and the database), e.g. another drive",
+    )
