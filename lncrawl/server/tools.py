@@ -292,11 +292,18 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <option value="exclude">Leave them out</option>
       <option value="only">Export only NSFW</option>
     </select>
+    <div class="row checkbox">
+      <input id="library-completeonly" type="checkbox" />
+      <label for="library-completeonly" style="margin:0">Only fully downloaded novels (every chapter downloaded)</label>
+    </div>
+    <label for="library-savedir">Save the ZIP to folder</label>
+    <input id="library-savedir" type="text" placeholder="blank = download in the browser, e.g. D:\\Novels" />
     <button id="library-export">Export entire library as ZIP</button>
     <p class="hint">Includes saved EPUBs, CBZ manga and books inside past export ZIPs, one copy
       per novel (the most complete one). NSFW is judged by a novel's tags (Adult, Mature, Smut,
-      Ecchi, R-18&hellip;), so an untagged novel always counts as safe. Extract the ZIP and
-      open index.html to browse.</p>
+      Ecchi, R-18&hellip;), so an untagged novel always counts as safe. A folder on another
+      drive keeps the ZIP off a full system drive: it is written there and nowhere else.
+      Extract the ZIP and open index.html to browse.</p>
     <button id="library-refresh" class="secondary">Refresh</button>
     </details>
   </div>
@@ -1231,16 +1238,38 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var btn = this;
     busy(btn, true);
     var nsfw = document.getElementById("library-nsfw").value;
+    var completeOnly = document.getElementById("library-completeonly").checked;
+    var saveDir = document.getElementById("library-savedir").value.trim();
+    function leftOutNote(count) {
+      return count ? " " + count + " partly downloaded novel(s) left out (they are in your library)." : "";
+    }
     log("Packing all saved books and an offline index…", "log-info");
-    fetch("/api/admin/library/export?nsfw=" + encodeURIComponent(nsfw), { headers: { "Authorization": "Bearer " + token() } })
-      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.blob(); })
+    if (saveDir) {
+      api("/admin/library/export", {
+        method: "POST",
+        body: JSON.stringify({ save_dir: saveDir, nsfw: nsfw, complete_only: completeOnly })
+      }).then(function (r) {
+        log("Library ZIP saved to " + r.file + " (" + r.books + " book(s), " + fmtSize(r.size) + ")." +
+          leftOutNote(r.left_out) + " Extract it and open index.html to browse.", "log-ok");
+      }).catch(function (error) { log("Library export failed: " + error.message, "log-err"); })
+        .finally(function () { busy(btn, false); });
+      return;
+    }
+    var query = "?nsfw=" + encodeURIComponent(nsfw) + (completeOnly ? "&complete_only=true" : "");
+    var leftOut = 0;
+    fetch("/api/admin/library/export" + query, { headers: { "Authorization": "Bearer " + token() } })
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        leftOut = parseInt(res.headers.get("X-Left-Out") || "0", 10) || 0;
+        return res.blob();
+      })
       .then(function (blob) {
         var url = URL.createObjectURL(blob);
         var link = document.createElement("a");
         link.href = url; link.download = "library.zip";
         document.body.appendChild(link); link.click(); link.remove();
         setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-        log("Library ZIP saved. Extract it and open index.html to browse.", "log-ok");
+        log("Library ZIP saved." + leftOutNote(leftOut) + " Extract it and open index.html to browse.", "log-ok");
       })
       .catch(function (error) { log("Library export failed: " + error.message, "log-err"); })
       .finally(function () { busy(btn, false); });

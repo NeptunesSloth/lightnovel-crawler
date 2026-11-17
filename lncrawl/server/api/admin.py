@@ -1,8 +1,9 @@
+import os
 from pathlib import Path
 import sqlite3
 from tempfile import NamedTemporaryFile
 import time
-from typing import Any, Dict, List, Literal, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 import zipfile
 
 from fastapi import APIRouter, Body, Query
@@ -12,6 +13,7 @@ from starlette.background import BackgroundTask
 
 from ...context import ctx
 from ...exceptions import ServerErrors
+from ...utils.file_tools import writable_folder
 from ..models import (
     ConfigSection,
     ConfigUpdateRequest,
@@ -22,9 +24,44 @@ from ..models.activity import (
     GlobalActivitySummary,
     TopUserActivity,
 )
+from ..models.library import LibraryExportRequest
 
 # The root router
 router = APIRouter()
+
+
+def _build_library(
+    output: Path,
+    nsfw: Literal["include", "exclude", "only"],
+    complete_only: bool,
+    left_out: List[str],
+) -> int:
+    """Write the library zip to ``output``; the number of books in it."""
+    from ...dao import Novel
+    from ...services.library_export import build_library_zip
+
+    def tags_for(novel_id: str) -> List[str]:
+        with ctx.db.session() as sess:
+            novel = sess.get(Novel, novel_id)
+            return list(novel.tags) if novel else []
+
+    def full_length(novel_id: Optional[str], url: Optional[str]) -> Optional[int]:
+        if not novel_id and url:
+            novel = ctx.novels.find_by_url(url)
+            novel_id = novel.id if novel else None
+        if not novel_id:
+            return None
+        report = ctx.chapters.completeness(novel_id)
+        return report.total if report.complete else None
+
+    return build_library_zip(
+        ctx.files.resolve("."),
+        output,
+        nsfw=nsfw,
+        tags_for=tags_for,
+        full_length=full_length if complete_only else None,
+        left_out=left_out,
+    )
 
 
 @router.get(
@@ -36,30 +73,70 @@ def export_library(
         default="include",
         description="Keep NSFW novels (include), leave them out (exclude), or export only them",
     ),
+    complete_only: bool = Query(
+        default=False,
+        description="Only novels with every chapter downloaded, in a book that holds them all",
+    ),
 ) -> FileResponse:
-    from ...dao import Novel
-    from ...services.library_export import build_library_zip
-
-    def tags_for(novel_id: str) -> List[str]:
-        with ctx.db.session() as sess:
-            novel = sess.get(Novel, novel_id)
-            return list(novel.tags) if novel else []
-
-    with NamedTemporaryFile(suffix=".zip", delete=False) as temp:
+    # Built in the data folder, which can be moved to a roomier drive: the
+    # system's temp folder is on the system drive, and a library zip is about
+    # as big as every book in the library.
+    exports = ctx.files.resolve("exports")
+    exports.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile(dir=exports, prefix="library-", suffix=".zip", delete=False) as temp:
         output = Path(temp.name)
     try:
-        count = build_library_zip(ctx.files.resolve("."), output, nsfw=nsfw, tags_for=tags_for)
+        left_out: List[str] = []
+        count = _build_library(output, nsfw, complete_only, left_out)
         if not count:
             raise ServerErrors.no_books_to_export
         return FileResponse(
             output,
             media_type="application/zip",
             filename="library.zip",
+            headers={"X-Books": str(count), "X-Left-Out": str(len(left_out))},
             background=BackgroundTask(output.unlink, missing_ok=True),
         )
     except BaseException:
         output.unlink(missing_ok=True)
         raise
+
+
+@router.post(
+    "/library/export",
+    summary="Write all saved EPUBs and CBZs with an offline index straight to a folder",
+)
+def export_library_to_folder(body: LibraryExportRequest = Body()) -> Dict[str, Any]:
+    """The library zip, written into a folder chosen on this machine and nowhere else."""
+    try:
+        folder = writable_folder(body.save_dir)
+    except (OSError, ValueError) as error:
+        raise ServerErrors.invalid_input.with_extra(
+            f"Cannot save the zip to {body.save_dir}: {error}"
+        ) from error
+    output = folder / "library.zip"
+    counter = 1
+    while output.exists():  # an earlier library zip there is never replaced
+        output = folder / f"library-{time.strftime('%Y%m%d-%H%M%S')}-{counter}.zip"
+        counter += 1
+    # written under a temporary name: a half-written zip never looks finished
+    writing = output.with_name(f"{output.name}.part")
+    left_out: List[str] = []
+    try:
+        count = _build_library(writing, body.nsfw, body.complete_only, left_out)
+        if not count:
+            raise ServerErrors.no_books_to_export
+        os.replace(writing, output)
+    except BaseException:
+        writing.unlink(missing_ok=True)
+        raise
+    return {
+        "file": str(output),
+        "size": output.stat().st_size,
+        "books": count,
+        "left_out": len(left_out),
+        "left_out_titles": sorted(left_out, key=str.lower)[:50],
+    }
 
 
 @router.post("/backup", summary="Create a full backup zip (database + downloaded library)")

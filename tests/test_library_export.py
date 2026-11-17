@@ -1,7 +1,11 @@
+from contextlib import nullcontext
+import importlib
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from lncrawl.services.library_export import build_library_zip
@@ -142,3 +146,109 @@ class LibraryExportByNovelTests(unittest.TestCase):
         self.assertEqual(names, ["books/Comic.cbz", "books/Spicy.epub"])
         _, names, _ = self.books(tags_for=tags_for)
         self.assertEqual(len(names), 3)
+
+
+class FullyDownloadedOnlyTests(LibraryExportByNovelTests):
+    def test_only_novels_with_every_chapter_go_in(self):
+        self.save("novels/1/artifacts/Whole.epub", novel_epub("Whole", "https://s.com/1", 3))
+        self.save("novels/2/artifacts/Partly.epub", novel_epub("Partly", "https://s.com/2", 2))
+        # every chapter is in the library, but this book was built before the last ones
+        self.save("novels/4/artifacts/Stale.epub", novel_epub("Stale", "https://s.com/4", 2))
+        (self.root / "exports").mkdir()
+        with zipfile.ZipFile(self.root / "exports" / "old.zip", "w") as archive:
+            # kept only inside a past export: found by the novel's address
+            archive.writestr("Kept.epub", novel_epub("Kept", "https://s.com/kept", 4))
+        full = {"1": 3, "4": 5, "https://s.com/kept": 4}
+        asked = []
+
+        def full_length(novel_id, url):
+            asked.append((novel_id, url))
+            return full.get(novel_id or "") or full.get(url or "")
+
+        left_out = []
+        count, names, _ = self.books(full_length=full_length, left_out=left_out)
+        self.assertEqual(names, ["books/Kept.epub", "books/Whole.epub"])
+        self.assertEqual(count, 2)
+        self.assertEqual(sorted(left_out), ["Partly", "Stale"])
+        self.assertIn((None, "https://s.com/kept"), asked)
+        with zipfile.ZipFile(self.root / "library.zip") as archive:
+            index = archive.read("index.html").decode()
+            self.assertNotIn("incomplete", index)
+            self.assertNotIn("not checked", index)
+
+    def test_a_library_zip_is_not_taken_for_a_past_export(self):
+        (self.root / "exports").mkdir()
+        with zipfile.ZipFile(self.root / "exports" / "library-earlier.zip", "w") as archive:
+            archive.writestr("books/A.epub", novel_epub("A", "https://s.com/a", 1))
+        count, names, _ = self.books()
+        self.assertEqual((count, names), (0, []))
+
+
+class LibraryExportApiTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "data"
+        for rel, title, chapters in (("1", "Whole", 3), ("2", "Partly", 2)):
+            path = self.root / "novels" / rel / "artifacts" / f"{title}.epub"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(novel_epub(title, f"https://s.com/{rel}", chapters))
+        reports = {"1": (True, 3), "2": (False, 5)}
+
+        def completeness(novel_id):
+            complete, total = reports[novel_id]
+            return SimpleNamespace(complete=complete, total=total)
+
+        session = SimpleNamespace(get=lambda *args: None)
+        self.ctx = SimpleNamespace(
+            files=SimpleNamespace(resolve=lambda path: self.root / path),
+            novels=SimpleNamespace(find_by_url=lambda url: None),
+            chapters=SimpleNamespace(completeness=completeness),
+            db=SimpleNamespace(session=lambda: nullcontext(session)),
+        )
+        # the package re-exports the admin router under the module's own name
+        admin = importlib.import_module("lncrawl.server.api.admin")
+        patcher = patch.object(admin, "ctx", self.ctx)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_zip_is_written_to_the_chosen_folder_and_nowhere_else(self):
+        from lncrawl.server.api.admin import export_library_to_folder
+        from lncrawl.server.models.library import LibraryExportRequest
+
+        folder = Path(self.temp.name) / "ssd" / "Novels"
+        body = LibraryExportRequest(save_dir=str(folder), complete_only=True)
+        first = export_library_to_folder(body=body)
+        self.assertEqual(Path(first["file"]), folder / "library.zip")
+        self.assertEqual((first["books"], first["left_out"]), (1, 1))
+        self.assertEqual(first["left_out_titles"], ["Partly"])
+        with zipfile.ZipFile(first["file"]) as archive:
+            self.assertIn("books/Whole.epub", archive.namelist())
+        second = export_library_to_folder(body=body)
+        self.assertNotEqual(second["file"], first["file"])  # an earlier one is never replaced
+        self.assertEqual(sorted(p.name for p in folder.iterdir() if p.suffix != ".zip"), [])
+        self.assertFalse(
+            (self.root / "exports").exists() and any((self.root / "exports").iterdir())
+        )
+
+    def test_a_folder_that_cannot_be_written_is_refused(self):
+        from lncrawl.exceptions import ServerError
+        from lncrawl.server.api.admin import export_library_to_folder
+        from lncrawl.server.models.library import LibraryExportRequest
+
+        file = Path(self.temp.name) / "file.txt"
+        file.write_text("x")
+        with self.assertRaises(ServerError) as caught:
+            export_library_to_folder(body=LibraryExportRequest(save_dir=str(file)))
+        self.assertEqual(caught.exception.status_code, 422)
+
+    def test_a_download_is_built_in_the_data_folder_not_the_system_temp(self):
+        from lncrawl.server.api.admin import export_library
+
+        response = export_library(nsfw="include", complete_only=True)
+        built = Path(response.path)
+        self.addCleanup(built.unlink, missing_ok=True)
+        self.assertEqual(built.parent, self.root / "exports")
+        self.assertTrue(built.name.startswith("library-"))
+        self.assertEqual(response.headers["x-books"], "1")
+        self.assertEqual(response.headers["x-left-out"], "1")
