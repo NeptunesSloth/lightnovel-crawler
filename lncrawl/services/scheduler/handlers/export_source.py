@@ -273,10 +273,37 @@ def _load_manifest_file(domain: str) -> dict:
         raise HandlerException(f"Could not read export checkpoint {path}: {error}") from error
 
 
+def _in_data_folder(saved: Any) -> Any:
+    """``saved``, or the same file in this data folder when it was written down in another.
+
+    Resume records name files by their full path. After the data folder moved
+    to another drive (LNCRAWL_DATA_PATH) those paths were gone, and every
+    finished novel looked unfinished and was gone over again. Only a path
+    through a ``novels`` or ``exports`` folder is followed, and only to a file
+    that is there; anything else (a folder chosen for the zip) is left as it is.
+    """
+    if not isinstance(saved, str) or not saved or Path(saved).exists():
+        return saved
+    parts = [part for part in re.split(r"[\\/]+", saved) if part]
+    for index in reversed(range(len(parts))):
+        if parts[index] in ("novels", "exports"):
+            candidate = ctx.files.resolve("/".join(parts[index:]))
+            if candidate.exists():
+                return str(candidate)
+    return saved
+
+
 def _load_manifest(domain: str) -> Dict[str, dict]:
     """Load the resume manifest: ``{novel_url: {"file": str, "missing": int}}``."""
     novels = _load_manifest_file(domain).get("novels")
-    return novels if isinstance(novels, dict) else {}
+    if not isinstance(novels, dict):
+        return {}
+    for record in novels.values():
+        if isinstance(record, dict):
+            for key in ("file", "archive"):
+                if key in record:
+                    record[key] = _in_data_folder(record[key])
+    return novels
 
 
 def _load_tuned_rps(domain: str) -> float:

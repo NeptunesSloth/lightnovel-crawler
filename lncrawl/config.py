@@ -484,6 +484,28 @@ class CalibreConfig(_Section):
 # ------------------------------------------------------------------ #
 #                          Database Section                          #
 # ------------------------------------------------------------------ #
+def _left_behind(url: str) -> str | None:
+    """This data folder's database, when ``url`` names the one a moved folder left behind.
+
+    The default database address is written into config.json with the data
+    folder's full path. With the folder moved to another drive and
+    LNCRAWL_DATA_PATH pointed there, the app kept opening the old path, which
+    no longer existed, and would not start. A database by the default name in
+    another folder, while this folder has its own, is that case; any other
+    address was chosen by someone and is kept.
+    """
+    prefix = "sqlite:///"
+    if not url.startswith(prefix):
+        return None
+    named = Path(url[len(prefix) :])
+    own = APP_DIR / "sqlite.db"
+    if named.name != own.name or not own.is_file():
+        return None
+    if os.path.normcase(os.path.abspath(named.parent)) == os.path.normcase(str(APP_DIR)):
+        return None
+    return f"{prefix}{own.resolve().as_posix()}"
+
+
 class DatabaseConfig(_Section):
     section = "database"
 
@@ -504,7 +526,12 @@ class DatabaseConfig(_Section):
         - `postgresql+psycopg://pguser:pgpass@postgres:5432/lncrawl`
         - `mysql+pymysql://user:password@mysql:3306/lncrawl`
         """
-        return self._get("url", self.__url)
+        url: str = self._get("url", self.__url)
+        own = _left_behind(url)
+        if own:
+            self._set("url", own)  # written down, so config.json says where it is now
+            return own
+        return url
 
     @url.setter
     def url(self, v: str) -> None:
