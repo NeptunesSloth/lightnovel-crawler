@@ -75,12 +75,15 @@ class Sources:
         self._sync_lock = EventLock()
 
         def loader():
-            # load offline sources first
-            self.load_index(load_offline_source(sync_remote))
+            try:
+                # load offline sources first
+                self.load_index(load_offline_source(sync_remote))
 
-            # check online sources update
-            if sync_remote:
-                self.update()
+                # check online sources update
+                if sync_remote:
+                    self.update()
+            except AbortedException:
+                pass  # closed while still loading
 
         self._loader = Thread(target=loader, daemon=True)
         self._loader.start()
