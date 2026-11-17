@@ -455,7 +455,8 @@ class ImageConnectionTests(unittest.TestCase):
             for thread in threads:
                 thread.join()
         self.assertEqual(_SlowSite.most["image"], scraping.IMAGE_CONNECTIONS)
-        self.assertGreater(scraping.IMAGE_CONNECTIONS, 2)
+        # eight, by measurement: twice the images a second of four, none refused
+        self.assertEqual(_SlowSite.most["image"], 8)
         self.assertLessEqual(_SlowSite.most["page"], 2)
 
 

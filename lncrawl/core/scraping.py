@@ -358,12 +358,17 @@ def site_state(config: ScraperConfig, memory: Memory) -> SharedState:
     return state
 
 
-# How many connections page images may use to one host at once. The library
-# allows two per site, which suits a site's pages. Images are static files,
-# usually on an image host of their own: weebcentral's answered 12 a second
-# over two connections, 28 over four and 40 over eight, nothing refused. Four
-# is fewer than the six a browser opens to load the same pages of a chapter.
-IMAGE_CONNECTIONS = 4
+# How many connections page images may use to one host at once, across every
+# novel being downloaded. The library allows two per site, which suits a site's
+# pages. Images are static files, usually on an image host of their own, and a
+# manga is mostly images: a real export fetched 49 of them for every chapter
+# page. Fetched for the first time each one takes a few tenths of a second to
+# be answered, so the number at once is what sets the speed. In the export
+# itself, four series side by side on weebcentral's hosts, four connections
+# gave 20, 21 and 21 images a second and eight gave 40, 40 and 40, turn about,
+# with nothing refused (nor at twelve). A browser opening one long chapter asks
+# for more than eight at once.
+IMAGE_CONNECTIONS = 8
 
 _image_fetch: ContextVar[bool] = ContextVar("lncrawl_image_fetch", default=False)
 _image_gates: Dict[str, threading.BoundedSemaphore] = {}

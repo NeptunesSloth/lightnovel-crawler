@@ -19,6 +19,7 @@ from typing_extensions import NotRequired
 
 from ....context import ctx
 from ....core.crawler import is_own_host
+from ....core.scraping import IMAGE_CONNECTIONS
 from ....enums import JobStatus, JobType, OutputFormat
 from ....utils.file_tools import atomic_write, safe_filename, writable_folder
 from ....utils.keep_awake import keep_awake
@@ -78,6 +79,11 @@ ADAPTIVE_DECAY = 0.5  # multiply the delay by this after each novel that went fi
 # so threads wake together — about 2x over the cap when measured). The pacer
 # still widens by itself when a site starts refusing, underneath all this.
 EXPORT_WORKERS = 4
+# A manga is mostly page images, and those are left to their own host (see
+# `_images_unpaced`), which is given IMAGE_CONNECTIONS connections. With only
+# EXPORT_WORKERS images on the way, a series downloading alone left half of
+# them idle; a lane has a thread for each.
+LANE_THREADS = max(EXPORT_WORKERS, IMAGE_CONNECTIONS)
 
 # How many novels are downloaded at the same time (extra["parallel_novels"]).
 # They share the one request rate, so this does not ask the site for more; it
@@ -571,7 +577,7 @@ class ExportSourceHandler(BaseHandler):
         lane = ctx.sources.init_crawler(url, workers=EXPORT_WORKERS)
         lane.scraper.signal = self.signal
         lane.taskman.signal = self.signal
-        lane.taskman.init_executor(workers=EXPORT_WORKERS, ratelimit=None)
+        lane.taskman.init_executor(workers=LANE_THREADS, ratelimit=None)
         self.pace.attach(lane.taskman)
         return lane
 
@@ -791,7 +797,7 @@ class ExportSourceHandler(BaseHandler):
         crawler = ctx.sources.init_crawler(source.url, workers=EXPORT_WORKERS)
         crawler.scraper.signal = self.signal
         crawler.taskman.signal = self.signal
-        crawler.taskman.init_executor(workers=EXPORT_WORKERS, ratelimit=None)
+        crawler.taskman.init_executor(workers=LANE_THREADS, ratelimit=None)
         # One controller holds the rate for the whole run, for every lane, and
         # moves it as each chapter comes back (see export_pace).
         self.pace = PaceController(
@@ -1629,7 +1635,9 @@ def _download_novel(
                     custom=crawler,
                 ),
                 signal,
-                max_inflight=EXPORT_WORKERS,
+                # left to their host, as many as it is given connections; held
+                # to the export's rate, as many as chapters
+                max_inflight=IMAGE_CONNECTIONS if images_unpaced else EXPORT_WORKERS,
                 idle_timeout=STALL_TIMEOUT,
                 on_progress=_image_tick,
             ):
