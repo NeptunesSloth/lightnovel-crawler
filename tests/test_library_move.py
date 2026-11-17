@@ -128,6 +128,80 @@ class CopyTests(unittest.TestCase):
         self.assertEqual([p for p in self.new.rglob("*.moving")] if self.new.exists() else [], [])
 
 
+class DriveTroubleTests(unittest.TestCase):
+    """A long copy to an external drive: 790 GB stopped at 3 GB when the drive blinked."""
+
+    def setUp(self) -> None:
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.old = Path(self.temp.name) / "c" / "LNCrawl"
+        self.new = Path(self.temp.name) / "ssd" / "LNCrawl"
+        library(self.old)
+        self.skip = (*relocation.LATE, *relocation.SKIPPED)
+        for name, value in (("RETRY_FIRST_WAIT", 0.0), ("RETRY_PATIENCE", 5.0)):
+            patcher = patch.object(relocation, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def failing(self, times: int, error: OSError):
+        """`shutil.copy2` that fails ``times`` times before it works again."""
+        real = relocation.shutil.copy2
+        calls = []
+
+        def copy2(source, target, **kwargs):
+            calls.append(Path(source).name)
+            if len(calls) <= times:
+                raise error
+            return real(source, target, **kwargs)
+
+        patcher = patch.object(relocation.shutil, "copy2", copy2)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def test_a_drive_that_drops_out_for_a_moment_is_waited_for(self) -> None:
+        gone = OSError(19, "A device which does not exist was specified")
+        self.failing(3, gone)
+        heard = []
+        copy_tree(self.old, self.new, self.skip, nothing, waiting=heard.append)
+        self.assertEqual(len(tree(self.new)), 4)  # everything arrived all the same
+        self.assertEqual(heard, [gone, gone, gone, None])  # said so, then said it was back
+
+    def test_a_drive_that_stays_away_ends_the_copy_with_the_reason(self) -> None:
+        gone = OSError(19, "A device which does not exist was specified")
+        self.failing(10**6, gone)
+        before = tree(self.old)
+        with patch.object(relocation, "RETRY_PATIENCE", 0.05):
+            with self.assertRaises(OSError) as caught:
+                copy_tree(self.old, self.new, self.skip, nothing)
+        self.assertIs(caught.exception, gone)
+        self.assertEqual(tree(self.old), before)
+
+    def test_a_full_drive_is_not_waited_for(self) -> None:
+        import errno
+
+        calls = self.failing(10**6, OSError(errno.ENOSPC, "No space left on device"))
+        with self.assertRaises(OSError):
+            copy_tree(self.old, self.new, self.skip, nothing)
+        self.assertEqual(len(calls), 1)
+
+    def test_asked_to_stop_while_waiting_for_the_drive_it_stops(self) -> None:
+        stop = Event()
+        self.failing(10**6, OSError(19, "A device which does not exist was specified"))
+        with self.assertRaises(MoveStopped):
+            copy_tree(self.old, self.new, self.skip, nothing, stop, waiting=lambda e: stop.set())
+
+    def test_small_files_are_counted_at_the_room_they_take_on_the_new_drive(self) -> None:
+        # exFAT on a big drive stores files in 128 KB blocks: 1.67 million page
+        # images take about 100 GB more there than their sizes add up to.
+        size = relocation.measure(self.old, self.skip, nothing, unit=128 * 1024)
+        self.assertEqual(size.files, 4)
+        self.assertEqual(size.bytes, len(b"chapter one") + len(b"chapter two, longer") + 3 + 3)
+        self.assertEqual(size.on_disk, 4 * 128 * 1024)
+        self.assertEqual(relocation.measure(self.old, self.skip, nothing).on_disk, size.bytes)
+        self.assertGreaterEqual(relocation.allocation_unit(self.old), 512)
+
+
 class SwitchTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = TemporaryDirectory()
@@ -388,6 +462,46 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse((self.ssd / "novels").exists())
         self.scheduler.start.assert_called_once()  # downloads carry on where the library is
         self.assertEqual(resolve(self.old), self.old)
+
+    def test_a_drive_with_big_blocks_needs_more_room_than_the_sizes_add_up_to(self) -> None:
+        usage = SimpleNamespace(free=int(2.5 * 1024**3))  # plenty for four small files
+        with (
+            patch.object(self.module.shutil, "disk_usage", return_value=usage),
+            patch.object(self.module, "allocation_unit", return_value=512 * 1024**2),
+            self.assertLogs(self.module.logger, "ERROR"),
+        ):
+            self.service.start(str(self.ssd))
+            status = self.wait(lambda s: s["state"] in ("copied", "failed"))
+        self.assertEqual(status["state"], "failed")
+        self.assertIn("blocks", status["error"])
+        self.assertFalse((self.ssd / "novels").exists())
+
+    def test_a_drive_that_stops_answering_is_waited_for_and_the_card_says_so(self) -> None:
+        real = relocation.shutil.copy2
+        seen = Event()
+        calls = []
+
+        def copy2(source, target, **kwargs):
+            calls.append(source)
+            if len(calls) == 1:
+                raise OSError(19, "A device which does not exist was specified")
+            seen.wait(10)  # the drive is back once the card has shown the wait
+            return real(source, target, **kwargs)
+
+        with (
+            patch.object(relocation.shutil, "copy2", copy2),
+            patch.object(relocation, "RETRY_FIRST_WAIT", 0.0),
+            self.assertLogs(self.module.logger, "WARNING"),
+        ):
+            self.service.start(str(self.ssd))
+            waiting = self.wait(lambda s: s["problem"] or s["state"] in ("copied", "failed"))
+            self.assertEqual(waiting["state"], "copying")
+            self.assertIn("device which does not exist", waiting["problem"])
+            seen.set()
+            status = self.wait(lambda s: s["state"] in ("copied", "failed"))
+        self.assertEqual(status["state"], "copied", status["error"])
+        self.assertIsNone(status["problem"])
+        self.assertEqual((status["files"], status["total_files"]), (4, 4))
 
     def test_a_second_move_is_refused_while_one_waits_for_its_restart(self) -> None:
         self.moved()

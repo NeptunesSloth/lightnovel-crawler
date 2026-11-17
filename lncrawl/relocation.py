@@ -21,6 +21,7 @@ Only the standard library is used here: `lncrawl.config` imports this to find
 the data folder, before anything else is loaded.
 """
 
+import errno
 import json
 import multiprocessing
 import os
@@ -29,7 +30,8 @@ import shutil
 import sqlite3
 import sys
 from threading import Event
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
+import time
+from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Set, Tuple
 
 MARKER = "library-location.json"
 # Left in a folder a move is copying into, so a later try is known to carry on
@@ -57,7 +59,17 @@ _CACHES = {"Cache", "Code Cache", "GPUCache", "DawnCache", "GrShaderCache", "Sha
 # Timestamps survive a copy to within a filesystem's resolution (2s on exFAT).
 _SAME_TIME = 2.0
 
+# A drive that stops answering part way (an external one going to sleep, a cable
+# nudged) is waited for and tried again, for this long without one file getting
+# through, before the copy gives up. The waits start short and double.
+RETRY_PATIENCE = 900.0
+RETRY_FIRST_WAIT = 2.0
+RETRY_LONGEST_WAIT = 60.0
+
 Progress = Callable[[int, int], None]  # (files, bytes) since the last call
+# Told the error each time a file could not be copied and is about to be tried
+# again, and None once one gets through.
+Waiting = Callable[[Optional[OSError]], None]
 
 
 class LibraryMissing(Exception):
@@ -222,19 +234,59 @@ def walk(root: Path, skip: Tuple[str, ...] = ()) -> Iterator[Tuple[str, "os.DirE
                 yield relative, entry
 
 
+class Size(NamedTuple):
+    files: int
+    bytes: int
+    on_disk: int  # bytes, with each file rounded up to a whole storage block
+
+
+def allocation_unit(folder: Path) -> int:
+    """The size of the blocks the drive holding ``folder`` stores files in.
+
+    exFAT on a big drive uses 128 KB blocks, and each file takes whole ones: a
+    library of 1.67 million page images needs about 100 GB more there than its
+    sizes add up to, which is better known before a day-long copy than after.
+    """
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            sectors, sector_bytes = ctypes.c_ulong(0), ctypes.c_ulong(0)
+            free, total = ctypes.c_ulong(0), ctypes.c_ulong(0)
+            root = os.path.splitdrive(os.path.abspath(folder))[0] + os.sep
+            done = ctypes.windll.kernel32.GetDiskFreeSpaceW(  # type: ignore[attr-defined]
+                ctypes.c_wchar_p(root),
+                ctypes.byref(sectors),
+                ctypes.byref(sector_bytes),
+                ctypes.byref(free),
+                ctypes.byref(total),
+            )
+            unit = sectors.value * sector_bytes.value if done else 0
+        else:
+            unit = os.statvfs(folder).f_frsize
+    except Exception:
+        unit = 0
+    return unit if unit > 0 else 4096
+
+
 def measure(
-    root: Path, skip: Tuple[str, ...], progress: Progress, stop: Optional[Event] = None
-) -> Tuple[int, int]:
-    """(files, bytes) under ``root``."""
-    files = size = 0
+    root: Path,
+    skip: Tuple[str, ...],
+    progress: Progress,
+    stop: Optional[Event] = None,
+    unit: int = 1,
+) -> Size:
+    """What is under ``root``; ``unit`` is the block size of the drive it is to go on."""
+    files = size = on_disk = 0
     for _, entry in walk(root, skip):
         if stop is not None and stop.is_set():
             raise MoveStopped()
         files += 1
         length = entry.stat(follow_symlinks=False).st_size
         size += length
+        on_disk += -(-length // unit) * unit
         progress(1, length)
-    return files, size
+    return Size(files, size, on_disk)
 
 
 def _same(source: os.stat_result, copy: Path) -> bool:
@@ -252,14 +304,32 @@ def copy_tree(
     progress: Progress,
     stop: Optional[Event] = None,
     skip_folders: Optional[Set[str]] = None,
+    waiting: Optional[Waiting] = None,
 ) -> None:
     """Copy what is under ``source`` to ``target``, keeping each file's time.
 
     A file already there with the same size and time is left alone, so a copy
     that was stopped carries on where it was. Each file arrives under another
     name first: one that is half written never passes for a finished copy.
+
+    A file that cannot be copied is tried again after a wait (see
+    `RETRY_PATIENCE`): 790 GB to an external drive stopped at 3 GB because the
+    drive did not answer for a moment. A full drive is not waited for.
     """
     made: Set[Path] = set()
+
+    def copy_one(entry: "os.DirEntry[str]", info: os.stat_result, copy: Path) -> None:
+        if copy.parent not in made:
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            made.add(copy.parent)
+        writing = copy.with_name(f"{copy.name}.moving")
+        shutil.copy2(entry.path, writing)
+        if writing.stat().st_size != info.st_size:
+            writing.unlink()
+            raise OSError(f"{copy.name} changed while it was being copied")
+        os.replace(writing, copy)
+
+    troubled = False
     for relative, entry in walk(source, skip):
         if stop is not None and stop.is_set():
             raise MoveStopped()
@@ -268,15 +338,35 @@ def copy_tree(
         info = entry.stat(follow_symlinks=False)
         copy = target / relative
         if not _same(info, copy):
-            if copy.parent not in made:
-                copy.parent.mkdir(parents=True, exist_ok=True)
-                made.add(copy.parent)
-            writing = copy.with_name(f"{copy.name}.moving")
-            shutil.copy2(entry.path, writing)
-            if writing.stat().st_size != info.st_size:
-                writing.unlink()
-                raise OSError(f"{relative} changed while it was being copied")
-            os.replace(writing, copy)
+            began: Optional[float] = None
+            pause = RETRY_FIRST_WAIT
+            while True:
+                try:
+                    copy_one(entry, info, copy)
+                    break
+                except OSError as error:
+                    if error.errno == errno.ENOSPC:
+                        raise
+                    if not os.path.lexists(entry.path):
+                        break  # the file itself is gone: there is nothing to copy
+                    now = time.monotonic()
+                    began = now if began is None else began
+                    if now - began >= RETRY_PATIENCE:
+                        raise
+                    troubled = True
+                    if waiting is not None:
+                        waiting(error)
+                    made.clear()  # a drive that comes back may not have the folders
+                    if stop is not None:
+                        if stop.wait(pause):
+                            raise MoveStopped() from error
+                    else:
+                        time.sleep(pause)
+                    pause = min(max(pause, 0.5) * 2, RETRY_LONGEST_WAIT)
+            if troubled:
+                troubled = False
+                if waiting is not None:
+                    waiting(None)
         progress(1, info.st_size)
 
 

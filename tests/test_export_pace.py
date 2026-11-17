@@ -49,6 +49,48 @@ class PaceTests(unittest.TestCase):
         self.assertEqual(pressure("HTTPError: 403 Forbidden"), "refused")
         self.assertEqual(pressure("ValueError: no title found"), "")
 
+    def test_a_failure_is_judged_by_what_went_wrong_not_by_the_pages_address(self) -> None:
+        # An empty chapter 1429, or any chapter of "The Forbidden Realm", read as
+        # the site refusing: the whole message was searched for "429" and
+        # "forbidden", address included, and each one halved the export's speed.
+        empty = "EmptyChapterError: No chapter content: "
+        for address in (
+            "https://novelfire.net/book/some-novel/chapter-1429",
+            "https://novelfire.net/book/some-novel/chapter-403",
+            "https://novelfire.net/book/the-forbidden-realm/chapter-12",
+            "https://novelfire.net/book/blocked-by-fate/chapter-7",
+            "https://weebcentral.com/chapters/01J76XZ4035KQ0V2Y8M1TQX9RB/images?is_prev=False",
+            "https://novelfire.net/book/some-novel/chapter-503",
+            "https://novelfire.net/book/the-connection/chapter-1",
+        ):
+            with self.subTest(address=address):
+                self.assertEqual(pressure(empty + address), "")
+        # and what went wrong still counts, whatever the address
+        gave_up = "Exhausted: L8 Per-zone behavioural model for https://site.com/book/chapter-7: "
+        self.assertEqual(pressure(gave_up + "gave up after 5 attempts; rate limited"), "refused")
+        self.assertEqual(
+            pressure("HTTPError: 429 Client Error: Too Many Requests for url: https://s.com/c-12"),
+            "refused",
+        )
+        self.assertEqual(pressure("ServerError: Error(403): Forbidden"), "refused")
+        self.assertEqual(pressure("escalate -> clearance: challenge served with 403"), "refused")
+        self.assertEqual(
+            pressure(
+                "Exhausted: no detection layer for https://s.com/the-forbidden-realm/1: "
+                "gave up after 5 attempts; transport failure (ConnectionError)"
+            ),
+            "slow",
+        )
+        self.assertEqual(pressure("ServerError: Error(503): Service Unavailable"), "slow")
+
+    def test_an_empty_chapter_with_429_in_its_address_does_not_slow_the_export(self) -> None:
+        pace = self.pace(2.0)
+        for _ in range(5):
+            self.clock.now += export_pace.CUT_COOLDOWN + 1
+            pace.report(Exception("No chapter content: https://novelfire.net/book/x/chapter-1429"))
+        self.assertEqual(pace.rate, 2.0)
+        self.assertEqual(pace.slowdowns(), {})
+
     def test_a_refusal_halves_the_rate_once_per_burst(self) -> None:
         pace = self.pace(2.0)
         for _ in range(4):  # the requests in flight all fail together

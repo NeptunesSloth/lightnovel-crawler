@@ -18,6 +18,7 @@ the same limiter, so together they keep one rate.
 """
 
 from collections import deque
+import re
 import threading
 from time import monotonic
 from typing import Callable, Deque, List, Optional, Tuple
@@ -50,8 +51,6 @@ PACE_WINDOW = 600.0  # seconds of history used for the time-left estimate
 
 # A refusal: the site is telling us to slow down or has started blocking us.
 _REFUSED = (
-    "429",
-    "403",
     "too many",
     "rate limit",
     "ratelimit",
@@ -60,16 +59,28 @@ _REFUSED = (
     "cloudflare",
     "forbidden",
 )
+_REFUSED_STATUS = ("429", "403")
 # Slowness: the site is busy or the connection is poor.
-_SLOW = ("timeout", "timed out", "connection", "reset by peer", "502", "503", "504")
+_SLOW = ("timeout", "timed out", "connection", "reset by peer")
+_SLOW_STATUS = ("502", "503", "504")
+
+# A failure's message usually names the page it was for. Searched along with
+# the rest, "chapter-1429" read as a 429 and a novel called "The Forbidden
+# Realm" as a 403, and each halved the speed of the whole export.
+_ADDRESS = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _has_status(text: str, codes: Tuple[str, ...]) -> bool:
+    """Whether ``text`` gives one of ``codes`` as a number of its own, not inside another."""
+    return any(re.search(rf"(?<![\w-]){code}(?![\w-])", text) for code in codes)
 
 
 def pressure(reason: str) -> str:
-    """'refused', 'slow' or '' for a failure reason."""
-    low = (reason or "").lower()
-    if any(hint in low for hint in _REFUSED):
+    """'refused', 'slow' or '' for a failure reason, by what went wrong and not where."""
+    low = _ADDRESS.sub(" ", reason or "").lower()
+    if _has_status(low, _REFUSED_STATUS) or any(hint in low for hint in _REFUSED):
         return "refused"
-    if any(hint in low for hint in _SLOW):
+    if _has_status(low, _SLOW_STATUS) or any(hint in low for hint in _SLOW):
         return "slow"
     return ""
 

@@ -2,6 +2,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import threading
 from threading import Event
 from types import SimpleNamespace
 import unittest
@@ -255,6 +256,100 @@ class PendingChapterTests(unittest.TestCase):
         self.assertIn(("c",), paced)  # the site's own, with the chapter page
         # the chapter and the site's own image, not the image host's two
         self.assertEqual(reported.call_count, 2)
+
+    def images_in_flight(self, images_unpaced: bool) -> int:
+        """The most page images one series has being fetched at once."""
+        from lncrawl.services.scheduler.handlers import export_source
+
+        waiting: list = []
+        most = [0]
+
+        def held(*args, **kwargs):
+            future: Future = Future()
+            waiting.append(future)
+            most[0] = max(most[0], sum(not f.done() for f in waiting))
+            return future
+
+        def release() -> None:  # the downloads finish a little later, all together
+            while not done.wait(0.02):
+                for future in list(waiting):
+                    if not future.done():
+                        future.set_result(None)
+
+        done = Event()
+        releaser = threading.Thread(target=release, daemon=True)
+        releaser.start()
+        self.addCleanup(done.set)
+        crawler = SimpleNamespace(
+            base_url=["https://example.com/"],
+            taskman=SimpleNamespace(
+                submit_task=MagicMock(side_effect=held),
+                submit_unpaced=MagicMock(side_effect=held),
+            ),
+        )
+        images = {f"image-{n}": f"https://images.example.net/{n}.jpg" for n in range(40)}
+        ctx = SimpleNamespace(
+            crawler=SimpleNamespace(
+                pending_chapter_ids=MagicMock(return_value=[]),
+                pending_image_ids=MagicMock(return_value=list(images)),
+                fetch_image=MagicMock(),
+                fetch_chapter=MagicMock(),
+            ),
+            novels=SimpleNamespace(
+                find_by_url=MagicMock(
+                    return_value=SimpleNamespace(id="novel", title="Manga", synopsis="A synopsis.")
+                )
+            ),
+            chapters=SimpleNamespace(
+                list_ids=MagicMock(return_value=["chapter"]),
+                get_many=MagicMock(return_value=[SimpleNamespace(is_available=True)]),
+            ),
+            images=SimpleNamespace(
+                list_ids=MagicMock(return_value=list(images)),
+                get_many=lambda ids: [SimpleNamespace(id=i, url=images[i]) for i in ids],
+            ),
+            files=SimpleNamespace(resolve=lambda file: Path(file)),
+        )
+        with patch.object(export_source, "ctx", ctx):
+            _download_novel(
+                crawler,
+                "user",
+                "https://example.com/manga",
+                OutputFormat.epub,
+                Event(),
+                build=False,
+                images_unpaced=images_unpaced,
+            )
+        return most[0]
+
+    def test_one_series_alone_fills_every_image_connection(self) -> None:
+        # A manga is mostly page images, and the image host is given eight
+        # connections. A series downloading alone only ever had four images on
+        # the way, the number of chapters fetched at once, so half stood idle.
+        from lncrawl.core import scraping
+        from lncrawl.services.scheduler.handlers import export_source
+
+        self.assertEqual(self.images_in_flight(images_unpaced=True), scraping.IMAGE_CONNECTIONS)
+        # held to the export's own rate (a rate was asked for), as before
+        self.assertEqual(self.images_in_flight(images_unpaced=False), export_source.EXPORT_WORKERS)
+
+    def test_a_lane_has_a_thread_for_every_image_connection(self) -> None:
+        from lncrawl.core import scraping
+        from lncrawl.services.scheduler.handlers import export_source
+
+        lane = SimpleNamespace(
+            scraper=SimpleNamespace(signal=None),
+            taskman=SimpleNamespace(signal=None, init_executor=MagicMock()),
+        )
+        ctx = SimpleNamespace(sources=SimpleNamespace(init_crawler=MagicMock(return_value=lane)))
+        handler = export_source.ExportSourceHandler.__new__(export_source.ExportSourceHandler)
+        handler.signal = Event()
+        handler.pace = SimpleNamespace(attach=MagicMock())
+        with patch.object(export_source, "ctx", ctx):
+            handler._new_lane("https://example.com/")
+        threads = lane.taskman.init_executor.call_args.kwargs["workers"]
+        self.assertGreaterEqual(threads, scraping.IMAGE_CONNECTIONS)
+        self.assertGreaterEqual(threads, export_source.EXPORT_WORKERS)
 
     def test_only_missing_or_empty_chapters_are_queued(self) -> None:
         chapters = [
