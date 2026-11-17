@@ -102,7 +102,11 @@ COOLDOWNS = (600.0, 1800.0, 3600.0, 7200.0, 14400.0, 28800.0)
 STUCK_PASSES = len(COOLDOWNS) + 1
 MAX_STALL_RECOVERIES = 12  # fresh downloaders after hangs, before calling it broken
 STALL_COOLDOWN = 300.0  # wait after replacing a hung lane's downloaders
-DISK_FULL_WAIT = 900.0  # re-check free space this often while the disk is full
+# Below this much free space for the library, downloads wait for room: on a
+# full drive every chapter was fetched and then could not be saved, and the
+# export ran on at under a chapter a minute without saying why.
+MIN_FREE_SPACE = 256 * 1024 * 1024
+DISK_FULL_WAIT = 60.0  # how often to look again while waiting for room
 DISCOVERY_MAX_MINUTES = 180.0  # longest a continued discovery round may run
 HEARTBEAT = 60.0  # a waiting job still updates itself this often
 MAX_RESTARTS = 5  # fresh starts after an unexpected error, before reporting it
@@ -273,10 +277,37 @@ def _load_manifest_file(domain: str) -> dict:
         raise HandlerException(f"Could not read export checkpoint {path}: {error}") from error
 
 
+def _in_data_folder(saved: Any) -> Any:
+    """``saved``, or the same file in this data folder when it was written down in another.
+
+    Resume records name files by their full path. After the data folder moved
+    to another drive (LNCRAWL_DATA_PATH) those paths were gone, and every
+    finished novel looked unfinished and was gone over again. Only a path
+    through a ``novels`` or ``exports`` folder is followed, and only to a file
+    that is there; anything else (a folder chosen for the zip) is left as it is.
+    """
+    if not isinstance(saved, str) or not saved or Path(saved).exists():
+        return saved
+    parts = [part for part in re.split(r"[\\/]+", saved) if part]
+    for index in reversed(range(len(parts))):
+        if parts[index] in ("novels", "exports"):
+            candidate = ctx.files.resolve("/".join(parts[index:]))
+            if candidate.exists():
+                return str(candidate)
+    return saved
+
+
 def _load_manifest(domain: str) -> Dict[str, dict]:
     """Load the resume manifest: ``{novel_url: {"file": str, "missing": int}}``."""
     novels = _load_manifest_file(domain).get("novels")
-    return novels if isinstance(novels, dict) else {}
+    if not isinstance(novels, dict):
+        return {}
+    for record in novels.values():
+        if isinstance(record, dict):
+            for key in ("file", "archive"):
+                if key in record:
+                    record[key] = _in_data_folder(record[key])
+    return novels
 
 
 def _load_tuned_rps(domain: str) -> float:
@@ -420,6 +451,29 @@ def _restore_archived_books(domain: str, manifest: Dict[str, dict]) -> None:
             ctx.logger.debug(f"Could not recover books from {archive}: {error}")
         if not wanted:
             break
+
+
+def _free_space() -> Optional[int]:
+    """Bytes free on the library's drive, or None when it cannot be told."""
+    try:
+        return shutil.disk_usage(ctx.files.resolve(".")).free
+    except OSError:
+        return None
+
+
+_DISK_FULL_WORDS = (
+    "no space left on device",
+    "not enough space on the disk",  # Windows
+    "database or disk is full",  # SQLite, which raises no OSError for it
+)
+
+
+def _disk_full(error: BaseException) -> bool:
+    """Whether ``error`` says the disk is full, however it came to be raised."""
+    if isinstance(error, OSError) and error.errno == errno.ENOSPC:
+        return True
+    text = str(error).lower()
+    return any(words in text for words in _DISK_FULL_WORDS)
 
 
 def _find_desktop() -> Optional[Path]:
@@ -589,6 +643,16 @@ class ExportSourceHandler(BaseHandler):
                 raise AbortedException()
             self._set_extra(phase=phase, resume_at=resume_at)
         self._set_extra(phase="downloading", resume_at=None)
+
+    def _wait_for_room(self) -> None:
+        """Hold the export while the library's drive is (nearly) full, until there is room."""
+        while True:
+            free = _free_space()
+            if free is None or free >= MIN_FREE_SPACE:
+                return
+            where = str(ctx.files.resolve("."))
+            ctx.logger.warn(f"Only {free // (1024 * 1024)} MB free for {where}; waiting for room")
+            self._wait(DISK_FULL_WAIT, "disk-full", disk_free=free, disk_path=where)
 
     def process(self) -> bool:
         until_done = bool((self.job.extra or {}).get("until_done"))
@@ -992,14 +1056,15 @@ class ExportSourceHandler(BaseHandler):
                 except AbortedException:
                     raise
                 except Exception as e:
-                    if until_done and isinstance(e, OSError) and e.errno == errno.ENOSPC:
+                    if until_done and _disk_full(e):
                         # The disk is full. Nothing downloaded is lost; wait for
                         # space to be freed and try this novel again.
                         with book:
                             active.pop(lane, None)
                             next_pending.append(novel_url)
                         ctx.logger.warn("The disk is full; waiting for free space to continue")
-                        self._wait(DISK_FULL_WAIT, "disk-full")
+                        self._wait(DISK_FULL_WAIT, "disk-full", disk_free=_free_space())
+                        self._wait_for_room()
                         return
                     # Append where it was raised (file:line) so the live UI
                     # pinpoints the source instead of just the message — and
@@ -1118,6 +1183,8 @@ class ExportSourceHandler(BaseHandler):
                 while True:
                     if self.signal.is_set():
                         raise AbortedException()
+                    if until_done:
+                        self._wait_for_room()  # a novel started on a full disk is thrown away
                     with book:
                         if not queue:
                             return
@@ -1511,6 +1578,9 @@ def _download_novel(
         ):
             if on_result:
                 on_result(outcome.error)
+            if outcome.error is not None and _disk_full(outcome.error):
+                # every chapter after it would be fetched and thrown away as well
+                raise OSError(errno.ENOSPC, f"No room to save chapters: {outcome.error}")
             if outcome.error is not None and len(errors) < 3:
                 errors.append(f"{type(outcome.error).__name__}: {outcome.error}"[:300])
     except CrawlStalledError as error:

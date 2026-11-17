@@ -292,11 +292,18 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <option value="exclude">Leave them out</option>
       <option value="only">Export only NSFW</option>
     </select>
+    <div class="row checkbox">
+      <input id="library-completeonly" type="checkbox" />
+      <label for="library-completeonly" style="margin:0">Only fully downloaded novels (every chapter downloaded)</label>
+    </div>
+    <label for="library-savedir">Save the ZIP to folder</label>
+    <input id="library-savedir" type="text" placeholder="blank = download in the browser, e.g. D:\\Novels" />
     <button id="library-export">Export entire library as ZIP</button>
     <p class="hint">Includes saved EPUBs, CBZ manga and books inside past export ZIPs, one copy
       per novel (the most complete one). NSFW is judged by a novel's tags (Adult, Mature, Smut,
-      Ecchi, R-18&hellip;), so an untagged novel always counts as safe. Extract the ZIP and
-      open index.html to browse.</p>
+      Ecchi, R-18&hellip;), so an untagged novel always counts as safe. A folder on another
+      drive keeps the ZIP off a full system drive: it is written there and nowhere else.
+      Extract the ZIP and open index.html to browse.</p>
     <button id="library-refresh" class="secondary">Refresh</button>
     </details>
   </div>
@@ -312,6 +319,15 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <button id="backup-btn" class="secondary" title="Zips the database + every downloaded novel. Saved to the exports folder and your Desktop.">💾 Create backup</button>
       <button id="phone-btn" class="secondary" title="Show a QR code to open the Reader on your phone (same Wi-Fi)">📱 Read on phone</button>
     </div>
+    <label for="move-folder" style="margin-top:14px">Move the library to another drive</label>
+    <div class="row">
+      <input id="move-folder" type="text" placeholder="e.g. D:\\ or D:\\LNCrawl" />
+      <button id="move-btn" class="secondary" style="flex:0 0 auto">📦 Move library</button>
+      <button id="move-cancel" class="secondary hidden" style="flex:0 0 auto">Cancel move</button>
+    </div>
+    <p class="hint" id="move-status">Everything goes together: novels, manga pages, e-books,
+      exports and the database. Downloads pause while it copies, and nothing is removed from
+      the old place until the new one has it all.</p>
     <div id="phone-box" class="hidden" style="margin-top:12px;text-align:center">
       <div id="phone-qr" style="background:#fff;display:inline-block;padding:10px;border-radius:10px"></div>
       <p class="muted" id="phone-url" style="word-break:break-all"></p>
@@ -458,6 +474,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           loadActiveDiscoveries(u && u.id);
           loadLibrary(u && u.id);
           loadNotifyConfig();
+          loadMove();
         })
         .catch(function () {
           // stale/invalid token
@@ -828,7 +845,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
             "restarting": "something unexpected went wrong, so it restarts from where it was" }[ex.cool_reason] || "the site needs a rest";
           log("Pausing — " + why + "; trying again" + untilNote(ex) + ".", "log-info");
         } else if (status === "RUNNING" && ex.phase === "disk-full") {
-          log("⚠ The disk is full. Free up some space — the download carries on by itself" + untilNote(ex) + ".", "log-err");
+          var room = ex.disk_free != null ? " Only " + Math.floor(ex.disk_free / 1048576) + " MB is free" +
+            (ex.disk_path ? " for " + ex.disk_path : "") + "." : "";
+          log("⚠ The disk is full: downloads wait so nothing is fetched and thrown away." + room +
+            " Free up some space, or move the data folder to a bigger drive — it carries on by itself" +
+            untilNote(ex) + ".", "log-err");
         } else if (status === "RUNNING" && ex.phase === "checking-updates") {
           log("Checking finished novels for new chapters… (" + job.done + "/" + job.total + ")", "log-info");
         } else {
@@ -1231,16 +1252,38 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var btn = this;
     busy(btn, true);
     var nsfw = document.getElementById("library-nsfw").value;
+    var completeOnly = document.getElementById("library-completeonly").checked;
+    var saveDir = document.getElementById("library-savedir").value.trim();
+    function leftOutNote(count) {
+      return count ? " " + count + " partly downloaded novel(s) left out (they are in your library)." : "";
+    }
     log("Packing all saved books and an offline index…", "log-info");
-    fetch("/api/admin/library/export?nsfw=" + encodeURIComponent(nsfw), { headers: { "Authorization": "Bearer " + token() } })
-      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.blob(); })
+    if (saveDir) {
+      api("/admin/library/export", {
+        method: "POST",
+        body: JSON.stringify({ save_dir: saveDir, nsfw: nsfw, complete_only: completeOnly })
+      }).then(function (r) {
+        log("Library ZIP saved to " + r.file + " (" + r.books + " book(s), " + fmtSize(r.size) + ")." +
+          leftOutNote(r.left_out) + " Extract it and open index.html to browse.", "log-ok");
+      }).catch(function (error) { log("Library export failed: " + error.message, "log-err"); })
+        .finally(function () { busy(btn, false); });
+      return;
+    }
+    var query = "?nsfw=" + encodeURIComponent(nsfw) + (completeOnly ? "&complete_only=true" : "");
+    var leftOut = 0;
+    fetch("/api/admin/library/export" + query, { headers: { "Authorization": "Bearer " + token() } })
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        leftOut = parseInt(res.headers.get("X-Left-Out") || "0", 10) || 0;
+        return res.blob();
+      })
       .then(function (blob) {
         var url = URL.createObjectURL(blob);
         var link = document.createElement("a");
         link.href = url; link.download = "library.zip";
         document.body.appendChild(link); link.click(); link.remove();
         setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-        log("Library ZIP saved. Extract it and open index.html to browse.", "log-ok");
+        log("Library ZIP saved." + leftOutNote(leftOut) + " Extract it and open index.html to browse.", "log-ok");
       })
       .catch(function (error) { log("Library export failed: " + error.message, "log-err"); })
       .finally(function () { busy(btn, false); });
@@ -1268,6 +1311,72 @@ _TOOLS_HTML = """<!DOCTYPE html>
       document.getElementById("storage-line").textContent = "Couldn't check usage: " + e.message;
     });
   }
+  // ---- Move the library to another drive ----
+  var moveTimer = null;
+  function count(n) { return (n || 0).toLocaleString(); }
+  function showMove(s) {
+    var line = document.getElementById("move-status");
+    var busyNow = s.state === "pausing" || s.state === "measuring" || s.state === "copying";
+    var old = s.old_copy;
+    var text;
+    if (s.state === "pausing") {
+      text = "Pausing downloads before the copy starts…";
+    } else if (s.state === "measuring") {
+      text = "Measuring the library: " + count(s.files) + " files, " + (fmtSize(s.bytes) || "0 MB") + " so far…";
+    } else if (s.state === "copying") {
+      var pct = s.total_bytes ? Math.floor(100 * s.bytes / s.total_bytes) : 0;
+      text = "Copying to " + s.target + ": " + pct + "% (" + (fmtSize(s.bytes) || "0 MB") + " of " +
+        fmtSize(s.total_bytes) + ", " + count(s.files) + " of " + count(s.total_files) +
+        " files). Downloads are paused; the library is still in use from " + s.folder + ".";
+    } else if (s.state === "copied") {
+      text = "✓ Copied to " + s.target + ". Close the app and open it again to finish: it then runs " +
+        "from there and removes the old copy from " + s.folder + ". Downloads stay paused until then.";
+    } else if (s.state === "failed") {
+      text = "The move did not happen: " + (s.error || "unknown error") + ". The library is unchanged in " + s.folder + ".";
+    } else if (old && old.state === "removing") {
+      text = "The library is now in " + s.folder + ". Removing the old copy from " + old.path + ": " +
+        (fmtSize(old.freed) || "0 MB") + " freed so far…";
+    } else if (old && old.state === "done") {
+      text = "The library is now in " + s.folder + ". The old copy is gone from " + old.path +
+        " (" + (fmtSize(old.freed) || "0 MB") + " freed" +
+        (old.left ? "; " + count(old.left) + " file(s) the new folder does not have were left there" : "") + ").";
+    } else if (old && old.state === "failed") {
+      text = "The library is now in " + s.folder + ". The old copy in " + old.path +
+        " could not be removed (" + (old.error || "unknown error") + "); it is safe to delete by hand.";
+    } else {
+      text = "The library is in " + s.folder + (s.free != null ? " (" + (fmtSize(s.free) || "0 MB") +
+        " free on that drive)" : "") + ". Everything goes together: novels, manga pages, e-books, " +
+        "exports and the database. Downloads pause while it copies, and nothing is removed from " +
+        "the old place until the new one has it all.";
+    }
+    line.textContent = text;
+    document.getElementById("move-btn").disabled = busyNow || s.state === "copied";
+    document.getElementById("move-cancel").classList.toggle("hidden", !(busyNow || s.state === "copied"));
+    var watching = busyNow || (old && old.state === "removing");
+    if (watching && !moveTimer) moveTimer = setInterval(loadMove, 2000);
+    if (!watching && moveTimer) { clearInterval(moveTimer); moveTimer = null; }
+  }
+  function loadMove() {
+    api("/admin/library/location", { method: "GET" }).then(showMove).catch(function () {});
+  }
+  document.getElementById("move-btn").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var folder = document.getElementById("move-folder").value.trim();
+    if (!folder) { log("Type the folder to move the library to, for example D:\\\\LNCrawl.", "log-err"); return; }
+    if (!confirm("Move the whole library to " + folder + "?\\n\\nDownloads pause while it copies (a big " +
+        "library can take hours). Then close the app and open it again: it runs from the new place " +
+        "and removes the old copy.")) return;
+    api("/admin/library/move", { method: "POST", body: JSON.stringify({ folder: folder }) })
+      .then(function (s) { log("Moving the library to " + s.target + "…", "log-info"); showMove(s); })
+      .catch(function (e) { log("Could not start the move: " + e.message, "log-err"); });
+  });
+  document.getElementById("move-cancel").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    api("/admin/library/move", { method: "DELETE" })
+      .then(function (s) { log("Move cancelled. The library stays where it is.", "log-info"); showMove(s); loadMove(); })
+      .catch(function (e) { log("Could not cancel the move: " + e.message, "log-err"); });
+  });
+
   document.getElementById("storage-refresh").addEventListener("click", function () {
     if (!requireAuth()) return;
     loadStorage();

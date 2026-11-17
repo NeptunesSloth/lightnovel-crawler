@@ -229,6 +229,12 @@ class __AppContext__:
         return JobScheduler()
 
     @cached_property
+    def library_move(self):
+        from .services.library_move import LibraryMoveService
+
+        return LibraryMoveService()
+
+    @cached_property
     def job_notifier(self):
         from .services.notifications import JobNotificationService
 
@@ -243,6 +249,8 @@ class __AppContext__:
 
     def destroy(self):
         self.__ready = False
+        if "library_move" in self.__dict__:
+            self.library_move.close()
         if "scheduler" in self.__dict__:
             self.scheduler.stop()
         if "download_workers" in self.__dict__:

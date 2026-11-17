@@ -1,4 +1,5 @@
 import sqlite3
+from threading import Event
 from typing import Iterable, Mapping, Set, Tuple
 
 from .event_lock import EventLock
@@ -59,9 +60,17 @@ class FTSStore:
         self._db.execute(_INIT_SQL)
 
     def close(self):
-        """Close the database connection."""
-        self._lock.abort()
-        self._db.close()
+        """Close the database connection, once nothing is using it.
+
+        Closing it under a thread that was part way through an insert (the
+        source list still loading as the app exits) crashed the process.
+        """
+        self._lock.abort()  # nothing new starts from here on
+        self._lock.acquire(Event())  # and whatever is under way finishes first
+        try:
+            self._db.close()
+        finally:
+            self._lock.release()
 
     def clear(self):
         """Remove all items, and cleanup memory."""

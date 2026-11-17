@@ -54,6 +54,8 @@ async def lifespan(_app: FastAPI):
         ctx.mail.start()
         ctx.scheduler.start()
         ctx.recommendations.warmup()
+        # running from the folder a move put the library in: remove the old copy
+        ctx.library_move.on_startup()
         yield
     finally:
         ctx.destroy()

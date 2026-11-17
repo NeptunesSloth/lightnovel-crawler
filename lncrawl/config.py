@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import sys
 import time
 from typing import Annotated, Any, Callable, Type, TypeVar, cast
 import uuid
@@ -14,12 +15,16 @@ import uuid
 import dotenv
 import typer
 
+from .relocation import LibraryMissing, resolve
+
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).parent.absolute()
-APP_DIR = Path(
+# Where the app looks for its data: LNCRAWL_DATA_PATH, or the system's place for
+# application data.
+BASE_DIR = Path(
     os.getenv("LNCRAWL_DATA_PATH")
     or typer.get_app_dir(
         "LNCrawl",
@@ -27,6 +32,28 @@ APP_DIR = Path(
         roaming=True,
     )
 ).absolute()
+
+
+def _data_folder() -> Path:
+    """The data folder: ``BASE_DIR``, or where its library was moved to from the app."""
+    try:
+        return resolve(BASE_DIR)
+    except LibraryMissing as error:
+        # Starting from BASE_DIR instead would show an empty library and start
+        # filling the old drive again. The desktop app has no console to say so.
+        if os.name == "nt" and getattr(sys, "frozen", False):
+            try:
+                import ctypes
+
+                ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined]
+                    None, str(error), "Lightnovel Crawler", 0x10
+                )
+            except Exception:
+                pass
+        raise SystemExit(str(error)) from error
+
+
+APP_DIR = _data_folder()
 DEFAULT_CONFIG_FILE = APP_DIR / "config.json"
 
 
@@ -281,6 +308,11 @@ class AppConfig(_Section):
         return APP_DIR
 
     @property
+    def base_dir(self) -> Path:
+        """Where the app starts looking; the same as `app_dir` unless the library was moved."""
+        return BASE_DIR
+
+    @property
     def openai_key(self) -> Annotated[str, Sensitive]:
         """OpenAI API Key.
 
@@ -484,6 +516,28 @@ class CalibreConfig(_Section):
 # ------------------------------------------------------------------ #
 #                          Database Section                          #
 # ------------------------------------------------------------------ #
+def _left_behind(url: str) -> str | None:
+    """This data folder's database, when ``url`` names the one a moved folder left behind.
+
+    The default database address is written into config.json with the data
+    folder's full path. With the folder moved to another drive and
+    LNCRAWL_DATA_PATH pointed there, the app kept opening the old path, which
+    no longer existed, and would not start. A database by the default name in
+    another folder, while this folder has its own, is that case; any other
+    address was chosen by someone and is kept.
+    """
+    prefix = "sqlite:///"
+    if not url.startswith(prefix):
+        return None
+    named = Path(url[len(prefix) :])
+    own = APP_DIR / "sqlite.db"
+    if named.name != own.name or not own.is_file():
+        return None
+    if os.path.normcase(os.path.abspath(named.parent)) == os.path.normcase(str(APP_DIR)):
+        return None
+    return f"{prefix}{own.resolve().as_posix()}"
+
+
 class DatabaseConfig(_Section):
     section = "database"
 
@@ -504,7 +558,12 @@ class DatabaseConfig(_Section):
         - `postgresql+psycopg://pguser:pgpass@postgres:5432/lncrawl`
         - `mysql+pymysql://user:password@mysql:3306/lncrawl`
         """
-        return self._get("url", self.__url)
+        url: str = self._get("url", self.__url)
+        own = _left_behind(url)
+        if own:
+            self._set("url", own)  # written down, so config.json says where it is now
+            return own
+        return url
 
     @url.setter
     def url(self, v: str) -> None:

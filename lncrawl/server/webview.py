@@ -242,7 +242,8 @@ def _start_app_in_browser(
 
         # wait for the server
         url = _build_url(host, port)
-        logger.info(f"Launching URL: {url}")
+        # without its sign-in token: the log is a file people paste and share
+        logger.info(f"Launching URL: {url.split('?', 1)[0]}")
 
         # send URL via CDP
         with ws_connect(ws_url) as ws:

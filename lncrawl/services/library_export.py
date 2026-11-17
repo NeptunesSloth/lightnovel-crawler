@@ -9,7 +9,8 @@ goes into the library. Books that say nothing about where they came from are
 kept unless they are identical.
 
 Manga exported as CBZ is included beside the EPUBs. An NSFW filter can leave out
-(or keep only) the novels whose tags mark them as adult content.
+(or keep only) the novels whose tags mark them as adult content, and the export
+can be held to novels whose every chapter is downloaded.
 """
 
 from contextlib import ExitStack
@@ -27,6 +28,9 @@ import zipfile
 from .scheduler.handlers.export_source import _build_index_html
 
 NsfwMode = Literal["include", "exclude", "only"]
+# The chapter count of a fully downloaded novel, found by its id in the library
+# or else by its address; None when it is not fully downloaded or not known.
+FullLength = Callable[[Optional[str], Optional[str]], Optional[int]]
 
 # Tags sources use for adult content. Matched whole, ignoring case and the
 # spacing or punctuation between words ("R-18", "r18", "18+").
@@ -81,6 +85,7 @@ class _Book:
     suffix: str
     title: str
     key: Optional[str] = None  # which novel this is, when the book says
+    novel_id: Optional[str] = None  # the library's novel it was built from, when known
     chapters: int = 0
     modified: str = ""
     tags: List[str] = field(default_factory=list)
@@ -192,11 +197,14 @@ def _scan(
                 book = _inspect(source, file.name, tags)
             if book:
                 book.path = file
+                book.novel_id = rel[0] if len(rel) > 1 else None
                 yield book
 
     # Bulk exports can outlive their temporary ebook files. Include those too.
     for file in sorted((data_dir / "exports").glob("*.zip")):
-        if file.resolve() == output.resolve() or file.name.startswith("backup-"):
+        # this library's own zips hold copies of the books found here already
+        library_zip = file.name == "library.zip" or file.name.startswith("library-")
+        if file.resolve() == output.resolve() or file.name.startswith("backup-") or library_zip:
             continue
         try:
             archive = zipfile.ZipFile(file)
@@ -232,16 +240,31 @@ def _pick(books: List[_Book]) -> List[_Book]:
     return list(best.values())
 
 
+def _whole(book: _Book, full_length: FullLength) -> bool:
+    """Whether ``book`` holds a novel whose every chapter is downloaded."""
+    url = book.key[len("url:") :] if book.key and book.key.startswith("url:") else None
+    total = full_length(book.novel_id, url)
+    if total is None:
+        return False
+    # A book built before the last chapters came in is not the whole novel. A
+    # CBZ only counts chapters that have pages, so it cannot say.
+    return book.suffix == ".cbz" or book.chapters >= total
+
+
 def build_library_zip(
     data_dir: Path,
     output: Path,
     nsfw: NsfwMode = "include",
     tags_for: Optional[Callable[[str], List[str]]] = None,
+    full_length: Optional[FullLength] = None,
+    left_out: Optional[List[str]] = None,
 ) -> int:
     """Write every book in the library to `output`, with an offline index.
 
     `tags_for` looks up a novel's tags by its id, for books whose own metadata
-    carries none (CBZ never does). Returns the number of books written.
+    carries none (CBZ never does). With `full_length`, only books holding a
+    fully downloaded novel go in, and the titles of the others are added to
+    `left_out`. Returns the number of books written.
     """
     found = list(_scan(data_dir, output, tags_for or (lambda _: [])))
     chosen = _pick(found)
@@ -249,6 +272,12 @@ def build_library_zip(
         chosen = [b for b in chosen if not is_nsfw(b.tags)]
     elif nsfw == "only":
         chosen = [b for b in chosen if is_nsfw(b.tags)]
+    if full_length is not None:
+        verdicts = [(b, _whole(b, full_length)) for b in chosen]
+        if left_out is not None:
+            left_out.extend(b.title for b, whole in verdicts if not whole)
+        chosen = [b for b, whole in verdicts if whole]
+    status = "complete" if full_length is not None else "unknown"
 
     entries: List[Tuple[str, str, str]] = []
     names: Set[str] = set()
@@ -273,20 +302,28 @@ def build_library_zip(
                 continue
             names.add(arcname.casefold())
             label = book.title + (" (manga)" if book.suffix == ".cbz" else "")
-            entries.append((arcname, label, "unknown"))
+            entries.append((arcname, label, status))
 
         title = "Saved library"
         if nsfw == "exclude":
             title += " (NSFW hidden)"
         elif nsfw == "only":
             title += " (NSFW only)"
+        if full_length is not None:
+            title += " (fully downloaded only)"
         index = _build_index_html(title, entries)
         index = index.replace("(incomplete)", "(completeness not checked)")
         target.writestr("index.html", index)
+        only_whole = (
+            "Only novels with every chapter downloaded are included.\n"
+            if full_length is not None
+            else ""
+        )
         target.writestr(
             "README.txt",
             "Extract this ZIP, then open index.html to browse your EPUBs and CBZ manga.\n"
             "Each novel is included once: the copy with the most chapters, or the newest.\n"
+            f"{only_whole}"
             "This export does not download or repair chapters.\n",
         )
     return len(entries)
