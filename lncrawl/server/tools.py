@@ -835,7 +835,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
             "restarting": "something unexpected went wrong, so it restarts from where it was" }[ex.cool_reason] || "the site needs a rest";
           log("Pausing — " + why + "; trying again" + untilNote(ex) + ".", "log-info");
         } else if (status === "RUNNING" && ex.phase === "disk-full") {
-          log("⚠ The disk is full. Free up some space — the download carries on by itself" + untilNote(ex) + ".", "log-err");
+          var room = ex.disk_free != null ? " Only " + Math.floor(ex.disk_free / 1048576) + " MB is free" +
+            (ex.disk_path ? " for " + ex.disk_path : "") + "." : "";
+          log("⚠ The disk is full: downloads wait so nothing is fetched and thrown away." + room +
+            " Free up some space, or move the data folder to a bigger drive — it carries on by itself" +
+            untilNote(ex) + ".", "log-err");
         } else if (status === "RUNNING" && ex.phase === "checking-updates") {
           log("Checking finished novels for new chapters… (" + job.done + "/" + job.total + ")", "log-info");
         } else {

@@ -1,6 +1,7 @@
 """Real HTTP → NovelFire parser → SQLite → EPUB/ZIP integration checks."""
 
 from collections import Counter
+import errno
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import os
@@ -25,6 +26,9 @@ from lncrawl.dao import Chapter, Novel
 from lncrawl.enums import JobStatus, JobType
 from lncrawl.services.scheduler.handlers import run_job
 from sources.en.n.novelfire import NovelFireCrawler
+
+MB = 1024 * 1024
+GB = 1024 * MB
 
 
 class HttpCrawlTests(unittest.TestCase):
@@ -286,6 +290,54 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(job.status, JobStatus.FAILED)
         self.assertIn("Cannot save the zip to", job.error or "")
         self.assertEqual(sum(self.counts.values()), 0)
+
+    def test_a_full_disk_holds_the_export_until_there_is_room(self) -> None:
+        # 7 MB left on a user's drive: chapters were fetched and then could not
+        # be saved, so the export ran on at under a chapter a minute, saying
+        # only "loading its chapter list".
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        free = iter([7 * MB, 7 * MB])  # then plenty
+        waits = []
+
+        def wait(handler, seconds, phase, **extra):
+            waits.append((phase, sum(self.counts.values()), extra.get("disk_free")))
+
+        with (
+            patch(f"{module}._free_space", side_effect=lambda: next(free, 10 * GB)),
+            patch(f"{module}.ExportSourceHandler._wait", wait),
+        ):
+            job = self.export(until_done=True, library_only=True, keep_awake=False)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertTrue(self.ctx.chapters.completeness("novel").complete)
+        held = [w for w in waits if w[0] == "disk-full"]
+        self.assertEqual(len(held), 2)
+        self.assertEqual(held[0][1], 0)  # nothing asked of the site while there was no room
+        self.assertEqual(held[0][2], 7 * MB)  # and how much room there was, to show
+
+    def test_a_disk_that_fills_up_part_way_stops_the_novel_and_waits(self) -> None:
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        files = type(self.ctx.files)
+        save_text = files.save_text
+        full = [1]
+
+        def fill_up(store, path, content, *args, **kwargs):
+            if "/chapters/" in str(path) and full[0]:
+                full[0] -= 1
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return save_text(store, path, content, *args, **kwargs)
+
+        waits = []
+        with (
+            patch.object(files, "save_text", fill_up),
+            patch(f"{module}._free_space", return_value=10 * GB),
+            patch(
+                f"{module}.ExportSourceHandler._wait", lambda h, s, phase, **e: waits.append(phase)
+            ),
+        ):
+            job = self.export(until_done=True, library_only=True, keep_awake=False)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertIn("disk-full", waits)
+        self.assertTrue(self.ctx.chapters.completeness("novel").complete)
 
     def test_unattended_library_download_over_real_http(self) -> None:
         job = self.export(until_done=True, library_only=True, keep_awake=False)

@@ -191,7 +191,9 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
           "blocked-discovery": "The site isn't answering searches (probably blocking for now)",
           restarting: "Something unexpected went wrong; restarting from where it was" }[ex.cool_reason] || "Giving the site a rest";
         return ["Waiting it out", "wait", why + until + "."];
-      case "disk-full": return ["Disk full", "bad", "Free up some space — it carries on by itself" + until + "."];
+      case "disk-full": return ["Disk full", "bad", (ex.disk_free != null ? "Only " +
+        Math.floor(ex.disk_free / 1048576) + " MB free. " : "") +
+        "Free up some space — it carries on by itself" + until + "."];
       case "downloading-images": return ["Downloading pages", "", ""];
       default: return ["Downloading", "", ""];
     }
