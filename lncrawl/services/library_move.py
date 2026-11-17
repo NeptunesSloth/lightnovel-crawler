@@ -19,6 +19,7 @@ from ..relocation import (
     SKIPPED,
     STAMP,
     MoveStopped,
+    allocation_unit,
     begin_move,
     choose_target,
     cleanup_done,
@@ -56,6 +57,7 @@ class LibraryMoveService:
         self._total_files = 0
         self._total_bytes = 0
         self._error: Optional[str] = None
+        self._problem: Optional[str] = None  # why the copy is waiting to try a file again
         self._paused = False  # downloads were running, and were stopped for the copy
         self._old: Dict[str, Any] = {}  # the old copy being removed after a move
 
@@ -79,6 +81,7 @@ class LibraryMoveService:
                 "total_files": self._total_files,
                 "total_bytes": self._total_bytes,
                 "error": self._error,
+                "problem": self._problem,
                 "old_copy": dict(self._old) or None,
             }
 
@@ -98,6 +101,7 @@ class LibraryMoveService:
             self._state = "pausing"
             self._target = target
             self._error = None
+            self._problem = None
             self._files = self._bytes = self._total_files = self._total_bytes = 0
             self._stop = Event()
             stop = self._stop
@@ -147,6 +151,13 @@ class LibraryMoveService:
             self._files += files
             self._bytes += size
 
+    def _waiting(self, error: Optional[OSError]) -> None:
+        """The copy could not write a file and will try again; None once it could."""
+        if error is not None and self._problem is None:
+            logger.warning(f"Moving the library: waiting to try again after: {error}")
+        with self._lock:
+            self._problem = str(error) if error is not None else None
+
     def _resume_downloads(self) -> None:
         with self._lock:
             paused, self._paused = self._paused, False
@@ -164,17 +175,26 @@ class LibraryMoveService:
                 ctx.scheduler.stop()
             with self._lock:
                 self._state = "measuring"
-            files, size = measure(current, skip, self._count, stop)
+            # Each file takes whole storage blocks on the new drive, and on a big
+            # exFAT drive those are 128 KB: count the room in its blocks.
+            unit = allocation_unit(target)
+            files, size, on_disk = measure(current, skip, self._count, stop, unit)
             already = 0
             if (target / STAMP).is_file():  # an earlier try: what it copied is not copied again
-                already = measure(target, (STAMP,), _nothing, stop)[1]
+                already = measure(target, (STAMP,), _nothing, stop, unit).on_disk
             late = sum(self._size(current / name, stop) for name in LATE)
             free = shutil.disk_usage(target).free
-            need = max(0, size - already) + late + SPARE
+            need = max(0, on_disk - already) + late + SPARE
             if free < need:
+                blocks = (
+                    f" (that drive stores files in {format_size(unit)} blocks, so "
+                    f"{files:,} files take more room there)"
+                    if on_disk - size > SPARE
+                    else ""
+                )
                 raise OSError(
                     f"{target} has {format_size(free)} free and the library needs "
-                    f"{format_size(need)}"
+                    f"{format_size(need)}{blocks}"
                 )
             (target / STAMP).write_text(
                 f"Lightnovel Crawler library, being moved here from {current}\n", encoding="utf-8"
@@ -184,10 +204,11 @@ class LibraryMoveService:
                 self._state = "copying"
                 self._total_files, self._total_bytes = files, size
                 self._files = self._bytes = 0
-            copy_tree(current, target, skip, self._count, stop)
+            copy_tree(current, target, skip, self._count, stop, waiting=self._waiting)
             copy_done(base)
             with self._lock:
                 self._state = "copied"
+                self._problem = None
             logger.info(
                 f"Library copied to {target} ({files} files, {format_size(size)}); "
                 "the next start uses it"
@@ -197,6 +218,7 @@ class LibraryMoveService:
             with self._lock:
                 self._state = "idle"
                 self._target = None
+                self._problem = None
             self._resume_downloads()
         except Exception as error:
             logger.exception("Moving the library failed")
@@ -204,12 +226,13 @@ class LibraryMoveService:
             with self._lock:
                 self._state = "failed"
                 self._error = str(error)
+                self._problem = None
             self._resume_downloads()
 
     @staticmethod
     def _size(entry: Path, stop: Event) -> int:
         if entry.is_dir():
-            return measure(entry, (), _nothing, stop)[1]
+            return measure(entry, (), _nothing, stop).bytes
         try:
             return entry.stat().st_size
         except OSError:

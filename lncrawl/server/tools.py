@@ -1328,11 +1328,16 @@ _TOOLS_HTML = """<!DOCTYPE html>
       text = "Copying to " + s.target + ": " + pct + "% (" + (fmtSize(s.bytes) || "0 MB") + " of " +
         fmtSize(s.total_bytes) + ", " + count(s.files) + " of " + count(s.total_files) +
         " files). Downloads are paused; the library is still in use from " + s.folder + ".";
+      if (s.problem) {
+        text = "⏳ " + s.target + " is not answering (" + s.problem + "). Waiting and trying again by " +
+          "itself for up to 15 minutes; check the drive is still connected. " + text;
+      }
     } else if (s.state === "copied") {
       text = "✓ Copied to " + s.target + ". Close the app and open it again to finish: it then runs " +
         "from there and removes the old copy from " + s.folder + ". Downloads stay paused until then.";
     } else if (s.state === "failed") {
-      text = "The move did not happen: " + (s.error || "unknown error") + ". The library is unchanged in " + s.folder + ".";
+      text = "The move did not happen: " + (s.error || "unknown error") + ". The library is unchanged in " +
+        s.folder + ". Click Move library again to carry on from what was already copied.";
     } else if (old && old.state === "removing") {
       text = "The library is now in " + s.folder + ". Removing the old copy from " + old.path + ": " +
         (fmtSize(old.freed) || "0 MB") + " freed so far…";
