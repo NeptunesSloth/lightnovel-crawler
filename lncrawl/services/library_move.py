@@ -18,6 +18,7 @@ from ..relocation import (
     DATABASE,
     IN_USE,
     LATE,
+    MOVE_LOG,
     SKIPPED,
     STAMP,
     MoveStopped,
@@ -40,12 +41,19 @@ from ..relocation import (
     write_marker,
 )
 from ..utils.file_tools import format_size, writable_folder
+from ..utils.notify import desktop_notify
 
 logger = logging.getLogger(__name__)
 
 # Room wanted on the new drive beyond the library itself, for the downloads
 # that follow: a drive filled to the last byte by the move helps nobody.
 SPARE = 1024 * 1024 * 1024
+
+# With less than this free on the library's drive the app says so everywhere:
+# the database and the app's own files need room too, and at 0 MB the app stops
+# answering altogether. Early enough that a move can still be made.
+LOW_SPACE = 5 * 1024 * 1024 * 1024
+SPACE_CHECK_EVERY = 300.0  # seconds between looks at the free space
 
 _ACTIVE = ("pausing", "measuring", "copying")
 
@@ -72,9 +80,37 @@ class LibraryMoveService:
         self._paused = False  # downloads were running, and were stopped for the copy
         self._old: Dict[str, Any] = {}  # the old copy being removed after a move
         self._left_behind = 0  # files the switch to this folder could not bring along
+        self._closing = Event()
+        self._warned_low = False  # a notification was shown for the drive being low now
 
     def close(self) -> None:
         self._stop.set()
+        self._closing.set()
+
+    def check_space(self) -> bool:
+        """Whether the library's drive is low; a desktop notification the first time it is."""
+        folder = ctx.config.app.app_dir
+        try:
+            free = shutil.disk_usage(folder).free
+        except OSError:
+            return False
+        low = free < LOW_SPACE
+        if low and not self._warned_low:
+            logger.warning(f"Only {format_size(free)} free on the drive holding {folder}")
+            desktop_notify(
+                "Lightnovel Crawler: the drive is nearly full",
+                f"Only {format_size(free)} is free where the library is ({folder}). "
+                "Open Tools, Library and drives to move it to a bigger drive.",
+            )
+        self._warned_low = low
+        return low
+
+    def _watch_space(self) -> None:
+        while not self._closing.wait(SPACE_CHECK_EVERY):
+            try:
+                self.check_space()
+            except Exception as error:
+                logger.debug(f"Could not check the free space: {error}")
 
     def status(self) -> Dict[str, Any]:
         folder = ctx.config.app.app_dir
@@ -86,6 +122,7 @@ class LibraryMoveService:
             return {
                 "folder": str(folder),
                 "free": free,
+                "low": free is not None and free < LOW_SPACE,
                 "state": self._state,
                 "target": str(self._target) if self._target else None,
                 "files": self._files,
@@ -203,6 +240,8 @@ class LibraryMoveService:
     def on_startup(self) -> None:
         """After the app has started: tidy up after the last run's move."""
         base, current = ctx.config.app.base_dir, ctx.config.app.app_dir
+        self.check_space()
+        Thread(target=self._watch_space, daemon=True, name="library-space").start()
         marker = read_marker(base)
         if marker.get("moving_to"):
             # a copy the last run did not finish: the library is where it was,
@@ -223,6 +262,8 @@ class LibraryMoveService:
             with self._lock:
                 self._state = "failed"
                 self._error = f"it could not be finished when the app started ({failed})"
+                if isinstance(went_to, str) and (Path(went_to) / MOVE_LOG).is_file():
+                    self._error += f"; each step is in {Path(went_to) / MOVE_LOG}"
                 self._target = Path(went_to) if isinstance(went_to, str) and went_to else None
             try:
                 failure_shown(base)

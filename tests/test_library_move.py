@@ -357,6 +357,69 @@ class SwitchTests(unittest.TestCase):
         self.assertTrue((self.new / "sqlite.db").is_file())  # the database had arrived
         self.assertEqual(choose_target(self.old, self.new), self.new)
 
+    def test_the_start_that_finishes_a_move_says_what_it_is_doing(self) -> None:
+        self.copied()
+        said = []
+        switch(self.old, self.old, self.new, said.append)
+        self.assertEqual(said[0], f"Finishing the move from {self.old} to {self.new}")
+        self.assertIn("Copying the database", said)
+        self.assertIn("Copying logs", said)
+        self.assertTrue(said[-1].startswith("Done: the library is now in"))
+
+    def test_each_step_and_each_file_left_behind_is_written_down_in_the_new_folder(self) -> None:
+        self.copied()
+        self.locked("app.log")
+        self.assertEqual(resolve(self.old), self.new)
+        log = (self.new / relocation.MOVE_LOG).read_text()
+        self.assertIn("Copying the database", log)
+        self.assertIn("Left behind, in use or unreadable: logs/app.log", log)
+        self.assertIn("The process cannot access the file", log)
+        self.assertIn("1 file(s) left behind", log)
+
+    def test_a_move_that_fails_at_the_start_is_written_down_too(self) -> None:
+        self.copied()
+        self.locked("config.json")
+        with patch.object(sys, "stderr", MagicMock()):
+            self.assertEqual(resolve(self.old), self.old)
+        log = (self.new / relocation.MOVE_LOG).read_text()
+        self.assertIn("The move was not finished", log)
+        self.assertIn(f"Still using {self.old}", log)
+
+    def test_the_desktop_app_shows_a_window_while_it_finishes(self) -> None:
+        self.copied()
+        shown = []
+
+        class Window:
+            def __init__(self, text: str) -> None:
+                shown.append(text)
+
+            def show(self, text: str) -> None:
+                shown.append(text)
+
+            def close(self) -> None:
+                shown.append("closed")
+
+        with (
+            patch.object(relocation, "_desktop_app", return_value=True),
+            patch.object(relocation, "_Notice", Window),
+        ):
+            self.assertEqual(resolve(self.old), self.new)
+        self.assertIn("finishing the library move", shown[0])
+        self.assertEqual(shown[-1], "closed")
+        self.assertTrue(any("Done: the library is now in" in text for text in shown))
+
+    def test_a_window_that_cannot_be_made_does_not_stop_the_move(self) -> None:
+        self.copied()
+
+        def broken(text: str):
+            raise OSError("no window")
+
+        with (
+            patch.object(relocation, "_desktop_app", return_value=True),
+            patch.object(relocation, "_Notice", broken),
+        ):
+            self.assertEqual(resolve(self.old), self.new)
+
     def test_a_library_moved_once_can_be_moved_again(self) -> None:
         self.copied()
         resolve(self.old)  # now in self.new
@@ -713,6 +776,25 @@ class ServiceTests(unittest.TestCase):
         shutil.rmtree(self.old / "novels")
         with patch.object(self.module, "drive_roots", return_value=[]):
             self.assertTrue(self.service.places()["empty"])
+
+    def test_a_drive_running_low_is_said_once_and_shown_until_there_is_room(self) -> None:
+        gb = 1024**3
+        usage = SimpleNamespace(free=3 * gb, total=500 * gb)
+        with (
+            patch.object(self.module.shutil, "disk_usage", lambda folder: usage),
+            patch.object(self.module, "desktop_notify") as notify,
+        ):
+            self.assertTrue(self.service.check_space())
+            self.assertTrue(self.service.check_space())  # still low: not said again
+            self.assertEqual(notify.call_count, 1)
+            self.assertIn("3.0 GB", notify.call_args[0][1])
+            self.assertTrue(self.service.status()["low"])
+            usage.free = 200 * gb  # the library was moved, or space was freed
+            self.assertFalse(self.service.check_space())
+            self.assertFalse(self.service.status()["low"])
+            usage.free = 1 * gb
+            self.assertTrue(self.service.check_space())  # low again: said again
+            self.assertEqual(notify.call_count, 2)
 
     def test_after_the_restart_the_old_copy_is_removed(self) -> None:
         target = self.moved()

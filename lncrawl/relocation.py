@@ -29,7 +29,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import sys
-from threading import Event
+from threading import Event, Thread
 import time
 from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Set, Tuple
 
@@ -37,6 +37,9 @@ MARKER = "library-location.json"
 # Left in a folder a move is copying into, so a later try is known to carry on
 # from that copy and not to be writing over someone's own folder.
 STAMP = ".lncrawl-library"
+# What the start that finishes a move did, step by step, in the folder moved to:
+# it runs before the app has a window or a log of its own.
+MOVE_LOG = "move.log"
 # What the stamp says once the app runs from the folder. A folder that says so
 # and has a database is somebody's library, not the leftovers of a move.
 IN_USE = "Lightnovel Crawler library, in use"
@@ -70,6 +73,7 @@ RETRY_FIRST_WAIT = 2.0
 RETRY_LONGEST_WAIT = 60.0
 
 Progress = Callable[[int, int], None]  # (files, bytes) since the last call
+Report = Callable[[str], None]  # what the switch is doing now, in a few words
 # Told the error each time a file could not be copied and is about to be tried
 # again, and None once one gets through.
 Waiting = Callable[[Optional[OSError]], None]
@@ -153,6 +157,127 @@ def failure_shown(base: Path) -> None:
     _update_marker(base, drop=("failed", "failed_target"))
 
 
+def _note(folder: Path, text: str) -> None:
+    """Add a line to the move's log in ``folder``; a log that cannot be written is done without."""
+    try:
+        with open(folder / MOVE_LOG, "a", encoding="utf-8") as log:
+            log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {text}\n")
+    except OSError:
+        pass
+
+
+class _Notice:
+    """A small window saying what the start is busy with, where there is no console.
+
+    The desktop app on Windows carries no GUI toolkit, so this is a bare system
+    text box. Nothing depends on it: if it cannot be made, the work goes on unseen.
+    """
+
+    def __init__(self, text: str) -> None:
+        import ctypes
+
+        self._user32 = user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        user32.CreateWindowExW.restype = ctypes.c_void_p
+        width, height = 560, 150
+        left = max(0, (int(user32.GetSystemMetrics(0)) - width) // 2)
+        top = max(0, (int(user32.GetSystemMetrics(1)) - height) // 2)
+        # topmost | a text box, centred, with a border, shown at once
+        handle = user32.CreateWindowExW(
+            0x00000008,
+            "STATIC",
+            text,
+            0x80000000 | 0x10000000 | 0x00800000 | 0x00000001,
+            left,
+            top,
+            width,
+            height,
+            None,
+            None,
+            None,
+            None,
+        )
+        if not handle:
+            raise OSError("the window could not be made")
+        self._handle = ctypes.c_void_p(handle)
+        gdi32 = ctypes.windll.gdi32  # type: ignore[attr-defined]
+        gdi32.GetStockObject.restype = ctypes.c_void_p
+        font = ctypes.c_void_p(gdi32.GetStockObject(17))  # the font dialogs use
+        user32.SendMessageW(self._handle, 0x0030, font, ctypes.c_void_p(1))
+        self._text = text
+        self._pump()
+
+    def _pump(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        message = wintypes.MSG()
+        while self._user32.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
+            self._user32.TranslateMessage(ctypes.byref(message))
+            self._user32.DispatchMessageW(ctypes.byref(message))
+
+    def show(self, text: str) -> None:
+        if text != self._text:
+            self._user32.SetWindowTextW(self._handle, text)
+            self._text = text
+        self._pump()
+
+    def close(self) -> None:
+        self._user32.DestroyWindow(self._handle)
+
+
+def _desktop_app() -> bool:
+    return os.name == "nt" and bool(getattr(sys, "frozen", False))
+
+
+def _open_notice(text: str) -> Optional[_Notice]:
+    if not _desktop_app():
+        return None
+    try:
+        return _Notice(text)
+    except Exception:
+        return None
+
+
+def finish_in_view(work: Callable[[Report], None]) -> None:
+    """Run ``work``, showing what it reports: in a small window, or on the console.
+
+    The start that finishes a move snapshots a database of a gigabyte or more
+    before the app has a window. With nothing on screen that looked like an app
+    that would not open, and was closed or started a second time.
+    """
+    heading = "Lightnovel Crawler is finishing the library move.\nPlease leave it open."
+    state: Dict[str, Any] = {"text": "Starting…", "error": None}
+
+    def report(text: str) -> None:
+        state["text"] = text
+        if not _desktop_app():
+            print(f"Finishing the library move: {text}", file=sys.stderr)
+
+    def run() -> None:
+        try:
+            work(report)
+        except BaseException as error:  # handed back to the caller below
+            state["error"] = error
+
+    thread = Thread(target=run, name="library-move-switch")
+    thread.start()
+    notice = _open_notice(f"\n{heading}\n\n{state['text']}")
+    while thread.is_alive():
+        thread.join(0.2)
+        if notice is not None:
+            try:
+                notice.show(f"\n{heading}\n\n{state['text']}")
+            except Exception:
+                notice = None
+    if notice is not None:
+        try:
+            notice.close()
+        except Exception:
+            pass
+    if state["error"] is not None:
+        raise state["error"]
+
+
 def resolve(base: Path) -> Path:
     """The data folder to use: ``base``, or the folder its library was moved to.
 
@@ -172,9 +297,11 @@ def resolve(base: Path) -> Path:
         and multiprocessing.parent_process() is None
     ):
         try:
-            switch(base, current, Path(target))
+            finish_in_view(lambda report: switch(base, current, Path(target), report))
             return Path(target)
         except Exception as error:  # the library is whole where it was: use it, and say why
+            if Path(target).is_dir():
+                _note(Path(target), f"The move was not finished: {error!r}. Still using {current}.")
             # The desktop app has no console, so the reason is kept for its
             # storage card. If even that cannot be written (the drive the app
             # starts on is full), the app still has to start.
@@ -432,6 +559,7 @@ def copy_tree(
     skip_folders: Optional[Set[str]] = None,
     waiting: Optional[Waiting] = None,
     left_behind: Optional[List[str]] = None,
+    on_left: Optional[Callable[[str, OSError], None]] = None,
 ) -> None:
     """Copy what is under ``source`` to ``target``, keeping each file's time.
 
@@ -485,6 +613,8 @@ def copy_tree(
                         except OSError:
                             pass
                         left_behind.append(f"{source.name}/{relative}")
+                        if on_left is not None:
+                            on_left(f"{source.name}/{relative}", error)
                         break
                     now = time.monotonic()
                     began = now if began is None else began
@@ -507,8 +637,13 @@ def copy_tree(
         progress(1, info.st_size)
 
 
-def _snapshot_database(source: Path, target: Path) -> None:
+def _snapshot_database(source: Path, target: Path, report: Optional[Report] = None) -> None:
     """A consistent copy of the database, whatever is still writing to it."""
+
+    def progress(status: int, remaining: int, total: int) -> None:
+        if report is not None and total > 0:
+            report(f"Copying the database: {100 * (total - remaining) // total}%")
+
     writing = target.with_name(f"{target.name}.moving")
     writing.unlink(missing_ok=True)
     original = sqlite3.connect(str(source))
@@ -516,7 +651,7 @@ def _snapshot_database(source: Path, target: Path) -> None:
         copy = sqlite3.connect(str(writing))
         try:
             with copy:
-                original.backup(copy)
+                original.backup(copy, pages=4096, progress=progress)
         finally:
             copy.close()
     finally:
@@ -526,7 +661,7 @@ def _snapshot_database(source: Path, target: Path) -> None:
     os.replace(writing, target)
 
 
-def switch(base: Path, current: Path, target: Path) -> None:
+def switch(base: Path, current: Path, target: Path, report: Optional[Report] = None) -> None:
     """Finish a move whose copy is done: copy what was left for last, then use ``target``.
 
     ``current`` is where the library is until this returns; ``base`` holds the marker.
@@ -538,15 +673,30 @@ def switch(base: Path, current: Path, target: Path) -> None:
     for. The browser behind the app window can outlive the app and hold its
     profile open, and one such file undid a move of hours of copying.
     """
+
+    def say(text: str) -> None:
+        _note(target, text)
+        if report is not None:
+            report(text)
+
     if not (target / STAMP).is_file():
         raise OSError("the copy made there is gone")
+    say(f"Finishing the move from {current} to {target}")
     if (current / DATABASE).is_file():
-        _snapshot_database(current / DATABASE, target / DATABASE)
+        say("Copying the database")
+        _snapshot_database(current / DATABASE, target / DATABASE, report)
+        say("The database is copied")
     left_behind: List[str] = []
+
+    def left(name: str, error: OSError) -> None:
+        _note(target, f"Left behind, in use or unreadable: {name} ({error})")
+
     for name in LATE:
         if name in _DATABASE_FILES:
             continue
         entry = current / name
+        if entry.exists():
+            say(f"Copying {name}")
         if entry.is_dir():
             copy_tree(
                 entry,
@@ -555,6 +705,7 @@ def switch(base: Path, current: Path, target: Path) -> None:
                 lambda files, size: None,
                 skip_folders=_CACHES,
                 left_behind=left_behind,
+                on_left=left,
             )
         elif entry.is_file():
             try:
@@ -563,8 +714,10 @@ def switch(base: Path, current: Path, target: Path) -> None:
                 if name == "config.json" or error.errno == errno.ENOSPC:
                     raise
                 left_behind.append(name)
+                left(name, error)
     (target / STAMP).write_text(f"{IN_USE} since it was moved from {current}\n", encoding="utf-8")
     extra: Dict[str, Any] = {"left_behind": len(left_behind)} if left_behind else {}
+    say(f"Done: the library is now in {target} ({len(left_behind)} file(s) left behind)")
     write_marker(base, path=str(target), state="moved", cleanup=True, old=str(current), **extra)
 
 

@@ -227,6 +227,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
   </div>
 </nav>
 <main class="page">
+  <div id="space-notice" class="notice hidden">
+    <div class="grow"><b id="space-title"></b>
+      <div class="muted">Downloads stop when it runs out, and at nothing free the app stops
+        answering. There is still room to move the library to a bigger drive.</div></div>
+    <button id="space-go">Move the library</button>
+  </div>
   <div id="found-notice" class="notice hidden">
     <div class="grow"><b id="found-title"></b><div class="muted" id="found-text"></div></div>
     <button id="found-use">Use that library</button>
@@ -1490,6 +1496,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
   var moveTimer = null;
   function count(n) { return (n || 0).toLocaleString(); }
   function showMove(s) {
+    document.getElementById("space-notice").classList.toggle("hidden", !s.low);
+    if (s.low) {
+      document.getElementById("space-title").textContent = "Only " + (fmtSize(s.free) || "0 MB") +
+        " is free on the drive the library is on (" + s.folder + ").";
+    }
     var line = document.getElementById("move-status");
     var busyNow = s.state === "pausing" || s.state === "measuring" || s.state === "copying";
     var old = s.old_copy;
@@ -1741,6 +1752,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
   });
 
   refreshAuthUI();
+  document.getElementById("space-go").addEventListener("click", function () {
+    showPane("library"); window.scrollTo(0, 0);
+  });
+  // the free space is looked at again every minute, whichever screen is open
+  setInterval(function () { if (token() && !moveTimer) loadMove(); }, 60000);
   showPane((location.hash || "").replace("#", ""));
 })();
 </script>
