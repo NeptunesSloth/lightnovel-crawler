@@ -1008,6 +1008,13 @@ _TOOLS_HTML = """<!DOCTYPE html>
         } else if (status === "RUNNING" && ex.phase === "disk-full") {
           var room = ex.disk_free != null ? " Only " + Math.floor(ex.disk_free / 1048576) + " MB is free" +
             (ex.disk_path ? " for " + ex.disk_path : "") + "." : "";
+          if (ex.disk_need) {
+            log("⚠ Paused before the drive fills up: " + (ex.disk_title || "the next novel") + " needs about " +
+              fmtSize(ex.disk_need) + " and only " + (fmtSize(ex.disk_free) || "0 MB") + " is free" +
+              (ex.disk_path ? " for " + ex.disk_path : "") + ". Nothing of it was downloaded. Move the " +
+              "library to a bigger drive (Library and drives) or free up space — it carries on by itself" +
+              untilNote(ex) + ".", "log-err");
+          } else
           log("⚠ The disk is full: downloads wait so nothing is fetched and thrown away." + room +
             " Free up some space, or move the data folder to a bigger drive — it carries on by itself" +
             untilNote(ex) + ".", "log-err");

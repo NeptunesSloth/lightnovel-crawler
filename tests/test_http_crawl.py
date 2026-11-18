@@ -363,6 +363,51 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(held[0][1], 0)  # nothing asked of the site while there was no room
         self.assertEqual(held[0][2], 7 * MB)  # and how much room there was, to show
 
+    def test_a_novel_that_would_not_fit_is_not_started_until_there_is_room(self) -> None:
+        # Ask before it starts, not after the drive is at 0 MB: there is still
+        # room then to move the library somewhere bigger.
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        free = iter([10 * GB, 2 * GB, 2 * GB])  # room to start; not for this novel; then plenty
+        waits = []
+
+        def wait(handler, seconds, phase, **extra):
+            chapters = sum(n for path, n in self.counts.items() if path.startswith("/chapter"))
+            waits.append((phase, chapters, extra))
+
+        with (
+            patch(f"{module}._free_space", side_effect=lambda: next(free, 100 * GB)),
+            patch(f"{module}.ExportSourceHandler._wait", wait),
+        ):
+            # four chapters at a gigabyte each, going by the novels before it
+            job = self.export(
+                until_done=True, library_only=True, keep_awake=False, bytes_per_chapter=GB
+            )
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertTrue(self.ctx.chapters.completeness("novel").complete)
+        held = [w for w in waits if w[0] == "disk-full"]
+        self.assertTrue(held)
+        self.assertEqual(held[0][1], 0)  # none of its chapters was fetched first
+        self.assertEqual(held[0][2]["disk_title"], "Test Novel")
+        self.assertGreater(held[0][2]["disk_need"], 4 * GB)
+        self.assertEqual(held[0][2]["disk_free"], 2 * GB)
+        # and what this novel really took is what the next one is judged by
+        self.assertLess(job.extra["bytes_per_chapter"], MB)
+
+    def test_without_until_done_it_stops_and_says_what_is_needed(self) -> None:
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        with patch(f"{module}._free_space", return_value=2 * GB):
+            job = self.export(library_only=True, bytes_per_chapter=GB)
+        self.assertEqual(job.status, JobStatus.FAILED)
+        self.assertIn("Stopped before the drive filled up", job.error or "")
+        self.assertIn("Test Novel needs about 5.0 GB", job.error or "")
+        self.assertFalse(any(path.startswith("/chapter") for path in self.counts))
+
+    def test_a_novel_that_fits_is_not_held_up(self) -> None:
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        with patch(f"{module}._free_space", return_value=100 * GB):
+            job = self.export(library_only=True, bytes_per_chapter=GB)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+
     def test_a_disk_that_fills_up_part_way_stops_the_novel_and_waits(self) -> None:
         module = "lncrawl.services.scheduler.handlers.export_source"
         files = type(self.ctx.files)
