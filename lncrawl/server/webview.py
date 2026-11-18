@@ -7,13 +7,13 @@ import subprocess
 import sys
 from threading import Event, Thread
 import time
-from typing import Optional
+from typing import List, Optional
 from urllib.request import urlopen
 
 from ..assets.htmls import loading_path
 from ..context import ctx
 from ..enums import UserRole
-from ..services.logger import log_to_file
+from ..services.logger import enable_crash_log, log_to_file
 from ..utils.browser_detect import pick_executable
 from ..utils.platforms import Platform, Screen
 from ..utils.sockets import free_port
@@ -40,6 +40,27 @@ SERVER_HOST = "0.0.0.0"
 # the real cause instead of sitting out the full timeout on a server that is
 # never going to bind.
 _server_error: Optional[BaseException] = None
+
+
+# The app window's browser ending with anything but 0 was not closed by the
+# person using it: it crashed, or Windows ended it (out of memory, say). The app
+# lives as long as that window, so every download stopped with it, and on a
+# machine left to download manga for days it "randomly closed". It is opened
+# again instead, this many times in this many seconds before the app gives up.
+REOPEN_LIMIT = 5
+REOPEN_WINDOW = 1800.0
+
+
+def _reopen(code: Optional[int], reopened: List[float], now: float) -> bool:
+    """Whether to open the app window again after its browser ended with ``code``."""
+    if code is None or code == 0:
+        return False  # closed by the person using it
+    recent = [when for when in reopened if now - when < REOPEN_WINDOW]
+    reopened[:] = recent
+    if len(recent) >= REOPEN_LIMIT:
+        return False
+    reopened.append(now)
+    return True
 
 
 class FallbackException(Exception):
@@ -200,7 +221,8 @@ def _start_app_in_browser(
     port: int,
     cdp_port: int,
     storage_path: Path,
-) -> None:
+) -> Optional[int]:
+    """Open the app window and wait for it to close; the browser's exit code."""
     from websockets.sync.client import connect as ws_connect
 
     # get chrome-like browser binary
@@ -262,6 +284,7 @@ def _start_app_in_browser(
     finally:
         _close_app_window(proc, ws_url)
         logger.info(f"Closed app (pid={proc.pid}): {proc.poll()}")
+    return proc.returncode
 
 
 def _has_console() -> bool:
@@ -347,6 +370,9 @@ def start() -> None:
     # what went wrong.
     ctx.config.load()
     log_path = log_to_file(ctx.config.app.app_dir / "logs" / "app.log")
+    # A crash in native code (a decoder, the HTTP library) ends the process
+    # before Python can log anything: the stacks of every thread go here.
+    enable_crash_log(ctx.config.app.app_dir / "logs" / "crash.log")
     logger.info(f"Starting app: build={ctx.config.app.build} port={port} cdp={cdp_port}")
 
     # Bind on all interfaces so phones/tablets on the same Wi-Fi can open the
@@ -360,8 +386,19 @@ def start() -> None:
     ).start()
 
     try:
-        storage_path = ctx.config.app.app_dir / "app-browser"
-        _start_app_in_browser(host, port, cdp_port, storage_path)
+        reopened: List[float] = []
+        while True:
+            # read each time: the library, with the window's profile, can move
+            storage_path = ctx.config.app.app_dir / "app-browser"
+            code = _start_app_in_browser(host, port, cdp_port, storage_path)
+            if not _reopen(code, reopened, time.monotonic()):
+                logger.info(f"The app window was closed (exit code {code}); stopping")
+                break
+            logger.warning(
+                f"The app window's browser ended unexpectedly (exit code {code}); "
+                f"opening it again ({len(reopened)}/{REOPEN_LIMIT}). Downloads carry on."
+            )
+            cdp_port = free_port(host, 31590)
     except FallbackException as e:
         # The app window is the nicety, not the app. Anything that only stops
         # us driving a browser window leaves the server perfectly able to serve

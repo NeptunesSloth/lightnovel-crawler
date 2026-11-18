@@ -121,6 +121,63 @@ def log_to_file(path: Path, level: int = logging.INFO) -> Optional[Path]:
     return path
 
 
+_crash_file: Optional[Any] = None
+
+
+def enable_crash_log(path: Path) -> Optional[Path]:
+    """Keep a record of how the app ended when it was not by choice; where it is.
+
+    A fatal error in native code (a crash) writes every thread's stack to
+    ``path``, and an error nothing caught in any thread is logged with its
+    traceback: on a machine left downloading for days, an app that closed
+    left nothing to say why. None if the file cannot be opened.
+    """
+    global _crash_file
+    import faulthandler
+    import threading
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        crash_file = open(path, "a", encoding="utf-8")  # noqa: SIM115 -- kept open on purpose
+    except OSError:
+        return None
+    crash_file.write(f"--- app started {_now()} ---\n")
+    crash_file.flush()
+    faulthandler.enable(crash_file, all_threads=True)
+    previous, _crash_file = _crash_file, crash_file
+    if previous is not None:
+        try:
+            previous.close()
+        except Exception:
+            pass
+
+    log = logging.getLogger("lncrawl.crash")
+
+    def thread_error(args: Any) -> None:
+        if args.exc_type is SystemExit:
+            return
+        name = getattr(args.thread, "name", "a thread")
+        log.critical(
+            f"Uncaught error in {name}",
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    def main_error(kind: Any, value: Any, traceback: Any) -> None:
+        if not issubclass(kind, KeyboardInterrupt):
+            log.critical("Uncaught error", exc_info=(kind, value, traceback))
+        sys.__excepthook__(kind, value, traceback)
+
+    threading.excepthook = thread_error
+    sys.excepthook = main_error
+    return path
+
+
+def _now() -> str:
+    import time
+
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def move_log_file(old: Path, new: Path) -> Optional[Path]:
     """Write the log file kept in folder ``old`` in folder ``new`` from now on; where it is now.
 
@@ -139,6 +196,8 @@ def move_log_file(old: Path, new: Path) -> Optional[Path]:
         level = existing.level
         root.removeHandler(existing)
         existing.close()
+        if _crash_file is not None:
+            enable_crash_log(new / relative.parent / "crash.log")
         return log_to_file(new / relative, level)
     return None
 
