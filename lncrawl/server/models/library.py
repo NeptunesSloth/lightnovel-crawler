@@ -53,6 +53,23 @@ class LibraryUseRequest(BaseModel):
     )
 
 
+class LibraryZipRequest(BaseModel):
+    save_dir: Optional[str] = Field(
+        default=None,
+        max_length=1024,
+        description="Folder on the machine running the app to write library.zip to; "
+        "blank keeps it in the data folder, to be downloaded",
+    )
+    nsfw: Literal["include", "exclude", "only"] = Field(
+        default="include",
+        description="Keep NSFW novels (include), leave them out (exclude), or export only them",
+    )
+    complete_only: bool = Field(
+        default=False,
+        description="Only novels with every chapter downloaded, in a book that holds them all",
+    )
+
+
 class LibraryMoveRequest(BaseModel):
     folder: str = Field(
         min_length=1,

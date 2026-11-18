@@ -2,8 +2,9 @@ import os
 from pathlib import Path
 import sqlite3
 from tempfile import NamedTemporaryFile
+from threading import Event
 import time
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 import zipfile
 
 from fastapi import APIRouter, Body, Query
@@ -28,6 +29,7 @@ from ..models.library import (
     LibraryExportRequest,
     LibraryMoveRequest,
     LibraryUseRequest,
+    LibraryZipRequest,
     NewFolderRequest,
 )
 
@@ -40,6 +42,8 @@ def _build_library(
     nsfw: Literal["include", "exclude", "only"],
     complete_only: bool,
     left_out: List[str],
+    progress: Optional[Callable[..., None]] = None,
+    stop: Optional[Event] = None,
 ) -> int:
     """Write the library zip to ``output``; the number of books in it."""
     from ...dao import Novel
@@ -66,6 +70,8 @@ def _build_library(
         tags_for=tags_for,
         full_length=full_length if complete_only else None,
         left_out=left_out,
+        progress=progress,
+        stop=stop,
     )
 
 
@@ -113,12 +119,30 @@ def export_library(
 )
 def export_library_to_folder(body: LibraryExportRequest = Body()) -> Dict[str, Any]:
     """The library zip, written into a folder chosen on this machine and nowhere else."""
+    return _zip_into(_zip_folder(body.save_dir), body.nsfw, body.complete_only)
+
+
+def _zip_folder(save_dir: Optional[str]) -> Path:
+    """The folder to write the library zip in: the one chosen, else the data folder's exports."""
+    if not save_dir:
+        exports = ctx.files.resolve("exports")
+        exports.mkdir(parents=True, exist_ok=True)
+        return exports
     try:
-        folder = writable_folder(body.save_dir)
+        return writable_folder(save_dir)
     except (OSError, ValueError) as error:
         raise ServerErrors.invalid_input.with_extra(
-            f"Cannot save the zip to {body.save_dir}: {error}"
+            f"Cannot save the zip to {save_dir}: {error}"
         ) from error
+
+
+def _zip_into(
+    folder: Path,
+    nsfw: Literal["include", "exclude", "only"],
+    complete_only: bool,
+    progress: Optional[Callable[..., None]] = None,
+    stop: Optional[Event] = None,
+) -> Dict[str, Any]:
     output = folder / "library.zip"
     counter = 1
     while output.exists():  # an earlier library zip there is never replaced
@@ -128,7 +152,7 @@ def export_library_to_folder(body: LibraryExportRequest = Body()) -> Dict[str, A
     writing = output.with_name(f"{output.name}.part")
     left_out: List[str] = []
     try:
-        count = _build_library(writing, body.nsfw, body.complete_only, left_out)
+        count = _build_library(writing, nsfw, complete_only, left_out, progress, stop)
         if not count:
             raise ServerErrors.no_books_to_export
         os.replace(writing, output)
@@ -142,6 +166,44 @@ def export_library_to_folder(body: LibraryExportRequest = Body()) -> Dict[str, A
         "left_out": len(left_out),
         "left_out_titles": sorted(left_out, key=str.lower)[:50],
     }
+
+
+@router.post("/library/zip", summary="Start making the library ZIP in the background")
+def start_library_zip(body: LibraryZipRequest = Body()) -> Dict[str, Any]:
+    """Like `POST /library/export`, without waiting for it: follow it with `GET /library/zip`.
+
+    With no folder given, the ZIP is kept in the data folder's exports, to be
+    fetched from `GET /library/zip/file` when it is done.
+    """
+    folder = _zip_folder((body.save_dir or "").strip() or None)
+
+    def work(progress: Callable[..., None], stop: Event) -> Dict[str, Any]:
+        return _zip_into(folder, body.nsfw, body.complete_only, progress, stop)
+
+    try:
+        return ctx.library_zip.start(work)
+    except ValueError as error:
+        raise ServerErrors.invalid_input.with_extra(str(error)) from error
+
+
+@router.get("/library/zip", summary="How far the library ZIP has got")
+def library_zip_status() -> Dict[str, Any]:
+    return ctx.library_zip.status()
+
+
+@router.delete("/library/zip", summary="Stop making the library ZIP")
+def stop_library_zip() -> Dict[str, Any]:
+    return ctx.library_zip.stop()
+
+
+@router.get("/library/zip/file", summary="Download the library ZIP last made in the data folder")
+def library_zip_file() -> FileResponse:
+    status = ctx.library_zip.status()
+    file = Path(str(status.get("file") or ""))
+    exports = ctx.files.resolve("exports")
+    if status.get("state") != "done" or file.parent != exports or not file.is_file():
+        raise ServerErrors.no_such_file
+    return FileResponse(file, media_type="application/zip", filename="library.zip")
 
 
 @router.get("/library/location", summary="Where the library is, and any move under way")
