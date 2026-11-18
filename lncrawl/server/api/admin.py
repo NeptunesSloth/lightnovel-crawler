@@ -24,7 +24,7 @@ from ..models.activity import (
     GlobalActivitySummary,
     TopUserActivity,
 )
-from ..models.library import LibraryExportRequest, LibraryMoveRequest
+from ..models.library import LibraryExportRequest, LibraryMoveRequest, LibraryUseRequest
 
 # The root router
 router = APIRouter()
@@ -156,6 +156,21 @@ def move_library(body: LibraryMoveRequest = Body()) -> Dict[str, Any]:
     except (OSError, ValueError) as error:
         raise ServerErrors.invalid_input.with_extra(
             f"Cannot move the library to {body.folder}: {error}"
+        ) from error
+
+
+@router.post("/library/use", summary="Run from a library that is already in another folder")
+def use_library(body: LibraryUseRequest = Body()) -> Dict[str, Any]:
+    """From the next start, use the library already in ``folder``.
+
+    For a library on a drive that outlived the computer it was made on. Nothing
+    is copied, and the library in use now is left where it is.
+    """
+    try:
+        return ctx.library_move.use_existing(body.folder.strip())
+    except (OSError, ValueError) as error:
+        raise ServerErrors.invalid_input.with_extra(
+            f"Cannot use the library in {body.folder}: {error}"
         ) from error
 
 

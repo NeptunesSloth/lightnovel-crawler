@@ -160,6 +160,8 @@ class Job(BaseTable, table=True):
                 count = len(self.extra.get("urls") or [])
                 what = f"{count} novel(s)" if count else "all novels"
                 return f"Download {what} → {domain}"
+            if self.extra.get("zip_only"):
+                return f"Export all novels as a ZIP only → {domain}"
             return f"Export all novels → {domain}"
 
         if self.type == JobType.LIST_SOURCE:

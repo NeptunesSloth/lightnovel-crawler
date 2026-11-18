@@ -221,7 +221,7 @@ class HttpCrawlTests(unittest.TestCase):
             patch(f"{module}.ExportSourceHandler._notify_finish"),
             patch(
                 "lncrawl.services.crawler.request_budget",
-                side_effect=lambda signal: request_budget(signal, seconds),
+                side_effect=lambda signal, **_: request_budget(signal, seconds),
             ),
             patch(f"{module}.ADAPTIVE_STEP", 0),
         ):
@@ -282,6 +282,55 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertIn("fully downloaded", job.error or "")
         # still downloaded as far as it goes, in the library
         self.assertEqual(self.ctx.chapters.completeness("novel").downloaded, 3)
+
+    def not_in_library(self) -> None:
+        """The fixture's novel is in the library from the start; a site's novels mostly are not."""
+        self.ctx.recommendations = MagicMock()  # told when a novel goes; not under test
+        self.ctx.novels.delete("novel")
+        self.assertIsNone(self.ctx.novels.find_by_url(self.novel_url))
+
+    def test_zip_only_makes_the_zip_and_keeps_nothing_in_the_library(self) -> None:
+        self.not_in_library()
+        job = self.export(zip_only=True)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["complete"], 1)
+        with ZipFile(self.ctx.files.resolve(job.extra["export_file"])) as bundle:
+            self.assertTrue(any(name.endswith(".epub") for name in bundle.namelist()))
+        self.assertIsNone(self.ctx.novels.find_by_url(self.novel_url))
+        self.assertEqual(list(self.ctx.files.resolve("novels").glob("*/chapters")), [])
+        self.assertEqual(list(self.ctx.files.resolve("exports/zip-only").glob("*")), [])
+        # run again, the book is found in the zip: nothing is downloaded twice
+        previous_requests = self.counts.copy()
+        again = self.export(zip_only=True)
+        self.assertEqual(again.status, JobStatus.SUCCESS, again.error)
+        self.assertEqual(again.extra["resumed"], 1)
+        self.assertEqual(self.counts, previous_requests)
+        self.assertIsNone(self.ctx.novels.find_by_url(self.novel_url))
+
+    def test_zip_only_leaves_a_novel_that_was_in_the_library_before(self) -> None:
+        job = self.export(zip_only=True)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["complete"], 1)
+        self.assertIsNotNone(self.ctx.novels.find_by_url(self.novel_url))
+        self.assertEqual(self.ctx.chapters.completeness("novel").downloaded, 4)
+
+    def test_zip_only_takes_a_partly_downloaded_novel_out_once_the_zip_is_made(self) -> None:
+        self.not_in_library()
+        self.empty.add("/chapter-4")  # one chapter never comes
+        job = self.export(zip_only=True)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["incomplete"], 1)
+        with ZipFile(self.ctx.files.resolve(job.extra["export_file"])) as bundle:
+            self.assertTrue(any(name.endswith(".epub") for name in bundle.namelist()))
+        self.assertIsNone(self.ctx.novels.find_by_url(self.novel_url))
+
+    def test_a_zip_only_export_that_is_stopped_keeps_what_it_has_for_the_resume(self) -> None:
+        self.not_in_library()
+        self.empty.add("/chapter-4")
+        job = self.export(zip_only=True, complete_only=True)  # nothing whole: no zip is made
+        self.assertNotIn("export_file", job.extra)
+        self.assertIsNotNone(self.ctx.novels.find_by_url(self.novel_url))
+        self.assertEqual(job.extra["zip_only_added"], [self.novel_url])
 
     def test_a_folder_that_cannot_be_written_stops_the_export_before_any_download(self) -> None:
         not_a_folder = self.root / "file.txt"

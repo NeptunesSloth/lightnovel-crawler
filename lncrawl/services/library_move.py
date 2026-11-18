@@ -15,21 +15,27 @@ from typing import Any, Dict, Optional
 
 from ..context import ctx
 from ..relocation import (
+    DATABASE,
+    IN_USE,
     LATE,
     SKIPPED,
     STAMP,
     MoveStopped,
     allocation_unit,
     begin_move,
+    choose_existing,
     choose_target,
     cleanup_done,
     copy_done,
     copy_tree,
     failure_shown,
     forget_move,
+    holds_library,
     measure,
+    point_at,
     read_marker,
     remove_old_copy,
+    write_marker,
 )
 from ..utils.file_tools import format_size, writable_folder
 
@@ -50,8 +56,10 @@ class LibraryMoveService:
     def __init__(self) -> None:
         self._lock = Lock()
         self._stop = Event()
-        # idle, pausing, measuring, copying, copied (waiting for a restart), failed
+        # idle, pausing, measuring, copying, copied (waiting for a restart), failed,
+        # chosen (a library already in another folder is used from the next start)
         self._state = "idle"
+        self._marker_before: Dict[str, Any] = {}  # what the marker said before "chosen"
         self._target: Optional[Path] = None
         self._files = 0
         self._bytes = 0
@@ -94,13 +102,7 @@ class LibraryMoveService:
         target = choose_target(current, Path(folder).expanduser())
         writable_folder(str(target))  # made now; refused now if it cannot be written to
         with self._lock:
-            if self._state in _ACTIVE or self._state == "copied":
-                raise ValueError("A move is already under way")
-            if self._old.get("state") == "removing":
-                raise ValueError(
-                    "The old copy from the last move is still being removed; "
-                    "try again when that is done"
-                )
+            self._check_free()
             self._state = "pausing"
             self._target = target
             self._error = None
@@ -116,6 +118,35 @@ class LibraryMoveService:
         ).start()
         return self.status()
 
+    def _check_free(self) -> None:
+        """Refuse (ValueError) while a move or the removal after one is going. Lock held."""
+        if self._state in _ACTIVE or self._state in ("copied", "chosen"):
+            raise ValueError("A move is already under way")
+        if self._old.get("state") == "removing":
+            raise ValueError(
+                "The old copy from the last move is still being removed; "
+                "try again when that is done"
+            )
+
+    def use_existing(self, folder: str) -> Dict[str, Any]:
+        """From the next start, run from the library already in ``folder``.
+
+        Nothing is copied and neither folder is changed: the library in use now
+        stays where it is. ValueError or OSError says why not.
+        """
+        base = ctx.config.app.base_dir
+        target = choose_existing(ctx.config.app.app_dir, Path(folder).expanduser())
+        with self._lock:
+            self._check_free()
+            before = read_marker(base)
+            point_at(base, target)
+            self._marker_before = before
+            self._state = "chosen"
+            self._target = target
+            self._error = None
+        logger.info(f"The next start uses the library in {target}")
+        return self.status()
+
     def cancel(self) -> Dict[str, Any]:
         """Stop a move. The library stays where it is; what was copied is kept for another try."""
         with self._lock:
@@ -123,6 +154,10 @@ class LibraryMoveService:
             if state in _ACTIVE:
                 self._stop.set()  # the copying thread tidies up and resumes downloads
             elif state == "copied":
+                self._state = "idle"
+                self._target = None
+            elif state == "chosen":
+                write_marker(ctx.config.app.base_dir, **self._marker_before)
                 self._state = "idle"
                 self._target = None
         if state == "copied":
@@ -138,6 +173,13 @@ class LibraryMoveService:
             # a copy the last run did not finish: the library is where it was,
             # and what was copied waits there for another try
             forget_move(base)
+        if current != base and (current / DATABASE).is_file() and not holds_library(current):
+            # a library taken up where it was found: marked as one, so that a
+            # move from some other install is never copied over it
+            try:
+                (current / STAMP).write_text(f"{IN_USE}\n", encoding="utf-8")
+            except OSError:
+                pass
         failed = marker.get("failed")
         if isinstance(failed, str) and failed:
             # the start could not finish the move: say why, once

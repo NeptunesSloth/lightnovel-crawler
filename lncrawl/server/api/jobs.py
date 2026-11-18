@@ -437,6 +437,7 @@ def export_source(
         parallel_novels=body.parallel_novels,
         until_done=body.until_done,
         library_only=body.library_only,
+        zip_only=body.zip_only,
         urls=[str(u) for u in body.urls] if body.urls else None,
     )
 

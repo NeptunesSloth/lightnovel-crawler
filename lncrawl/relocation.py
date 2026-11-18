@@ -37,6 +37,9 @@ MARKER = "library-location.json"
 # Left in a folder a move is copying into, so a later try is known to carry on
 # from that copy and not to be writing over someone's own folder.
 STAMP = ".lncrawl-library"
+# What the stamp says once the app runs from the folder. A folder that says so
+# and has a database is somebody's library, not the leftovers of a move.
+IN_USE = "Lightnovel Crawler library, in use"
 DATABASE = "sqlite.db"
 _DATABASE_FILES = (DATABASE, f"{DATABASE}-wal", f"{DATABASE}-shm")
 # Copied when the app next starts: the running app has these open or keeps
@@ -197,6 +200,43 @@ def _key(path: Path) -> str:
     return os.path.normcase(os.path.abspath(path))
 
 
+def holds_library(folder: Path) -> bool:
+    """Whether ``folder`` is a library the app has run from, with its database."""
+    try:
+        stamp = (folder / STAMP).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return stamp.startswith(IN_USE) and (folder / DATABASE).is_file()
+
+
+def choose_existing(current: Path, folder: Path) -> Path:
+    """``folder``, checked to be a library the app can start from in place of ``current``.
+
+    For a library that is already somewhere: on a drive that outlived the
+    computer it was made on, say. Nothing is copied or changed in either folder.
+    Raises ValueError, with the reason, for a folder that is not one.
+    """
+    if not folder.is_absolute():
+        raise ValueError(f"{folder} is not a full path to a folder")
+    if not folder.is_dir():
+        raise ValueError(f"{folder} cannot be found")
+    if _key(folder) == _key(current):
+        raise ValueError(f"The library in {folder} is the one in use now")
+    if not (folder / DATABASE).is_file():
+        inside = folder / "LNCrawl"
+        hint = f"; did you mean {inside}?" if (inside / DATABASE).is_file() else ""
+        raise ValueError(f"{folder} has no library in it (no {DATABASE} there){hint}")
+    return folder
+
+
+def point_at(base: Path, folder: Path) -> None:
+    """From the next start, use the library in ``folder``. Nothing is moved or removed."""
+    if _key(folder) == _key(base):
+        write_marker(base)
+    else:
+        write_marker(base, path=str(folder), state="moved")
+
+
 def choose_target(current: Path, folder: Path) -> Path:
     """Where the library goes when asked to move to ``folder``.
 
@@ -219,6 +259,13 @@ def choose_target(current: Path, folder: Path) -> Path:
         raise ValueError(f"The library is already in {current}; choose a folder outside it")
     if target.exists() and (not target.is_dir() or taken(target)):
         raise ValueError(f"{target} already has other files in it")
+    if holds_library(target):
+        # Moving there would put this library's database over that one's: after
+        # a reinstall, an empty library over the one the drive was kept for.
+        raise ValueError(
+            f"{target} already holds a library. To open that one, use "
+            f'"Use the library in this folder"; to replace it, delete the folder first'
+        )
     return target
 
 
@@ -454,6 +501,7 @@ def switch(base: Path, current: Path, target: Path) -> None:
                 if name == "config.json" or error.errno == errno.ENOSPC:
                     raise
                 left_behind.append(name)
+    (target / STAMP).write_text(f"{IN_USE} since it was moved from {current}\n", encoding="utf-8")
     extra: Dict[str, Any] = {"left_behind": len(left_behind)} if left_behind else {}
     write_marker(base, path=str(target), state="moved", cleanup=True, old=str(current), **extra)
 

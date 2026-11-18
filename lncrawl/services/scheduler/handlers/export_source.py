@@ -459,6 +459,39 @@ def _restore_archived_books(domain: str, manifest: Dict[str, dict]) -> None:
             break
 
 
+def _aside(novel_url: str) -> Path:
+    """Where a zip-only export keeps a novel's e-book until the zip is made."""
+    name = hashlib.sha256(novel_url.encode()).hexdigest()
+    return ctx.files.resolve("exports") / "zip-only" / name
+
+
+def _set_aside(novel_url: str, file: Path) -> Path:
+    """Move a finished e-book out of its novel's folder, to outlive the novel there.
+
+    A zip-only export takes each novel out of the library once its e-book is
+    made; the book waits by its novel's address for the zip.
+    """
+    kept = _aside(novel_url)
+    kept.mkdir(parents=True, exist_ok=True)
+    target = kept / file.name
+    if file != target:
+        shutil.move(str(file), str(target))
+    return target
+
+
+def _take_out_of_library(novel_url: str) -> bool:
+    """Remove the novel at this address from the library; whether one was removed."""
+    try:
+        novel = ctx.novels.find_by_url(novel_url)
+        if novel is None:
+            return False
+        ctx.novels.delete(novel.id)
+        return True
+    except Exception as error:
+        ctx.logger.warn(f"Could not take {novel_url} out of the library: {error}")
+        return False
+
+
 def _free_space() -> Optional[int]:
     """Bytes free on the library's drive, or None when it cannot be told."""
     try:
@@ -745,6 +778,11 @@ class ExportSourceHandler(BaseHandler):
         resume = bool(self.job.extra.get("resume", True))
         until_done = bool(self.job.extra.get("until_done", False))
         library_only = bool(self.job.extra.get("library_only", False))
+        # Only the zip is wanted: a novel this export adds to the library is
+        # taken out again once its e-book is made. One that was there already
+        # is somebody's, and stays.
+        zip_only = bool(self.job.extra.get("zip_only", False)) and not library_only
+        added: Set[str] = set(self.job.extra.get("zip_only_added") or [])
         # Sitemap mining is what lifts discovery past the one page of results a
         # source's search returns; only turned off when a site's sitemap is junk.
         use_sitemap = bool(self.job.extra.get("use_sitemap", True))
@@ -1012,6 +1050,14 @@ class ExportSourceHandler(BaseHandler):
                 result: NovelResult
                 failure = ""
                 try:
+                    if zip_only:
+                        with book:
+                            if novel_url not in added and ctx.novels.find_by_url(novel_url) is None:
+                                # written down before it is fetched, and kept with
+                                # the job, so a run picked up later still knows
+                                # the novel is its own
+                                added.add(novel_url)
+                                self._set_extra(zip_only_added=sorted(added))
                     result = _download_novel(
                         lane_crawler,
                         self.user.id,
@@ -1086,11 +1132,23 @@ class ExportSourceHandler(BaseHandler):
                     result = {"file": None, "missing": 1, "duplicate": False}
 
                 warm_up = False
+                finished = False  # zip only: its e-book is made, so the novel can go
                 with book:
                     active.pop(lane, None)
                     if failure:
                         last_error[novel_url] = failure
                     file = result["file"]
+                    if (
+                        file is not None
+                        and result["missing"] == 0
+                        and not result["duplicate"]
+                        and novel_url in added
+                    ):
+                        try:
+                            file = _set_aside(novel_url, file)
+                            finished = True
+                        except OSError as error:
+                            ctx.logger.warn(f"Could not set aside {file}: {error}")
                     if file is None and result.get("stored"):
                         file = _IN_LIBRARY  # in the library; no ebook was asked for
                     if file is not None and file is not _IN_LIBRARY:
@@ -1174,6 +1232,9 @@ class ExportSourceHandler(BaseHandler):
                             warm_up = True
                     self._set_progress(len(complete) + len(partial) + len(skipped), total)
                     _publish_active(force=True)
+
+                if finished:
+                    _take_out_of_library(novel_url)
 
                 warm = getattr(lane_crawler, "warm_up_clearance", None)
                 if warm_up and callable(warm):
@@ -1422,6 +1483,15 @@ class ExportSourceHandler(BaseHandler):
             os.replace(writing, export_path)
             _save_manifest(domain, manifest)
 
+            if zip_only:
+                # The zip is made: what this export added and did not finish
+                # (partly downloaded, or failed) goes too, and the books set
+                # aside for the zip are in it now. A later run finds them there.
+                self._set_extra(phase="clearing-library")
+                for url in sorted(added):
+                    _take_out_of_library(url)
+                    shutil.rmtree(_aside(url), ignore_errors=True)
+
             # report counts from what actually made it into the zip, so a file
             # that couldn't be written isn't silently counted as complete
             zipped_complete = sum(1 for _, _, s in index_entries if s == "complete")
@@ -1451,6 +1521,7 @@ class ExportSourceHandler(BaseHandler):
                 left_out=left_out,
                 total_novels=total,
                 fail_reasons=fail_reasons,
+                **({"taken_out": len(added)} if zip_only else {}),
             )
 
             size_mb = export_path.stat().st_size / (1024 * 1024)
@@ -1461,8 +1532,12 @@ class ExportSourceHandler(BaseHandler):
             )
             if zip_skipped:
                 summary += f" {zip_skipped} could not be added to the zip."
-            if left_out:
+            if left_out and zip_only:
+                summary += f" {left_out} partly downloaded left out."
+            elif left_out:
                 summary += f" {left_out} partly downloaded left out (they are in your library)."
+            if zip_only:
+                summary += " Nothing it downloaded was kept in your library."
             if saved_to and save_to is not None:
                 summary += f" Saved to {saved_to}."
             elif saved_to:

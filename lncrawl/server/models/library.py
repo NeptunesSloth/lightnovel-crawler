@@ -39,6 +39,15 @@ class LibraryExportRequest(BaseModel):
     )
 
 
+class LibraryUseRequest(BaseModel):
+    folder: str = Field(
+        min_length=1,
+        max_length=1024,
+        description="Folder on the machine running the app that already holds a library "
+        "(one moved there before); the app runs from it after its next start",
+    )
+
+
 class LibraryMoveRequest(BaseModel):
     folder: str = Field(
         min_length=1,

@@ -144,6 +144,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <select id="exp-make">
       <option value="library" selected>Add to my library — read it in the Reader</option>
       <option value="zip">Also make e-books, bundled into one ZIP to keep or move</option>
+      <option value="ziponly">Only the ZIP of e-books — nothing is kept in my library</option>
     </select>
     <div class="row checkbox">
       <input id="exp-untildone" type="checkbox" checked />
@@ -169,8 +170,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
     </div>
     <div class="row checkbox">
       <input id="exp-completeonly" type="checkbox" />
-      <label for="exp-completeonly" style="margin:0">Only fully downloaded novels in the ZIP (partly downloaded ones stay in the library)</label>
+      <label for="exp-completeonly" id="exp-completeonly-label" style="margin:0">Only fully downloaded novels in the ZIP (partly downloaded ones stay in the library)</label>
     </div>
+    <p class="hint hidden" id="exp-ziponly-hint">Each novel is downloaded, made into an e-book for the
+      ZIP and then taken out of the library again, so it never shows in the Reader. Novels that
+      were in your library before stay there. The downloads still need room on the library's
+      drive while they run; if you stop part way, what is unfinished stays until you resume.</p>
     </div>
     <details>
       <summary>Advanced options — you don't need these</summary>
@@ -323,6 +328,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <div class="row">
       <input id="move-folder" type="text" placeholder="e.g. D:\\ or D:\\LNCrawl" />
       <button id="move-btn" class="secondary" style="flex:0 0 auto">📦 Move library</button>
+      <button id="move-use" class="secondary" style="flex:0 0 auto"
+        title="For a library that is already in that folder, such as on a drive kept from before a reinstall. Nothing is copied.">📂 Use the library in this folder</button>
       <button id="move-cancel" class="secondary hidden" style="flex:0 0 auto">Cancel move</button>
     </div>
     <p class="hint" id="move-status">Everything goes together: novels, manga pages, e-books,
@@ -863,10 +870,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
           var parts = [(extra.complete != null ? extra.complete : extra.exported || 0) + " complete"];
           if (extra.incomplete) parts.push(extra.incomplete + " partial");
           if (extra.skipped) parts.push(extra.skipped + " skipped (already had)");
-          if (extra.left_out) parts.push(extra.left_out + " partly downloaded left out of the ZIP (in your library)");
+          if (extra.left_out) parts.push(extra.left_out + " partly downloaded left out of the ZIP" +
+            (extra.zip_only ? "" : " (in your library)"));
           if (extra.failed) parts.push(extra.failed + " failed");
           log((extra.library_only ? "Done — in your library: " : "Export done: ") + parts.join(", ") +
-            " of " + (extra.total_novels || 0) + "." + (extra.library_only ? " Open the Reader to read them." : ""),
+            " of " + (extra.total_novels || 0) + "." + (extra.library_only ? " Open the Reader to read them." : "") +
+            (extra.zip_only ? " Nothing it downloaded was kept in your library." : ""),
             extra.failed ? "log-info" : "log-ok");
           notifyEnd("Export finished", (extra.domain || "Export") + ": " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".");
           if (extra.discovery_capped) {
@@ -966,6 +975,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (!url) { log("Enter a source URL.", "log-err"); return null; }
     var body = { url: url, format: document.getElementById("exp-format").value };
     body.library_only = document.getElementById("exp-make").value === "library";
+    body.zip_only = document.getElementById("exp-make").value === "ziponly";
     body.until_done = document.getElementById("exp-untildone").checked;
     var limitRaw = document.getElementById("exp-limit").value.trim();
     if (limitRaw) {
@@ -1008,8 +1018,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
   // the e-book format only matters when e-books are being made
   function syncMake() {
-    document.getElementById("exp-zip-opts").classList.toggle("hidden",
-      document.getElementById("exp-make").value !== "zip");
+    var make = document.getElementById("exp-make").value;
+    document.getElementById("exp-zip-opts").classList.toggle("hidden", make === "library");
+    document.getElementById("exp-ziponly-hint").classList.toggle("hidden", make !== "ziponly");
+    document.getElementById("exp-completeonly-label").textContent = make === "ziponly"
+      ? "Only fully downloaded novels in the ZIP (partly downloaded ones are dropped)"
+      : "Only fully downloaded novels in the ZIP (partly downloaded ones stay in the library)";
   }
   document.getElementById("exp-make").addEventListener("change", syncMake);
   syncMake();
@@ -1335,6 +1349,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
     } else if (s.state === "copied") {
       text = "✓ Copied to " + s.target + ". Close the app and open it again to finish: it then runs " +
         "from there and removes the old copy from " + s.folder + ". Downloads stay paused until then.";
+    } else if (s.state === "chosen") {
+      text = "✓ Close the app and open it again: it then runs from the library in " + s.target +
+        ". Nothing was copied, and the library in " + s.folder + " stays where it is.";
     } else if (s.state === "failed") {
       text = "The move did not happen: " + (s.error || "unknown error") + ". The library is unchanged in " +
         s.folder + ". Click Move library again to carry on from what was already copied.";
@@ -1359,8 +1376,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
         "browser profile, logs) were not brought along; they are made again as needed.";
     }
     line.textContent = text;
-    document.getElementById("move-btn").disabled = busyNow || s.state === "copied";
-    document.getElementById("move-cancel").classList.toggle("hidden", !(busyNow || s.state === "copied"));
+    var waiting = s.state === "copied" || s.state === "chosen";
+    document.getElementById("move-btn").disabled = busyNow || waiting;
+    document.getElementById("move-use").disabled = busyNow || waiting;
+    document.getElementById("move-cancel").classList.toggle("hidden", !(busyNow || waiting));
     var watching = busyNow || (old && old.state === "removing");
     if (watching && !moveTimer) moveTimer = setInterval(loadMove, 2000);
     if (!watching && moveTimer) { clearInterval(moveTimer); moveTimer = null; }
@@ -1378,6 +1397,17 @@ _TOOLS_HTML = """<!DOCTYPE html>
     api("/admin/library/move", { method: "POST", body: JSON.stringify({ folder: folder }) })
       .then(function (s) { log("Moving the library to " + s.target + "…", "log-info"); showMove(s); })
       .catch(function (e) { log("Could not start the move: " + e.message, "log-err"); });
+  });
+  document.getElementById("move-use").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var folder = document.getElementById("move-folder").value.trim();
+    if (!folder) { log("Type the folder the library is in, for example F:\\\\Novels.", "log-err"); return; }
+    if (!confirm("Use the library that is already in " + folder + "?\\n\\nNothing is copied. After you " +
+        "close the app and open it again it runs from there, and the library it uses now is left " +
+        "where it is.")) return;
+    api("/admin/library/use", { method: "POST", body: JSON.stringify({ folder: folder }) })
+      .then(function (s) { log("The next start uses the library in " + s.target + ".", "log-ok"); showMove(s); })
+      .catch(function (e) { log("Could not use that folder: " + e.message, "log-err"); });
   });
   document.getElementById("move-cancel").addEventListener("click", function () {
     if (!requireAuth()) return;

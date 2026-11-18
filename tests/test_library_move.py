@@ -337,6 +337,26 @@ class SwitchTests(unittest.TestCase):
         ):
             self.assertEqual(resolve(self.old), self.old)
 
+    def test_a_library_in_use_is_never_moved_over(self) -> None:
+        # After a reinstall the app starts empty. Moved "to" the drive the real
+        # library is on, it would have put its empty database over that one.
+        self.copied()
+        self.assertEqual(resolve(self.old), self.new)
+        fresh = Path(self.temp.name) / "reinstalled" / "LNCrawl"
+        library(fresh)
+        with self.assertRaisesRegex(ValueError, "already holds a library"):
+            choose_target(fresh, self.new)
+        with self.assertRaisesRegex(ValueError, "already holds a library"):
+            choose_target(fresh, self.new.parent)  # nor into the folder above it
+
+    def test_a_move_that_was_not_finished_can_be_tried_again(self) -> None:
+        self.copied()
+        self.locked("config.json")
+        with patch.object(sys, "stderr", MagicMock()):
+            self.assertEqual(resolve(self.old), self.old)
+        self.assertTrue((self.new / "sqlite.db").is_file())  # the database had arrived
+        self.assertEqual(choose_target(self.old, self.new), self.new)
+
     def test_a_library_moved_once_can_be_moved_again(self) -> None:
         self.copied()
         resolve(self.old)  # now in self.new
@@ -622,6 +642,54 @@ class ServiceTests(unittest.TestCase):
         service.on_startup()
         status = self.wait(lambda s: (s["old_copy"] or {}).get("state") == "done", service)
         self.assertEqual(status["left_behind"], 1)
+
+    def test_a_library_already_on_another_drive_is_used_from_the_next_start(self) -> None:
+        # The laptop was wiped; the library is on the drive it was moved to.
+        target = self.moved()
+        self.assertEqual(resolve(self.old), target)
+        fresh = Path(self.temp.name) / "reinstalled" / "LNCrawl"
+        library(fresh)
+        before = tree(target)
+        self.old = fresh  # the folder the reinstalled app starts in
+        service = self.app(fresh)
+        status = service.use_existing(str(target))
+        self.assertEqual(status["state"], "chosen")
+        self.assertEqual(status["target"], str(target))
+        self.assertEqual(resolve(fresh), target)  # the restart
+        self.assertEqual(tree(target), before)  # nothing was copied over it
+        self.assertTrue((fresh / "sqlite.db").is_file())  # and nothing removed
+        self.scheduler.stop.assert_not_called()
+
+    def test_choosing_a_library_can_be_undone_before_the_restart(self) -> None:
+        target = self.moved()
+        self.assertEqual(resolve(self.old), target)
+        fresh = Path(self.temp.name) / "reinstalled" / "LNCrawl"
+        library(fresh)
+        self.old = fresh
+        service = self.app(fresh)
+        service.use_existing(str(target))
+        self.assertEqual(service.cancel()["state"], "idle")
+        self.assertEqual(resolve(fresh), fresh)
+
+    def test_a_folder_without_a_library_is_refused_with_the_reason(self) -> None:
+        empty = Path(self.temp.name) / "empty"
+        empty.mkdir()
+        with self.assertRaisesRegex(ValueError, "no library in it"):
+            self.service.use_existing(str(empty))
+        with self.assertRaisesRegex(ValueError, "cannot be found"):
+            self.service.use_existing(str(Path(self.temp.name) / "nowhere"))
+        with self.assertRaisesRegex(ValueError, "in use now"):
+            self.service.use_existing(str(self.old))
+        self.assertEqual(read_marker(self.old), {})
+
+    def test_a_library_taken_up_where_it_was_found_is_marked_as_in_use(self) -> None:
+        found = Path(self.temp.name) / "ssd" / "Novels"
+        library(found)
+        self.service.use_existing(str(found))
+        self.assertEqual(resolve(self.old), found)
+        self.app(found).on_startup()
+        with self.assertRaisesRegex(ValueError, "already holds a library"):
+            choose_target(self.old, found)
 
     def test_after_the_restart_the_old_copy_is_removed(self) -> None:
         target = self.moved()
