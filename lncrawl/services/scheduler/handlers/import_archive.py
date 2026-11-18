@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 import time
 
 from ....context import ctx
@@ -34,7 +35,10 @@ class ImportArchiveHandler(BaseHandler):
         if not archive_file:
             raise HandlerException("No archive was given to import")
 
-        path = ctx.files.resolve(archive_file)
+        # a file imported where it is on this computer is named by its full path;
+        # an upload by its place in the library
+        given = Path(archive_file)
+        path = given if given.is_absolute() else ctx.files.resolve(archive_file)
         if not path.is_file():
             raise HandlerException(f"The uploaded archive is no longer available: {archive_name}")
 
@@ -51,6 +55,8 @@ class ImportArchiveHandler(BaseHandler):
             last_report = now
             self._set_extra(
                 current=member,
+                books=stats.books,
+                books_read=stats.read,
                 imported=stats.novels,
                 updated=stats.updated,
                 chapters=stats.chapters,
@@ -68,11 +74,13 @@ class ImportArchiveHandler(BaseHandler):
         finally:
             # The novels are in the library now and each file is kept as its own
             # artifact, so the upload itself is a second copy. Airgapped machines
-            # are usually the ones short of disk, so don't leave it behind.
-            try:
-                path.unlink(missing_ok=True)
-            except Exception as e:
-                logger.warning(f"Could not remove the uploaded archive {archive_name}: {e}")
+            # are usually the ones short of disk, so don't leave it behind. A file
+            # imported where it already was on this computer is the user's own.
+            if not self.job.extra.get("keep_archive"):
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning(f"Could not remove the uploaded archive {archive_name}: {e}")
 
         if not stats.novels and not stats.updated:
             reason = ", ".join(f"{n}× {r}" for r, n in stats.reasons.items())
@@ -87,6 +95,8 @@ class ImportArchiveHandler(BaseHandler):
             updated=stats.updated,
             chapters=stats.chapters,
             failed=stats.failed,
+            books=stats.books,
+            books_read=stats.read,
             fail_reasons=[{"reason": r, "count": n} for r, n in stats.reasons.items()],
             archive_name=archive_name,
             summary=(

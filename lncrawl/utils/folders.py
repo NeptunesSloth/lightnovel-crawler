@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..relocation import drive_roots, is_library
 
@@ -65,9 +65,10 @@ def places() -> List[Dict[str, Any]]:
     return found
 
 
-def list_folder(path: Optional[str]) -> Dict[str, Any]:
+def list_folder(path: Optional[str], files: Tuple[str, ...] = ()) -> Dict[str, Any]:
     """The folders in ``path``, or the places to start from when it is empty.
 
+    With ``files`` (suffixes such as ".zip"), the files ending so as well.
     ValueError says why a path cannot be listed.
     """
     if not path or not path.strip():
@@ -82,13 +83,18 @@ def list_folder(path: Optional[str]) -> Dict[str, Any]:
     except OSError as error:
         raise ValueError(f"{folder} cannot be opened: {error.strerror or error}") from error
     folders: List[Dict[str, Any]] = []
+    found: List[Dict[str, Any]] = []
+    wanted = tuple(suffix.lower() for suffix in files)
     for entry in sorted(entries, key=lambda item: item.name.casefold()):
         try:
-            if not entry.is_dir() or _hidden(entry):
+            if _hidden(entry):
                 continue
+            if entry.is_dir():
+                folders.append({"name": entry.name, "path": entry.path})
+            elif wanted and entry.name.lower().endswith(wanted) and entry.is_file():
+                found.append({"name": entry.name, "path": entry.path, "size": entry.stat().st_size})
         except OSError:
             continue
-        folders.append({"name": entry.name, "path": entry.path})
     more = max(0, len(folders) - MOST_FOLDERS)
     folders = folders[:MOST_FOLDERS]
     for item in folders:
@@ -99,6 +105,7 @@ def list_folder(path: Optional[str]) -> Dict[str, Any]:
         "parent": str(parent) if parent else None,
         "library": is_library(folder),
         "folders": folders,
+        "files": found[:MOST_FOLDERS],
         "more": more,
         "places": None,
         **_space(folder),

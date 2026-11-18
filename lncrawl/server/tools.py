@@ -451,6 +451,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
            accept=".zip,.epub,.cbz,.pdf,.docx,.mobi,.azw3,.fb2,.rtf,.txt"
            style="display:none" />
     <div id="import-status" class="muted"></div>
+    <h3>A big ZIP already on this computer</h3>
+    <p class="hint">Choose it here instead of dropping it: it is read where it is, with nothing
+      uploaded or copied, however big it is. The library's drive needs about twice its size free.</p>
+    <button id="import-local" class="secondary" style="margin-top:0">Choose a file on this computer…</button>
   </section>
 
   <section class="pane" data-pane="zip">
@@ -712,6 +716,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
         .then(function (u) {
           document.getElementById("who").textContent = (u && (u.email || u.name)) || "user";
           window._lncrawlUserId = u && u.id;
+          window._lncrawlIsAdmin = !!(u && u.role === "admin");
           loadActiveExports(u && u.id);
           loadActiveDiscoveries(u && u.id);
           loadLibrary(u && u.id);
@@ -1397,16 +1402,19 @@ _TOOLS_HTML = """<!DOCTYPE html>
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
         var ex = job.extra || {};
-        if (isActive(job.status)) {
+        var status = statusName(job.status);  // a number from the API, a name here
+        if (isActive(status)) {
           var seen = (ex.imported || 0) + (ex.updated || 0);
           importStatus.textContent = name + ": " +
-            (ex.current ? "reading " + ex.current : "starting") +
+            (ex.books ? "book " + Math.min(ex.books, (ex.books_read || 0) + 1) + " of " + ex.books +
+              " (" + Math.floor(100 * (ex.books_read || 0) / ex.books) + "%)" + (ex.current ? ", " + ex.current : "")
+              : (ex.current ? "reading " + ex.current : "starting")) +
             " — " + seen + " novel(s), " + (ex.chapters || 0) + " chapters so far";
           later(function () { pollImport(id, name, 0); }, 2000);
           return;
         }
         importStatus.textContent = "";
-        if (job.status === 2) {
+        if (status === "SUCCESS") {
           log("Imported " + name + ": " + (ex.imported || 0) + " new, " +
             (ex.updated || 0) + " updated, " + (ex.chapters || 0) + " chapters.", "log-ok");
           if (ex.failed) {
@@ -1429,10 +1437,26 @@ _TOOLS_HTML = """<!DOCTYPE html>
   // Each file goes up in a request of its own, one after another. Sending them
   // all in one request meant a single dropped connection or oversized file lost
   // every file after it, so a big drop only ever got a few novels in at a time.
+  // Bigger than this, an upload is copied twice on its way in and can fill the
+  // drive: an admin is shown how to import it where it is instead.
+  var BIG_UPLOAD = 2 * 1024 * 1024 * 1024;
   function uploadArchives(list) {
     if (!requireAuth()) return;
     var files = Array.prototype.slice.call(list || []);
     if (!files.length) return;
+    if (window._lncrawlIsAdmin) {
+      var big = files.filter(function (f) { return f.size > BIG_UPLOAD; });
+      if (big.length) {
+        files = files.filter(function (f) { return f.size <= BIG_UPLOAD; });
+        big.forEach(function (f) {
+          log(f.name + " is " + fmtSize(f.size) + ": too big to upload well (it would be copied twice " +
+            "on the way in). Find it in the window that opened to import it where it is.", "log-info");
+        });
+        chooseLocalFile("Find " + big[0].name + " (" + fmtSize(big[0].size) + ") and click it: " +
+          "it is imported where it is, with nothing copied.");
+        if (!files.length) return;
+      }
+    }
     log("Uploading " + files.length + " file(s), one at a time…", "log-info");
 
     var failed = 0;
@@ -1687,6 +1711,14 @@ _TOOLS_HTML = """<!DOCTYPE html>
   // ---- a folder picker for every folder box: walk the drives instead of typing ----
   var picker = document.getElementById("folder-picker");
   var pickerFor = null, pickerAt = null;
+  // choosing a file instead of a folder: which kinds, and what to do with it
+  var pickerFiles = null, pickerOnFile = null;
+  function pickerMode(files, onFile, title) {
+    pickerFiles = files; pickerOnFile = onFile;
+    document.getElementById("picker-title").textContent = title || "Choose a folder";
+    document.getElementById("picker-use").classList.toggle("hidden", !!files);
+    document.getElementById("picker-new-btn").classList.toggle("hidden", !!files);
+  }
   function pickerRow(glyph, label, meta, tag, open) {
     var b = document.createElement("button");
     b.type = "button"; b.setAttribute("role", "listitem");
@@ -1732,7 +1764,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var list = document.getElementById("picker-list");
     var note = document.getElementById("picker-note");
     list.innerHTML = "<div class='empty'>Looking…</div>";
-    var query = path ? "?path=" + encodeURIComponent(path) : "";
+    var query = "?path=" + encodeURIComponent(path || "") +
+      (pickerFiles ? "&files=" + encodeURIComponent(pickerFiles) : "");
     api("/admin/folders" + query, { method: "GET" }).then(function (r) {
       pickerAt = r.path;
       pickerTrail(r.path);
@@ -1753,9 +1786,16 @@ _TOOLS_HTML = """<!DOCTYPE html>
       r.folders.forEach(function (f) {
         list.appendChild(pickerRow("▸", f.name, "", f.library ? "library" : "", function () { pickerOpen(f.path); }));
       });
-      if (!r.folders.length) {
+      (r.files || []).forEach(function (f) {
+        list.appendChild(pickerRow("▤", f.name, fmtSize(f.size) || "0 MB", "", function () {
+          picker.close();
+          if (pickerOnFile) pickerOnFile(f.path, f.size);
+        }));
+      });
+      if (!r.folders.length && !(r.files || []).length) {
         var e = document.createElement("div"); e.className = "empty";
-        e.textContent = "No folders in here. Use this one, or make a new folder.";
+        e.textContent = pickerFiles ? "No folders or files to import in here."
+          : "No folders in here. Use this one, or make a new folder.";
         list.appendChild(e);
       }
       if (r.more) {
@@ -1777,12 +1817,35 @@ _TOOLS_HTML = """<!DOCTYPE html>
     button.addEventListener("click", function () {
       if (!requireAuth()) return;
       pickerFor = document.getElementById(button.getAttribute("data-for"));
+      pickerMode(null, null, "Choose a folder");
       document.getElementById("picker-new").classList.add("hidden");
       pickerAt = null;
       if (typeof picker.showModal === "function") picker.showModal(); else picker.setAttribute("open", "");
       pickerOpen(pickerFor.value.trim() || null);
     });
   });
+  // Import a file where it is on this computer: nothing uploaded or copied.
+  var IMPORTABLE = ".zip,.epub,.cbz,.pdf,.docx,.mobi,.azw3,.fb2,.rtf,.txt";
+  function importLocal(path, size) {
+    var name = path.split(BS).join("/").split("/").pop();
+    api("/admin/import-file", { method: "POST", body: JSON.stringify({ path: path }) })
+      .then(function (job) {
+        log("Importing " + name + " (" + fmtSize(size) + ") from where it is…", "log-info");
+        pollImport(job.id, name, 0);
+      })
+      .catch(function (e) { log("Could not import " + name + ": " + e.message, "log-err"); });
+  }
+  function chooseLocalFile(note) {
+    if (!requireAuth()) return;
+    pickerMode(IMPORTABLE, importLocal, "Choose a file to import");
+    document.getElementById("picker-new").classList.add("hidden");
+    pickerAt = null;
+    if (typeof picker.showModal === "function") picker.showModal(); else picker.setAttribute("open", "");
+    pickerOpen(null);
+    if (note) document.getElementById("picker-note").textContent = note;
+  }
+  document.getElementById("import-local").addEventListener("click", function () { chooseLocalFile(); });
+
   document.getElementById("picker-use").addEventListener("click", function () {
     if (pickerFor && pickerAt) {
       pickerFor.value = pickerAt;

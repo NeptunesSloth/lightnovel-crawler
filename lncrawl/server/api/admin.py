@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 from tempfile import NamedTemporaryFile
 from threading import Event
@@ -7,14 +8,15 @@ import time
 from typing import Any, Callable, Dict, List, Literal, Optional, Union
 import zipfile
 
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, Query, Security
 from fastapi.responses import FileResponse
 from sqlalchemy.engine import make_url
 from starlette.background import BackgroundTask
 
 from ...context import ctx
+from ...dao import User
 from ...exceptions import ServerErrors
-from ...utils.file_tools import writable_folder
+from ...utils.file_tools import format_size, writable_folder
 from ..models import (
     ConfigSection,
     ConfigUpdateRequest,
@@ -26,12 +28,14 @@ from ..models.activity import (
     TopUserActivity,
 )
 from ..models.library import (
+    ImportFileRequest,
     LibraryExportRequest,
     LibraryMoveRequest,
     LibraryUseRequest,
     LibraryZipRequest,
     NewFolderRequest,
 )
+from ..security import ensure_admin
 
 # The root router
 router = APIRouter()
@@ -211,14 +215,64 @@ def library_location() -> Dict[str, Any]:
     return ctx.library_move.status()
 
 
+# Room wanted on the library's drive for an import, per byte of the file: each
+# book is kept as it came as well as read into chapters and pages.
+IMPORT_ROOM = 2.0
+
+
+@router.post("/import-file", summary="Import a ZIP or e-book from this computer, where it is")
+def import_file(
+    body: ImportFileRequest = Body(),
+    user: User = Security(ensure_admin),
+) -> Any:
+    """Import a file already on this computer without uploading it.
+
+    An upload of a library ZIP of hundreds of gigabytes was copied twice on its
+    way in (by the web server to the system's temp folder, then into the
+    library) and refused past 8 GB. This reads the file where it is, and leaves
+    it there.
+    """
+    from ...services.importer import format_of
+
+    file = Path(body.path.strip()).expanduser()
+    if not file.is_absolute() or not file.is_file():
+        raise ServerErrors.invalid_input.with_extra(f"{file} cannot be found")
+    if file.suffix.lower() != ".zip" and format_of(file.name) is None:
+        raise ServerErrors.invalid_input.with_extra(f"{file.name} is not a ZIP or an e-book")
+    size = file.stat().st_size
+    library = ctx.config.app.app_dir
+    try:
+        free = shutil.disk_usage(library).free
+    except OSError:
+        free = None
+    need = int(size * IMPORT_ROOM) + 1024 * 1024 * 1024
+    if free is not None and free < need:
+        raise ServerErrors.invalid_input.with_extra(
+            f"The library's drive ({library}) has {format_size(free)} free, and importing "
+            f"{file.name} ({format_size(size)}) needs about {format_size(need)}. Move the "
+            "library to a bigger drive first (Library and drives): an empty one moves in moments"
+        )
+    return ctx.jobs.import_archive(
+        user,
+        archive_file=str(file),
+        archive_name=file.name,
+        archive_size=size,
+        keep_archive=True,
+    )
+
+
 @router.get("/folders", summary="The folders in a folder on this computer, to pick one")
 def list_folders(
     path: Optional[str] = Query(default=None, description="Blank: the drives and own folders"),
+    files: Optional[str] = Query(
+        default=None, description="List files ending so as well, e.g. .zip,.epub"
+    ),
 ) -> Dict[str, Any]:
     from ...utils.folders import list_folder
 
+    suffixes = tuple(s.strip() for s in (files or "").split(",") if s.strip())
     try:
-        return list_folder(path)
+        return list_folder(path, suffixes)
     except ValueError as error:
         raise ServerErrors.invalid_input.with_extra(str(error)) from error
 
