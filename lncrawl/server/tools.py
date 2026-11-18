@@ -1547,7 +1547,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
     } else if (old && old.state === "done") {
       text = "The library is now in " + s.folder + ". The old copy is gone from " + old.path +
         " (" + (fmtSize(old.freed) || "0 MB") + " freed" +
-        (old.left ? "; " + count(old.left) + " file(s) the new folder does not have were left there" : "") + ").";
+        (old.left ? "; " + count(old.left) + " file(s) the new folder does not have were left there" : "") +
+        (old.in_use ? "; " + count(old.in_use) + " file(s) still in use are removed the next time the app starts" : "") +
+        ").";
     } else if (old && old.state === "failed") {
       text = "The library is now in " + s.folder + ". The old copy in " + old.path +
         " could not be removed (" + (old.error || "unknown error") + "); it is safe to delete by hand.";

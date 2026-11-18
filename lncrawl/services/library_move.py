@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 import shutil
 from threading import Event, Lock, Thread
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..context import ctx
 from ..relocation import (
@@ -342,6 +342,10 @@ class LibraryMoveService:
                 with self._lock:
                     self._paused = True
                 ctx.scheduler.stop()
+            # an idle crawler can keep a browser open on its profile in the library,
+            # and Windows will not let a file another program has locked be read
+            if "crawler" in ctx.__dict__:
+                ctx.crawler.close()
             with self._lock:
                 self._state = "measuring"
             # Each file takes whole storage blocks on the new drive, and on a big
@@ -545,7 +549,11 @@ class LibraryMoveService:
     def _remove_old(
         self, base: Path, old: Path, current: Path, stop: Event, keep: Tuple[str, ...] = ()
     ) -> None:
-        """Remove the old copy; what ``keep`` names is left for the next start to remove."""
+        """Remove the old copy; what ``keep`` names is left for the next start to remove.
+
+        So is a file that something still has open (Windows will not delete it):
+        the next start tries again, until the old copy is all gone.
+        """
 
         def freed(files: int, size: int) -> None:
             with self._lock:
@@ -553,19 +561,35 @@ class LibraryMoveService:
                 self._old["files"] += files
 
         with self._lock:
-            self._old = {"state": "removing", "path": str(old), "freed": 0, "files": 0, "left": 0}
+            self._old = {
+                "state": "removing",
+                "path": str(old),
+                "freed": 0,
+                "files": 0,
+                "left": 0,
+                "in_use": 0,
+            }
         try:
-            _, left = remove_old_copy(old, current, freed, stop, keep=keep)
-            if not keep:
+            in_use: List[str] = []
+            _, left = remove_old_copy(old, current, freed, stop, keep=keep, in_use=in_use)
+            later = bool(keep or in_use)  # some of it can only go at the next start
+            if not later:
                 cleanup_done(base)
-            if old != base and not keep:
+            if old != base and not later:
                 try:
                     os.rmdir(old)  # only if nothing is left in it
                 except OSError:
                     pass
+            for name in in_use[:20]:
+                _note(current, f"Still in use, removed at the next start: {old / name}")
+            if len(in_use) > 20:
+                _note(current, f"... and {len(in_use) - 20} more still in use")
             with self._lock:
-                self._old.update(state="done", left=left)
-            logger.info(f"Old copy of the library removed from {old} ({left} file(s) left there)")
+                self._old.update(state="done", left=left, in_use=len(in_use))
+            logger.info(
+                f"Old copy of the library removed from {old} ({left} file(s) left there, "
+                f"{len(in_use)} still in use)"
+            )
         except MoveStopped:
             pass  # the app is closing: the next start carries on
         except Exception as error:

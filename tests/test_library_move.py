@@ -420,6 +420,16 @@ class SwitchTests(unittest.TestCase):
         ):
             self.assertEqual(resolve(self.old), self.new)
 
+    def test_a_locked_file_in_the_site_browsers_profile_does_not_stop_the_move(self) -> None:
+        locked = self.old / "webdriver" / "Default" / "Cookies"
+        locked.parent.mkdir(parents=True)
+        locked.write_bytes(b"cookies")
+        self.copied()
+        self.assertFalse((self.new / "webdriver").exists())  # not copied with the rest
+        self.locked("Cookies")
+        self.assertEqual(resolve(self.old), self.new)
+        self.assertEqual(read_marker(self.old)["left_behind"], 1)
+
     def test_a_library_moved_once_can_be_moved_again(self) -> None:
         self.copied()
         resolve(self.old)  # now in self.new
@@ -548,6 +558,22 @@ class RemoveOldCopyTests(unittest.TestCase):
         self.assertEqual((new / "sources/en/s/site.py").read_bytes(), b"crawler")
         self.assertEqual(remove_old_copy(old, new, nothing)[1], 0)
         self.assertEqual(sorted(p.name for p in old.iterdir()), [MARKER])
+
+    def test_a_file_still_in_use_is_left_for_later_not_counted_as_missing(self) -> None:
+        # On Windows a file something has open cannot be deleted.
+        real = relocation._delete
+
+        def delete(path: str) -> None:
+            if path.endswith("000001.zst"):
+                raise PermissionError(13, "The process cannot access the file", path)
+            real(path)
+
+        in_use: list = []
+        with patch.object(relocation, "_delete", delete):
+            _, left = remove_old_copy(self.old, self.new, nothing, in_use=in_use)
+        self.assertEqual(left, 0)
+        self.assertEqual(in_use, ["novels/a/chapters/000001.zst"])
+        self.assertTrue((self.old / "novels/a/chapters/000001.zst").is_file())
 
     def test_a_file_the_new_folder_does_not_have_is_kept(self) -> None:
         late = self.old / "novels/b/chapters/000001.zst"  # downloaded after the copy
@@ -860,6 +886,40 @@ class ServiceTests(unittest.TestCase):
             usage.free = 1 * gb
             self.assertTrue(self.service.check_space())  # low again: said again
             self.assertEqual(notify.call_count, 2)
+
+    def test_a_file_still_in_use_is_removed_at_the_next_start(self) -> None:
+        target = self.moved()
+        self.assertEqual(resolve(self.old), target)  # the restart
+        real = relocation._delete
+
+        def delete(path: str) -> None:
+            if path.endswith("cover.jpg"):
+                raise PermissionError(13, "The process cannot access the file", path)
+            real(path)
+
+        restarted = self.app(target)
+        with patch.object(relocation, "_delete", delete):
+            restarted.on_startup()
+            status = self.wait(lambda s: (s["old_copy"] or {}).get("state") == "done", restarted)
+        self.assertEqual(status["old_copy"]["in_use"], 1)
+        self.assertEqual(status["old_copy"]["left"], 0)
+        self.assertTrue(read_marker(self.old)["cleanup"])  # to be tried again
+        self.assertIn(
+            "Still in use, removed at the next start", (target / relocation.MOVE_LOG).read_text()
+        )
+
+        again = self.app(target)  # the start after, with nothing holding it now
+        again.on_startup()
+        status = self.wait(lambda s: (s["old_copy"] or {}).get("state") == "done", again)
+        self.assertEqual(status["old_copy"]["in_use"], 0)
+        self.assertEqual(sorted(p.name for p in self.old.iterdir()), [MARKER])
+        self.assertEqual(read_marker(self.old), {"path": str(target), "state": "moved"})
+
+    def test_an_idle_browser_is_closed_before_the_copy_reads_its_profile(self) -> None:
+        crawler = SimpleNamespace(close=MagicMock())
+        self.module.ctx.crawler = crawler  # the app has crawlers in its pool
+        self.moved()
+        crawler.close.assert_called_once()
 
     def test_after_the_restart_the_old_copy_is_removed(self) -> None:
         target = self.moved()

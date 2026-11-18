@@ -56,6 +56,7 @@ LATE = (
     *_DATABASE_FILES,
     "config.json",
     "app-browser",
+    "webdriver",  # the browser some sites are read with: a profile, made again
     "scraper",
     "sources",
     "logs",
@@ -863,12 +864,17 @@ def finish_database(source: Path, target: Path, digests: List[bytes]) -> int:
 # ---------------------------------------------------------------------------- #
 
 
+def _delete(path: str) -> None:
+    os.unlink(path)
+
+
 def remove_old_copy(
     old: Path,
     new: Path,
     progress: Progress,
     stop: Optional[Event] = None,
     keep: Tuple[str, ...] = (),
+    in_use: Optional[List[str]] = None,
 ) -> Tuple[int, int]:
     """Delete from ``old`` what ``new`` now holds; (bytes freed, files left).
 
@@ -877,6 +883,10 @@ def remove_old_copy(
     copied at the switch (`LATE`): the app has been running from those since, so
     the new ones have moved on and the old ones only need the new to be there.
     What ``keep`` names, at the top of ``old``, is not touched or counted.
+
+    A file that cannot be deleted (on Windows, one something still has open:
+    a download being served, a virus scan) is added to ``in_use`` and not
+    counted as left: it is to go, just not yet.
     """
     here, there = _key(old), _key(new)
     if here == there or there.startswith(here + os.sep) or here.startswith(there + os.sep):
@@ -901,8 +911,13 @@ def remove_old_copy(
                 gone = False
         if gone:
             try:
-                os.unlink(entry.path)
+                _delete(entry.path)
+            except FileNotFoundError:
+                pass
             except OSError:
+                if in_use is not None:
+                    in_use.append(relative)
+                    continue
                 gone = False
         if gone:
             freed += size
