@@ -691,6 +691,29 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already holds a library"):
             choose_target(self.old, found)
 
+    def test_libraries_on_the_drives_are_found_without_typing_a_path(self) -> None:
+        (self.ssd / "Movies").mkdir(parents=True)
+        target = self.moved()  # into ssd/LNCrawl, beside the other things on that drive
+        self.assertEqual(resolve(self.old), target)  # the restart: the database is there now
+        elsewhere = Path(self.temp.name) / "usb"
+        (elsewhere / "sqlite.db").parent.mkdir(parents=True)
+        (elsewhere / "sqlite.db").write_bytes(b"some other program's")  # not a library
+        with patch.object(self.module, "drive_roots", return_value=[self.ssd, elsewhere]):
+            places = self.service.places()
+        self.assertEqual([found["path"] for found in places["libraries"]], [str(target)])
+        self.assertEqual(
+            [drive["path"] for drive in places["drives"]], [str(self.ssd), str(elsewhere)]
+        )
+        self.assertGreater(places["drives"][0]["free"], 0)
+        self.assertFalse(places["empty"])
+
+    def test_a_library_with_no_novels_left_says_so(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.old / "novels")
+        with patch.object(self.module, "drive_roots", return_value=[]):
+            self.assertTrue(self.service.places()["empty"])
+
     def test_after_the_restart_the_old_copy_is_removed(self) -> None:
         target = self.moved()
         self.assertEqual(resolve(self.old), target)  # the restart

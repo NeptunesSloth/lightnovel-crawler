@@ -229,6 +229,68 @@ def choose_existing(current: Path, folder: Path) -> Path:
     return folder
 
 
+def drive_roots() -> List[Path]:
+    """The drives a library could be on: every drive letter, or what is mounted for the user."""
+    if os.name == "nt":
+        import string
+
+        return [
+            Path(f"{letter}:\\")
+            for letter in string.ascii_uppercase
+            if os.path.isdir(f"{letter}:\\")
+        ]
+    roots: List[Path] = []
+    for parent in ("/Volumes", "/media", "/mnt", "/run/media"):
+        try:
+            entries = sorted(os.scandir(parent), key=lambda entry: entry.name)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir() and os.path.ismount(entry.path):
+                    roots.append(Path(entry.path))
+            except OSError:
+                continue
+    return roots
+
+
+def _is_library(folder: Path) -> bool:
+    try:
+        return (folder / DATABASE).is_file() and (
+            (folder / STAMP).is_file() or (folder / "novels").is_dir()
+        )
+    except OSError:
+        return False
+
+
+def find_libraries(roots: List[Path], current: Path, limit: int = 500) -> List[Path]:
+    """Libraries on these drives other than ``current``: a drive itself, or a folder at its top.
+
+    So that nobody has to know or type where theirs is. Only the top of each
+    drive is looked at (``limit`` folders of it), which is where a move puts one.
+    """
+    found: List[Path] = []
+    here = _key(current)
+    for root in roots:
+        candidates = [root]
+        try:
+            with os.scandir(root) as entries:
+                for index, entry in enumerate(entries):
+                    if index >= limit:
+                        break
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            candidates.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+        for folder in candidates:
+            if _key(folder) != here and _is_library(folder):
+                found.append(folder)
+    return found
+
+
 def point_at(base: Path, folder: Path) -> None:
     """From the next start, use the library in ``folder``. Nothing is moved or removed."""
     if _key(folder) == _key(base):

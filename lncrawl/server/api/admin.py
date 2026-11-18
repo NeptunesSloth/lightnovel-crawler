@@ -144,6 +144,11 @@ def library_location() -> Dict[str, Any]:
     return ctx.library_move.status()
 
 
+@router.get("/library/places", summary="Drives the library could go to, and libraries on them")
+def library_places() -> Dict[str, Any]:
+    return ctx.library_move.places()
+
+
 @router.post("/library/move", summary="Move the whole library to a folder on another drive")
 def move_library(body: LibraryMoveRequest = Body()) -> Dict[str, Any]:
     """Copy the library to ``folder`` while downloads are paused.

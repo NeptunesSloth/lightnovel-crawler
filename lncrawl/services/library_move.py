@@ -28,7 +28,9 @@ from ..relocation import (
     cleanup_done,
     copy_done,
     copy_tree,
+    drive_roots,
     failure_shown,
+    find_libraries,
     forget_move,
     holds_library,
     measure,
@@ -117,6 +119,39 @@ class LibraryMoveService:
             name="library-move",
         ).start()
         return self.status()
+
+    def places(self) -> Dict[str, Any]:
+        """The drives the library could go to, and libraries already on them, to pick from."""
+        current = ctx.config.app.app_dir
+        here = os.path.splitdrive(os.path.abspath(current))[0].lower()
+        roots = drive_roots()
+        drives = []
+        for root in roots:
+            try:
+                usage = shutil.disk_usage(root)
+            except OSError:
+                continue  # an empty card reader, a drive that has gone to sleep for good
+            letter = os.path.splitdrive(str(root))[0].lower()
+            drives.append(
+                {
+                    "path": str(root),
+                    "free": usage.free,
+                    "total": usage.total,
+                    "current": bool(here) and letter == here,
+                }
+            )
+        libraries = []
+        for folder in find_libraries(roots, current):
+            try:
+                used = (folder / DATABASE).stat().st_mtime
+            except OSError:
+                used = None
+            libraries.append({"path": str(folder), "last_used": used})
+        try:
+            empty = not any((current / "novels").iterdir())
+        except OSError:
+            empty = True
+        return {"drives": drives, "libraries": libraries, "empty": empty}
 
     def _check_free(self) -> None:
         """Refuse (ValueError) while a move or the removal after one is going. Lock held."""
