@@ -392,9 +392,13 @@ class WindowedSiteTests(unittest.TestCase):
 class _SlowSite(BaseHTTPRequestHandler):
     """Takes a moment to answer, and notes how many requests it had at once."""
 
-    lock = threading.Lock()
+    lock = threading.Condition()
     now = {"image": 0, "page": 0}
     most = {"image": 0, "page": 0}
+    # Images are held until this many are being answered at once (or a couple
+    # of seconds pass). Answered after a fixed moment, a busy machine opened its
+    # eighth connection only after the first had been answered, and counted 7.
+    hold_images_for = 0
 
     def do_GET(self) -> None:
         cls = type(self)
@@ -402,7 +406,10 @@ class _SlowSite(BaseHTTPRequestHandler):
         with cls.lock:
             cls.now[kind] += 1
             cls.most[kind] = max(cls.most[kind], cls.now[kind])
-        time.sleep(0.15)
+            cls.lock.notify_all()
+            if kind == "image":
+                cls.lock.wait_for(lambda: cls.most["image"] >= cls.hold_images_for, timeout=2)
+        time.sleep(0.15)  # long enough for one connection too many to be seen
         with cls.lock:
             cls.now[kind] -= 1
         body = b"<html><body><p>" + b"text " * 50 + b"</p></body></html>"
@@ -425,6 +432,7 @@ class ImageConnectionTests(unittest.TestCase):
         os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
         _SlowSite.now = {"image": 0, "page": 0}
         _SlowSite.most = {"image": 0, "page": 0}
+        _SlowSite.hold_images_for = scraping.IMAGE_CONNECTIONS
         server = ThreadingHTTPServer(("127.0.0.1", 0), _SlowSite)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.shutdown)
