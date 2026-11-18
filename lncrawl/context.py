@@ -235,6 +235,12 @@ class __AppContext__:
         return LibraryMoveService()
 
     @cached_property
+    def library_zip(self):
+        from .services.library_export import LibraryZipJob
+
+        return LibraryZipJob()
+
+    @cached_property
     def job_notifier(self):
         from .services.notifications import JobNotificationService
 
@@ -251,6 +257,8 @@ class __AppContext__:
         self.__ready = False
         if "library_move" in self.__dict__:
             self.library_move.close()
+        if "library_zip" in self.__dict__:
+            self.library_zip.close()
         if "scheduler" in self.__dict__:
             self.scheduler.stop()
         if "download_workers" in self.__dict__:

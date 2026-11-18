@@ -3,12 +3,19 @@ import importlib
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zipfile
 
-from lncrawl.services.library_export import build_library_zip
+from lncrawl.services.library_export import (
+    LibraryZipJob,
+    ZipStopped,
+    _book_files,
+    build_library_zip,
+)
 
 
 def ebook(text):
@@ -202,6 +209,122 @@ class FullyDownloadedOnlyTests(LibraryExportByNovelTests):
         self.assertEqual((count, names), (0, []))
 
 
+class FasterLibraryZipTests(LibraryExportByNovelTests):
+    """A library of hundreds of gigabytes on an external drive: hours with nothing on screen."""
+
+    def test_only_book_folders_are_looked_through(self):
+        self.save("novels/a/artifacts/epub/A.epub", novel_epub("A", "https://s.com/a", 1))
+        self.save("novels/b/B.epub", novel_epub("B", "https://s.com/b", 1))
+        for page in range(50):  # a manga's pages, and a stray book among its chapters
+            self.save(f"novels/c/images/{page:05}.jpg", b"jpg")
+        self.save("novels/c/chapters/Stray.epub", novel_epub("Stray", "https://s.com/x", 1))
+        found = [p.relative_to(self.root).as_posix() for p in _book_files(self.root / "novels")]
+        self.assertEqual(found, ["novels/a/artifacts/epub/A.epub", "novels/b/B.epub"])
+
+    def test_copies_holding_the_same_files_are_one_book_whatever_their_zip_dates(self):
+        content = {"mimetype": "application/epub+zip", "chapter.xhtml": "the same story"}
+
+        def copy(when):
+            output = BytesIO()
+            with zipfile.ZipFile(output, "w") as archive:
+                for name, text in content.items():
+                    archive.writestr(zipfile.ZipInfo(name, date_time=when), text)
+            return output.getvalue()
+
+        self.save("novels/1/artifacts/Old.epub", copy((2020, 1, 1, 0, 0, 0)))
+        self.save("novels/2/artifacts/New.epub", copy((2026, 1, 1, 0, 0, 0)))
+        self.save("novels/3/artifacts/Other.epub", ebook("a different story"))
+        count, names, _ = self.books()
+        self.assertEqual(count, 2)
+
+    def test_a_book_is_not_read_through_to_tell_copies_apart(self):
+        self.save("novels/a/artifacts/A.epub", novel_epub("A", "https://s.com/a", 1))
+        self.save("novels/b/artifacts/B.epub", novel_epub("B", "https://s.com/b", 1))
+        read = []
+        real = Path.open
+
+        def watched(path, *args, **kwargs):
+            read.append(path.name)
+            return real(path, *args, **kwargs)
+
+        with patch.object(Path, "open", watched):
+            self.books()
+        # each opened once, to be written; telling them apart used their file lists
+        self.assertEqual(sorted(read), ["A.epub", "B.epub"])
+
+    def test_how_far_it_has_got_is_told_as_it_goes(self):
+        for name in ("A", "B", "C"):
+            self.save(
+                f"novels/{name}/artifacts/{name}.epub", novel_epub(name, f"https://s.com/{name}", 1)
+            )
+        heard = []
+        build_library_zip(
+            self.root,
+            self.root / "library.zip",
+            progress=lambda phase, done, total, **sizes: heard.append((phase, done, total)),
+        )
+        self.assertEqual(heard[0], ("finding", 0, 0))
+        self.assertIn(("reading", 3, 3), heard)
+        self.assertEqual(heard[-1], ("writing", 3, 3))
+
+    def test_asked_to_stop_it_stops(self):
+        self.save("novels/a/artifacts/A.epub", novel_epub("A", "https://s.com/a", 1))
+        stop = Event()
+        stop.set()
+        with self.assertRaises(ZipStopped):
+            build_library_zip(self.root, self.root / "library.zip", stop=stop)
+
+
+class LibraryZipJobTests(unittest.TestCase):
+    def wait(self, job, state):
+        deadline = time.monotonic() + 10
+        while job.status()["state"] != state and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return job.status()
+
+    def test_it_runs_in_the_background_and_says_how_it_ended(self):
+        job = LibraryZipJob()
+        release = Event()
+
+        def work(progress, stop):
+            progress("writing", 1, 2, size_done=10, size_total=20)
+            release.wait(5)
+            return {"file": "library.zip", "books": 2}
+
+        status = job.start(work)
+        self.assertEqual(status["state"], "running")
+        with self.assertRaises(ValueError):  # one at a time
+            job.start(work)
+        deadline = time.monotonic() + 5
+        while job.status()["phase"] != "writing" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(job.status()["size_done"], 10)
+        release.set()
+        status = self.wait(job, "done")
+        self.assertEqual((status["file"], status["books"]), ("library.zip", 2))
+
+    def test_it_can_be_stopped(self):
+        job = LibraryZipJob()
+
+        def work(progress, stop):
+            while not stop.wait(0.01):
+                pass
+            raise ZipStopped()
+
+        job.start(work)
+        job.stop()
+        self.assertEqual(self.wait(job, "stopped")["state"], "stopped")
+
+    def test_a_failure_says_why(self):
+        job = LibraryZipJob()
+
+        def work(progress, stop):
+            raise OSError("the drive went away")
+
+        job.start(work)
+        self.assertIn("the drive went away", self.wait(job, "failed")["error"])
+
+
 class LibraryExportApiTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
@@ -259,6 +382,38 @@ class LibraryExportApiTests(unittest.TestCase):
         with self.assertRaises(ServerError) as caught:
             export_library_to_folder(body=LibraryExportRequest(save_dir=str(file)))
         self.assertEqual(caught.exception.status_code, 422)
+
+    def test_the_zip_made_in_the_background_lands_in_the_chosen_folder(self):
+        from lncrawl.server.api.admin import start_library_zip
+        from lncrawl.server.models.library import LibraryZipRequest
+        from lncrawl.services.library_export import LibraryZipJob
+
+        self.ctx.library_zip = LibraryZipJob()
+        folder = Path(self.temp.name) / "ssd" / "Novels"
+        start_library_zip(body=LibraryZipRequest(save_dir=str(folder), complete_only=True))
+        deadline = time.monotonic() + 10
+        while self.ctx.library_zip.status()["state"] == "running" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        status = self.ctx.library_zip.status()
+        self.assertEqual(status["state"], "done", status.get("error"))
+        self.assertEqual(Path(status["file"]), folder / "library.zip")
+        self.assertEqual((status["books"], status["left_out"]), (1, 1))
+        self.assertEqual(status["phase"], "writing")
+
+    def test_with_no_folder_it_is_kept_to_be_downloaded(self):
+        from lncrawl.server.api.admin import library_zip_file, start_library_zip
+        from lncrawl.server.models.library import LibraryZipRequest
+        from lncrawl.services.library_export import LibraryZipJob
+
+        self.ctx.library_zip = LibraryZipJob()
+        start_library_zip(body=LibraryZipRequest())
+        deadline = time.monotonic() + 10
+        while self.ctx.library_zip.status()["state"] == "running" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        status = self.ctx.library_zip.status()
+        self.assertEqual(status["state"], "done", status.get("error"))
+        self.assertEqual(Path(status["file"]).parent, self.root / "exports")
+        self.assertEqual(Path(library_zip_file().path), Path(status["file"]))
 
     def test_a_download_is_built_in_the_data_folder_not_the_system_temp(self):
         from lncrawl.server.api.admin import export_library

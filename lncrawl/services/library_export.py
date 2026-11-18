@@ -16,12 +16,14 @@ can be held to novels whose every chapter is downloaded.
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 import hashlib
+import os
 from pathlib import Path
 import posixpath
 import re
-import shutil
 from tempfile import TemporaryFile
-from typing import IO, Callable, Dict, Iterator, List, Literal, Optional, Set, Tuple
+from threading import Event, Lock, Thread
+import time
+from typing import IO, Any, Callable, Dict, Iterator, List, Literal, Optional, Set, Tuple
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -31,6 +33,14 @@ NsfwMode = Literal["include", "exclude", "only"]
 # The chapter count of a fully downloaded novel, found by its id in the library
 # or else by its address; None when it is not fully downloaded or not known.
 FullLength = Callable[[Optional[str], Optional[str]], Optional[int]]
+# What it is doing ("finding", "reading", "writing"), how far through, and for
+# writing, how many bytes of how many.
+Progress = Callable[..., None]
+
+
+class ZipStopped(Exception):
+    """The library ZIP was asked to stop."""
+
 
 # Tags sources use for adult content. Matched whole, ignoring case and the
 # spacing or punctuation between words ("R-18", "r18", "18+").
@@ -144,73 +154,142 @@ def _read_cbz(zf: zipfile.ZipFile, book: _Book) -> None:
     book.chapters = len(serials)
 
 
+def _fingerprint(zf: zipfile.ZipFile) -> bytes:
+    """What a book holds, from its own list of files: name, checksum and size of each.
+
+    Read from the end of the file, not the whole of it: on a library of
+    hundreds of gigabytes on an external drive, reading every book just to
+    tell copies apart took hours before the first one was written. Two copies
+    holding the same files are the same book, whatever their zip timestamps.
+    """
+    digest = hashlib.sha256()
+    for info in sorted(zf.infolist(), key=lambda item: item.filename):
+        digest.update(f"{info.filename}\0{info.CRC}\0{info.file_size}\n".encode())
+    return digest.digest()
+
+
+def _describe(zf: zipfile.ZipFile, name: str, size: int, novel_tags: List[str]) -> _Book:
+    stem, suffix = posixpath.splitext(name)
+    book = _Book(
+        name=name,
+        digest=_fingerprint(zf),
+        size=size,
+        suffix=suffix.lower(),
+        title=stem,
+    )
+    try:
+        if book.suffix == ".epub":
+            _read_epub(zf, book)
+        else:
+            _read_cbz(zf, book)
+    except Exception:
+        pass  # still a book; it just says nothing about itself
+    if novel_tags and not book.tags:
+        book.tags = list(novel_tags)
+    return book
+
+
+def _inspect_file(file: Path, novel_tags: List[str]) -> Optional[_Book]:
+    """A book saved as a file, read where it is; None if it is not one."""
+    try:
+        with zipfile.ZipFile(file) as zf:
+            return _describe(zf, file.name, file.stat().st_size, novel_tags)
+    except (OSError, zipfile.BadZipFile, ValueError):
+        return None
+
+
 def _inspect(
     source: IO[bytes], name: str, novel_tags: List[str], spool_dir: Optional[Path] = None
 ) -> Optional[_Book]:
-    """Hash a book and read what it says about itself, or None if unreadable.
+    """A book inside a zip, or None if unreadable.
 
-    A book in a file is read where it is. One inside a zip is given ``spool_dir``
-    and copied out there to be read: even very large books never need to fit in
-    memory. Never the system's temp folder, which is on the system drive: once
-    that was full, no export could be made to any drive.
+    Copied out to ``spool_dir`` to be read, so even a very large one never has
+    to fit in memory. Never the system's temp folder, which is on the system
+    drive: once that was full, no export could be made to any drive.
     """
-    digest = hashlib.sha256()
-    size = 0
-    with ExitStack() as stack:
-        spool = stack.enter_context(TemporaryFile(dir=spool_dir)) if spool_dir else source
+    with TemporaryFile(dir=spool_dir) as spool:
+        size = 0
         while True:
             chunk = source.read(1024 * 1024)
             if not chunk:
                 break
-            digest.update(chunk)
-            if spool is not source:
-                spool.write(chunk)
+            spool.write(chunk)
             size += len(chunk)
         spool.seek(0)
-        if not zipfile.is_zipfile(spool):
-            return None
-        spool.seek(0)
-        stem, suffix = posixpath.splitext(name)
-        book = _Book(
-            name=name,
-            digest=digest.digest(),
-            size=size,
-            suffix=suffix.lower(),
-            title=stem,
-        )
         try:
             with zipfile.ZipFile(spool) as zf:
-                if book.suffix == ".epub":
-                    _read_epub(zf, book)
-                else:
-                    _read_cbz(zf, book)
-        except Exception:
-            pass  # still a book; it just says nothing about itself
-    if novel_tags and not book.tags:
-        book.tags = list(novel_tags)
-    return book
+                return _describe(zf, name, size, novel_tags)
+        except (zipfile.BadZipFile, ValueError):
+            return None
+
+
+def _book_files(novels: Path) -> List[Path]:
+    """The book files in the library: in each novel's folder and its ``artifacts``.
+
+    Only there: a novel's folder also holds every chapter and, for manga, every
+    page image, and one library had 1.67 million of those to look through.
+    """
+    found: List[Path] = []
+
+    def is_book(entry: "os.DirEntry[str]") -> bool:
+        return entry.name.lower().endswith(_BOOK_SUFFIXES) and entry.is_file()
+
+    def scan(folder: str) -> List["os.DirEntry[str]"]:
+        try:
+            return list(os.scandir(folder))
+        except OSError:
+            return []
+
+    for entry in scan(str(novels)):
+        if is_book(entry):
+            found.append(Path(entry.path))
+        elif entry.is_dir():
+            for inner in scan(entry.path):
+                if is_book(inner):
+                    found.append(Path(inner.path))
+                elif inner.name == "artifacts" and inner.is_dir():
+                    for parent, _, names in os.walk(inner.path):
+                        found.extend(
+                            Path(parent, name)
+                            for name in names
+                            if name.lower().endswith(_BOOK_SUFFIXES)
+                        )
+    # EPUBs first, then CBZs, each in path order: the order copies are weighed in
+    return sorted(found, key=lambda file: (_BOOK_SUFFIXES.index(file.suffix.lower()), file))
 
 
 def _scan(
     data_dir: Path,
     output: Path,
     tags_for: Callable[[str], List[str]],
+    progress: Progress,
+    stop: Optional[Event] = None,
 ) -> Iterator[_Book]:
     novels = data_dir / "novels"
-    for suffix in _BOOK_SUFFIXES:
-        for file in sorted(novels.rglob(f"*{suffix}")):
-            # novels/<novel id>/artifacts/<file>: the library knows its tags
-            rel = file.relative_to(novels).parts
-            tags = tags_for(rel[0]) if len(rel) > 1 else []
-            with file.open("rb") as source:
-                book = _inspect(source, file.name, tags)
-            if book:
-                book.path = file
-                book.novel_id = rel[0] if len(rel) > 1 else None
-                yield book
+    progress("finding", 0, 0)
+    files = _book_files(novels)
+    exports = data_dir / "exports"
+    archives = sorted(exports.glob("*.zip")) if exports.is_dir() else []
+    total = len(files) + len(archives)
+    progress("reading", 0, total)
+    for index, file in enumerate(files):
+        if stop is not None and stop.is_set():
+            raise ZipStopped()
+        # novels/<novel id>/artifacts/<file>: the library knows its tags
+        rel = file.relative_to(novels).parts
+        tags = tags_for(rel[0]) if len(rel) > 1 else []
+        book = _inspect_file(file, tags)
+        progress("reading", index + 1, total)
+        if book:
+            book.path = file
+            book.novel_id = rel[0] if len(rel) > 1 else None
+            yield book
 
     # Bulk exports can outlive their temporary ebook files. Include those too.
-    for file in sorted((data_dir / "exports").glob("*.zip")):
+    for index, file in enumerate(archives, start=len(files)):
+        progress("reading", index + 1, total)
+        if stop is not None and stop.is_set():
+            raise ZipStopped()
         # this library's own zips hold copies of the books found here already
         library_zip = file.name == "library.zip" or file.name.startswith("library-")
         if file.resolve() == output.resolve() or file.name.startswith("backup-") or library_zip:
@@ -221,6 +300,8 @@ def _scan(
             continue
         with archive:
             for member in archive.infolist():
+                if stop is not None and stop.is_set():
+                    raise ZipStopped()
                 low = member.filename.lower()
                 if member.is_dir() or not low.endswith(_BOOK_SUFFIXES):
                     continue
@@ -267,15 +348,19 @@ def build_library_zip(
     tags_for: Optional[Callable[[str], List[str]]] = None,
     full_length: Optional[FullLength] = None,
     left_out: Optional[List[str]] = None,
+    progress: Optional[Progress] = None,
+    stop: Optional[Event] = None,
 ) -> int:
     """Write every book in the library to `output`, with an offline index.
 
     `tags_for` looks up a novel's tags by its id, for books whose own metadata
     carries none (CBZ never does). With `full_length`, only books holding a
     fully downloaded novel go in, and the titles of the others are added to
-    `left_out`. Returns the number of books written.
+    `left_out`. Returns the number of books written. ``progress`` hears how far
+    it is; ``stop`` set, it stops (`ZipStopped`), leaving `output` half written.
     """
-    found = list(_scan(data_dir, output, tags_for or (lambda _: [])))
+    say: Progress = progress or (lambda *args, **kwargs: None)
+    found = list(_scan(data_dir, output, tags_for or (lambda _: []), say, stop))
     chosen = _pick(found)
     if nsfw == "exclude":
         chosen = [b for b in chosen if not is_nsfw(b.tags)]
@@ -290,8 +375,14 @@ def build_library_zip(
 
     entries: List[Tuple[str, str, str]] = []
     names: Set[str] = set()
+    size_total = sum(book.size for book in chosen)
+    size_done = 0
+    say("writing", 0, len(chosen), size_done=0, size_total=size_total)
     with zipfile.ZipFile(output, "w", zipfile.ZIP_STORED, allowZip64=True) as target:
-        for book in sorted(chosen, key=lambda b: (b.title.lower(), b.name.lower())):
+        ordered = sorted(chosen, key=lambda b: (b.title.lower(), b.name.lower()))
+        for done, book in enumerate(ordered, start=1):
+            if stop is not None and stop.is_set():
+                raise ZipStopped()
             stem = posixpath.splitext(book.name)[0]
             arcname = f"books/{stem}{book.suffix}"
             counter = 2
@@ -306,9 +397,25 @@ def build_library_zip(
                         archive = stack.enter_context(zipfile.ZipFile(str(book.archive)))
                         source = stack.enter_context(archive.open(str(book.member)))
                     dest = stack.enter_context(target.open(arcname, "w", force_zip64=True))
-                    shutil.copyfileobj(source, dest, 1024 * 1024)
+                    while True:
+                        if stop is not None and stop.is_set():
+                            raise ZipStopped()
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        dest.write(chunk)
+                        size_done += len(chunk)
+                        say(
+                            "writing",
+                            done - 1,
+                            len(ordered),
+                            size_done=size_done,
+                            size_total=size_total,
+                        )
             except (OSError, KeyError, zipfile.BadZipFile):
                 continue
+            finally:
+                say("writing", done, len(ordered), size_done=size_done, size_total=size_total)
             names.add(arcname.casefold())
             label = book.title + (" (manga)" if book.suffix == ".cbz" else "")
             entries.append((arcname, label, status))
@@ -336,3 +443,71 @@ def build_library_zip(
             "This export does not download or repair chapters.\n",
         )
     return len(entries)
+
+
+class LibraryZipJob:
+    """One library ZIP at a time, made in the background, with how far it has got.
+
+    Made while the request waited, a big library on an external drive took
+    hours with nothing on screen but "Packing all saved books…".
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._stop = Event()
+        self._status: Dict[str, Any] = {"state": "idle"}
+
+    def status(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self._status)
+
+    def start(self, work: Callable[[Progress, Event], Dict[str, Any]]) -> Dict[str, Any]:
+        """Run ``work(progress, stop)`` in the background; ValueError if one is running.
+
+        ``work`` returns what to show when it is done.
+        """
+        with self._lock:
+            if self._status.get("state") == "running":
+                raise ValueError("A library ZIP is already being made")
+            self._stop = Event()
+            stop = self._stop
+            self._status = {
+                "state": "running",
+                "phase": "finding",
+                "done": 0,
+                "total": 0,
+                "size_done": 0,
+                "size_total": 0,
+                "started_at": time.time(),
+            }
+        Thread(target=self._run, args=(work, stop), daemon=True, name="library-zip").start()
+        return self.status()
+
+    def stop(self) -> Dict[str, Any]:
+        self._stop.set()
+        return self.status()
+
+    def close(self) -> None:
+        self._stop.set()
+
+    def _progress(self, phase: str, done: int, total: int, **sizes: int) -> None:
+        with self._lock:
+            self._status.update(phase=phase, done=done, total=total, **sizes)
+
+    def _run(self, work: Callable[[Progress, Event], Dict[str, Any]], stop: Event) -> None:
+        try:
+            result = work(self._progress, stop)
+            with self._lock:
+                self._status.update(state="done", **result)
+        except ZipStopped:
+            with self._lock:
+                self._status.update(state="stopped")
+        except Exception as error:
+            message = (
+                getattr(error, "extra", None)
+                or getattr(error, "detail", None)
+                or str(error)
+                or type(error).__name__
+            )
+            with self._lock:
+                self._status.update(state="failed", error=str(message))

@@ -472,7 +472,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <input id="library-savedir" type="text" placeholder="blank = download in the browser, e.g. D:\\Novels" />
       <button type="button" class="secondary browse" data-for="library-savedir">Browse…</button>
     </div>
-    <button id="library-export">Make the ZIP</button>
+    <div class="row">
+      <button id="library-export">Make the ZIP</button>
+      <button id="library-zip-stop" class="secondary hidden">Stop</button>
+    </div>
+    <p class="hint hidden" id="library-zip-status" role="status" style="margin-top:10px"></p>
     <p class="hint">Includes saved EPUBs, CBZ manga and books inside past export ZIPs, one copy
       per novel (the most complete one). NSFW is judged by a novel's tags (Adult, Mature, Smut,
       Ecchi, R-18&hellip;), so an untagged novel always counts as safe. A folder on another
@@ -714,6 +718,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           loadNotifyConfig();
           loadMove();
           loadPlaces();
+          loadZip();
         })
         .catch(function () {
           // stale/invalid token
@@ -1500,46 +1505,71 @@ _TOOLS_HTML = """<!DOCTYPE html>
       })
       .catch(function () { box.innerHTML = "<span class='muted'>Couldn't load exports.</span>"; });
   }
+  // ---- the library ZIP: made in the background, followed here ----
+  var zipTimer = null, zipSeen = null;
+  function zipLine(z) {
+    if (z.phase === "finding") return "Finding the books in your library…";
+    if (z.phase === "reading") return "Checking the books for duplicates: " + count(z.done) + " of " + count(z.total) + "…";
+    var pct = z.size_total ? Math.floor(100 * z.size_done / z.size_total) : 0;
+    return "Writing the ZIP: " + count(z.done) + " of " + count(z.total) + " books, " +
+      (fmtSize(z.size_done) || "0 MB") + " of " + (fmtSize(z.size_total) || "0 MB") + " (" + pct + "%)…";
+  }
+  function leftOutNote(n) {
+    return n ? " " + n + " partly downloaded novel(s) left out (they are in your library)." : "";
+  }
+  function showZip(z) {
+    var line = document.getElementById("library-zip-status");
+    var running = z.state === "running";
+    document.getElementById("library-export").disabled = running;
+    document.getElementById("library-zip-stop").classList.toggle("hidden", !running);
+    line.classList.toggle("hidden", !running);
+    if (running) line.textContent = zipLine(z);
+    if (running && !zipTimer) zipTimer = setInterval(loadZip, 1500);
+    if (!running && zipTimer) { clearInterval(zipTimer); zipTimer = null; }
+    // say how it ended, once, for a ZIP this page saw being made
+    if (zipSeen === z.started_at && !running) {
+      zipSeen = null;
+      if (z.state === "done") {
+        var exports = !document.getElementById("library-savedir").value.trim() && z.file && /[\\/]exports[\\/]/.test(z.file);
+        log("Library ZIP made: " + z.books + " book(s), " + fmtSize(z.size) + "." + leftOutNote(z.left_out) +
+          (exports ? " Downloading it now." : " Saved to " + z.file + ".") + " Extract it and open index.html to browse.", "log-ok");
+        if (exports) {
+          fetch("/api/admin/library/zip/file", { headers: { "Authorization": "Bearer " + token() } })
+            .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.blob(); })
+            .then(function (blob) {
+              var url = URL.createObjectURL(blob);
+              var link = document.createElement("a");
+              link.href = url; link.download = "library.zip";
+              document.body.appendChild(link); link.click(); link.remove();
+              setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+            })
+            .catch(function (e) { log("Could not download the ZIP: " + e.message + ". It is in " + z.file + ".", "log-err"); });
+        }
+      } else if (z.state === "stopped") {
+        log("Library ZIP stopped. Nothing was kept of it.", "log-info");
+      } else if (z.state === "failed") {
+        log("Library ZIP failed: " + (z.error || "unknown error"), "log-err");
+      }
+    }
+    if (running) zipSeen = z.started_at;
+  }
+  function loadZip() {
+    api("/admin/library/zip", { method: "GET" }).then(showZip).catch(function () {});
+  }
   document.getElementById("library-export").addEventListener("click", function () {
     if (!requireAuth()) return;
-    var btn = this;
-    busy(btn, true);
-    var nsfw = document.getElementById("library-nsfw").value;
-    var completeOnly = document.getElementById("library-completeonly").checked;
-    var saveDir = document.getElementById("library-savedir").value.trim();
-    function leftOutNote(count) {
-      return count ? " " + count + " partly downloaded novel(s) left out (they are in your library)." : "";
-    }
-    log("Packing all saved books and an offline index…", "log-info");
-    if (saveDir) {
-      api("/admin/library/export", {
-        method: "POST",
-        body: JSON.stringify({ save_dir: saveDir, nsfw: nsfw, complete_only: completeOnly })
-      }).then(function (r) {
-        log("Library ZIP saved to " + r.file + " (" + r.books + " book(s), " + fmtSize(r.size) + ")." +
-          leftOutNote(r.left_out) + " Extract it and open index.html to browse.", "log-ok");
-      }).catch(function (error) { log("Library export failed: " + error.message, "log-err"); })
-        .finally(function () { busy(btn, false); });
-      return;
-    }
-    var query = "?nsfw=" + encodeURIComponent(nsfw) + (completeOnly ? "&complete_only=true" : "");
-    var leftOut = 0;
-    fetch("/api/admin/library/export" + query, { headers: { "Authorization": "Bearer " + token() } })
-      .then(function (res) {
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        leftOut = parseInt(res.headers.get("X-Left-Out") || "0", 10) || 0;
-        return res.blob();
-      })
-      .then(function (blob) {
-        var url = URL.createObjectURL(blob);
-        var link = document.createElement("a");
-        link.href = url; link.download = "library.zip";
-        document.body.appendChild(link); link.click(); link.remove();
-        setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-        log("Library ZIP saved." + leftOutNote(leftOut) + " Extract it and open index.html to browse.", "log-ok");
-      })
-      .catch(function (error) { log("Library export failed: " + error.message, "log-err"); })
-      .finally(function () { busy(btn, false); });
+    var body = {
+      save_dir: document.getElementById("library-savedir").value.trim() || null,
+      nsfw: document.getElementById("library-nsfw").value,
+      complete_only: document.getElementById("library-completeonly").checked
+    };
+    log("Packing all saved books and an offline index… progress shows under the button.", "log-info");
+    api("/admin/library/zip", { method: "POST", body: JSON.stringify(body) })
+      .then(function (z) { zipSeen = z.started_at; showZip(z); })
+      .catch(function (error) { log("Library ZIP failed: " + error.message, "log-err"); });
+  });
+  document.getElementById("library-zip-stop").addEventListener("click", function () {
+    api("/admin/library/zip", { method: "DELETE" }).then(showZip).catch(function () {});
   });
 
   document.getElementById("library-refresh").addEventListener("click", function () {
