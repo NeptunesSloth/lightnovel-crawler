@@ -1034,6 +1034,34 @@ class ExportSourceHandler(BaseHandler):
             reserved: Dict[int, int] = {}
             queue: List[str] = []
             last_eta = [0.0]
+            # Chapters of each novel (all of them, and those downloaded), from the
+            # library to start with and from each novel's own count once it is
+            # being downloaded: the progress shown is chapters, not novels, since
+            # a novel already downloaded is done in a moment and one of 5,000
+            # chapters takes hours. Those not in the library are not known yet.
+            try:
+                chapter_view: Dict[str, Tuple[int, int]] = ctx.chapters.counts_by_url(urls)
+            except Exception as error:
+                ctx.logger.debug(f"Could not count the chapters: {error}")
+                chapter_view = {}
+            if max_chapters > 0:
+                chapter_view = {
+                    url: (min(total, max_chapters), min(done, max_chapters))
+                    for url, (total, done) in chapter_view.items()
+                }
+
+            def _chapters() -> Dict[str, Any]:
+                totals = [total for total, _ in chapter_view.values()]
+                total = sum(totals)
+                done = sum(min(d, t) for t, d in chapter_view.values())
+                unlisted = sum(1 for url in urls if url not in chapter_view and url not in skipped)
+                average = total / len(totals) if totals else 0.0
+                return {
+                    "chapters_total": total,
+                    "chapters_done": done,
+                    "novels_unlisted": unlisted,
+                    "chapters_guessed": int(unlisted * average),
+                }
 
             def _publish_active(force: bool = False) -> None:
                 # called with `book` held
@@ -1041,10 +1069,19 @@ class ExportSourceHandler(BaseHandler):
                 if not force and now - last_eta[0] < 5:
                     return
                 last_eta[0] = now
-                pairs = [(a["done"], a["total"]) for a in active.values()]
-                average = sum(needed) / len(needed) if needed else 0.0
-                eta = estimate_left(self.pace.pace(), pairs, len(queue), average)
+                counts = _chapters()
+                pace = self.pace.pace()
+                if counts["chapters_total"] and pace > 0:
+                    # every chapter known not to be downloaded, and a guess for
+                    # the novels whose chapter lists have not been loaded yet
+                    left = counts["chapters_total"] - counts["chapters_done"]
+                    eta: Optional[int] = int((left + counts["chapters_guessed"]) / pace)
+                else:
+                    pairs = [(a["done"], a["total"]) for a in active.values()]
+                    average = sum(needed) / len(needed) if needed else 0.0
+                    eta = estimate_left(pace, pairs, len(queue), average)
                 self._set_extra(
+                    **counts,
                     active_novels=[
                         {"title": a["title"], "done": a["done"], "total": a["total"]}
                         for a in active.values()
@@ -1091,6 +1128,7 @@ class ExportSourceHandler(BaseHandler):
                         raise short
                     with book:
                         cur_title[0] = title
+                        chapter_view[novel_url] = (c_total, c_done)
                         active[lane] = {"title": title, "done": c_done, "total": c_total}
                         self._set_extra(
                             phase="downloading",
@@ -1830,9 +1868,8 @@ def _download_novel(
     # how many of the targeted chapters are still not downloaded (drives retries)
     # Old completion flags can outlive blank or missing content files. Inspect
     # the targeted files so those gaps stay eligible for the next retry pass.
-    downloaded = ctx.chapters.get_many(chapter_ids)
-    available = sum(chapter.is_available for chapter in downloaded)
-    missing = len(chapter_ids) - available
+    missing = len(ctx.crawler.pending_chapter_ids(chapter_ids))
+    available = len(chapter_ids) - missing
     if not available:
         reason = "No chapter text was downloaded; refusing to export an empty ebook"
         if errors:

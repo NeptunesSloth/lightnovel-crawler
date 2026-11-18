@@ -108,12 +108,19 @@ class CrawlerService:
         """Keep cache hits out of the rate-limited download queue."""
         selected = list(dict.fromkeys(chapter_ids))
         pending: List[str] = []
-        for offset in range(0, len(selected), 500):
-            batch = selected[offset : offset + 500]
+        for offset in range(0, len(selected), 2000):
+            batch = selected[offset : offset + 2000]
             chapters = {chapter.id: chapter for chapter in ctx.chapters.get_many(batch)}
+            by_novel: Dict[str, List[int]] = {}
+            for chapter in chapters.values():
+                by_novel.setdefault(chapter.novel_id, []).append(chapter.serial)
+            saved = {
+                novel_id: ctx.files.chapters_with_content(novel_id, serials)
+                for novel_id, serials in by_novel.items()
+            }
             for chapter_id in batch:
                 chapter = chapters.get(chapter_id)
-                if chapter is None or not chapter.is_available:
+                if chapter is None or chapter.serial not in saved.get(chapter.novel_id, ()):
                     pending.append(chapter_id)
         return pending
 

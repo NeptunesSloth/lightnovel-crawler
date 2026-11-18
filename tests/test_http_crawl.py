@@ -250,6 +250,32 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(resumed.extra["resumed"], 1)
         self.assertEqual(self.counts, previous_requests)
 
+    def test_progress_is_counted_in_chapters(self) -> None:
+        job = self.export(library_only=True)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(
+            self.ctx.chapters.counts_by_url([self.novel_url]), {self.novel_url: (4, 4)}
+        )
+        self.assertEqual(job.extra["chapters_total"], 4)
+        self.assertEqual(job.extra["chapters_done"], 4)
+        self.assertEqual(job.extra["novels_unlisted"], 0)
+
+    def test_a_second_run_does_not_read_the_saved_chapters_again(self) -> None:
+        self.assertEqual(self.export(library_only=True).status, JobStatus.SUCCESS)
+        from lncrawl.services.file import FileService
+
+        real = FileService.has_chapter_content
+        read = []
+
+        def counted(files, path):
+            read.append(path)
+            return real(files, path)
+
+        with patch.object(FileService, "has_chapter_content", counted):
+            again = self.export(library_only=True)
+        self.assertEqual(again.status, JobStatus.SUCCESS, again.error)
+        self.assertEqual(read, [])
+
     def test_zip_is_written_only_to_the_chosen_folder(self) -> None:
         chosen = self.root / "roomier-drive" / "novels"
         job = self.export(save_dir=str(chosen))

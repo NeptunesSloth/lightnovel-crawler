@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import sqlmodel as sq
 
@@ -159,6 +159,39 @@ class ChapterService:
             if not chapter:
                 raise ServerErrors.no_such_chapter
             return chapter
+
+    def counts_by_url(self, urls: List[str]) -> Dict[str, Tuple[int, int]]:
+        """(chapters, chapters downloaded) of each novel at these addresses in the library.
+
+        By the chapters' own marks, without reading their files: quick enough for
+        a whole site's novels, and close enough to show how far a download is.
+        """
+        from ..dao import Novel
+
+        result: Dict[str, Tuple[int, int]] = {}
+        unique = list(dict.fromkeys(urls))
+        with ctx.db.session() as sess:
+            for offset in range(0, len(unique), 500):
+                batch = unique[offset : offset + 500]
+                ids = dict(
+                    sess.exec(
+                        sq.select(Novel.id, Novel.url).where(sq.col(Novel.url).in_(batch))
+                    ).all()
+                )
+                if not ids:
+                    continue
+                rows = sess.exec(
+                    sq.select(
+                        Chapter.novel_id,
+                        sq.func.count(),
+                        sq.func.sum(sq.case((sq.col(Chapter.is_done), 1), else_=0)),
+                    )
+                    .where(sq.col(Chapter.novel_id).in_(list(ids)))
+                    .group_by(Chapter.novel_id)
+                ).all()
+                for novel_id, total, done in rows:
+                    result[ids[novel_id]] = (int(total or 0), int(done or 0))
+        return result
 
     def get_many(self, chapter_ids: List[str]) -> List[Chapter]:
         with ctx.db.session() as sess:

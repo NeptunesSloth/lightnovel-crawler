@@ -976,6 +976,16 @@ _TOOLS_HTML = """<!DOCTYPE html>
     return h + "h " + (m % 60) + "m";
   }
 
+  // How far a site download is: by chapters, once they are known. Novels alone
+  // ran ahead through those already downloaded and then sat on the long ones.
+  function progressNote(job, ex) {
+    if (!ex.chapters_total) return job.done + "/" + job.total;
+    var pct = Math.floor(100 * ex.chapters_done / ex.chapters_total);
+    var out = pct + "% of chapters (" + count(ex.chapters_done) + " of " + count(ex.chapters_total) +
+      (ex.novels_unlisted ? ", and " + count(ex.novels_unlisted) + " novel(s) not looked at yet" : "") + ")";
+    return out + " · " + job.done + " of " + job.total + " novels done";
+  }
+
   // "~2h 10m left at this pace", plus the other novels downloading alongside
   function paceNote(ex) {
     var out = "";
@@ -1061,7 +1071,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
         } else if (status === "RUNNING" && (ex.phase === "downloading" || ex.phase === "waiting-between-novels") && ex.current_title) {
           // a pause between novels is one lane's: the others carry on, so show them all
           var resumed = ex.resumed ? " · " + ex.resumed + " reused from last run" : "";
-          log("Downloading " + job.done + "/" + job.total + ": " + nowNote(ex) + rateNote(ex) + resumed + paceNote(ex) +
+          log("Downloading " + progressNote(job, ex) + ": " + nowNote(ex) + rateNote(ex) + resumed + paceNote(ex) +
             (ex.phase === "waiting-between-novels" ? " · " + pauseNote(ex) : ""), "log-info");
           if (ex.last_fail_title && ex.last_fail_reason) {
             pollExport._lastFailure = pollExport._lastFailure || {};
