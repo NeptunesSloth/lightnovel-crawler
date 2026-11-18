@@ -1019,8 +1019,10 @@ class RealAppTests(unittest.TestCase):
             output = run_app(LIVE_MOVE, old, str(drive))
             target = drive / "LNCrawl"
             self.assertIn("STATE idle None", output)
-            self.assertIn("finishing", output)
-            self.assertIn("switching", output)
+            # each step, as written down; too quick to be sure of seeing them polled
+            steps = (target / relocation.MOVE_LOG).read_text()
+            for step in ("Copying the database", "Switching over", "The database is copied"):
+                self.assertIn(step, steps)
             self.assertIn(f"FOLDER {target}", output)
             self.assertIn(f"DATABASE sqlite:///{target.resolve().as_posix()}/sqlite.db", output)
             self.assertIn(f"CONFIG {target / 'config.json'}", output)
