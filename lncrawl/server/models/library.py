@@ -39,6 +39,14 @@ class LibraryExportRequest(BaseModel):
     )
 
 
+class ImportFileRequest(BaseModel):
+    path: str = Field(
+        min_length=1,
+        max_length=1024,
+        description="A ZIP or e-book on the machine running the app, imported where it is",
+    )
+
+
 class NewFolderRequest(BaseModel):
     path: str = Field(min_length=1, max_length=1024, description="Folder to make it in")
     name: str = Field(min_length=1, max_length=255, description="Name of the new folder")

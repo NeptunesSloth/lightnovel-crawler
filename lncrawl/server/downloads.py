@@ -242,7 +242,18 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
     c.appendChild(head);
 
     var nd = novelsDone(j);
-    if (nd[1] > 1 || (!j.is_done && nd[1])) {
+    if (ex.chapters_total && !j.is_done) {
+      // chapters, not novels: a novel already downloaded is done in a moment,
+      // one of thousands of chapters takes hours
+      var cbar = el("div", "progress"), cfill = el("span");
+      cfill.style.width = Math.min(100, Math.floor(100 * ex.chapters_done / ex.chapters_total)) + "%";
+      cbar.appendChild(cfill); c.appendChild(cbar);
+      c.appendChild(el("div", "line", Number(ex.chapters_done).toLocaleString() + " of " +
+        Number(ex.chapters_total).toLocaleString() + " chapters (" +
+        Math.floor(100 * ex.chapters_done / ex.chapters_total) + "%)" +
+        (ex.novels_unlisted ? ", and " + ex.novels_unlisted + " novel(s) not looked at yet" : "") +
+        " · " + nd[0] + " of " + nd[1] + " " + nd[2] + " done"));
+    } else if (nd[1] > 1 || (!j.is_done && nd[1])) {
       var bar = el("div", "progress"), fill = el("span");
       fill.style.width = (nd[1] ? Math.min(100, Math.round(100 * nd[0] / nd[1])) : 0) + "%";
       bar.appendChild(fill); c.appendChild(bar);

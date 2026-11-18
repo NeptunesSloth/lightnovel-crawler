@@ -134,6 +134,8 @@ class ImportStats:
     updated: int = 0
     attached: int = 0
     failed: int = 0
+    books: int = 0  # books in the archive, once it has been looked through
+    read: int = 0  # of those, the ones done with
     reasons: Dict[str, int] = field(default_factory=dict)
 
     def fail(self, reason: str) -> None:
@@ -175,6 +177,7 @@ def _iter_books(source: Payload, name: str, signal: Event, stats: "ImportStats")
     fmt = format_of(name)
     if fmt is not None:
         # The name already states its format, so this is the book itself.
+        stats.books = 1
         yield name, source, fmt
         return
 
@@ -188,6 +191,7 @@ def _iter_books(source: Payload, name: str, signal: Event, stats: "ImportStats")
     spool_root = ctx.files.resolve("imports")
     spool_root.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(opener) as zf, TemporaryDirectory(dir=spool_root) as spool_dir:
+        stats.books = sum(1 for info in zf.infolist() if _is_book_member(info))
         for index, info in enumerate(zf.infolist()):
             if signal.is_set():
                 raise AbortedException()
@@ -218,6 +222,16 @@ def _iter_books(source: Payload, name: str, signal: Event, stats: "ImportStats")
             yield member, payload, member_fmt
             if isinstance(payload, Path):
                 payload.unlink(missing_ok=True)
+
+
+def _is_book_member(info: zipfile.ZipInfo) -> bool:
+    """Whether this entry of an archive is a book to import, by its name alone."""
+    if info.is_dir():
+        return False
+    member = posixpath.basename(info.filename.replace("\\", "/"))
+    if not member or member.startswith(".") or _RE_NOT_A_BOOK.match(member):
+        return False
+    return format_of(member) is not None
 
 
 def _title_of(member: str) -> str:
@@ -948,6 +962,7 @@ def import_archive(
         except Exception as e:
             logger.warning(f"Could not import {member}: {e}", exc_info=True)
             stats.fail(type(e).__name__)
+        stats.read += 1
         if on_progress:
             try:
                 on_progress(member, stats)

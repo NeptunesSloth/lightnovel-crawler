@@ -97,8 +97,14 @@ class PendingChapterTests(unittest.TestCase):
     def test_cached_bulk_export_uses_no_rate_limited_download_slots(self) -> None:
         ids = [f"chapter-{i}" for i in range(516)]
         chapters = [
-            SimpleNamespace(id=chapter_id, extra={"crawler_version": 1}, is_available=True)
-            for chapter_id in ids
+            SimpleNamespace(
+                id=chapter_id,
+                novel_id="novel",
+                serial=serial,
+                extra={"crawler_version": 1},
+                is_available=True,
+            )
+            for serial, chapter_id in enumerate(ids, start=1)
         ]
         crawler = SimpleNamespace(version=2, taskman=SimpleNamespace(submit_task=MagicMock()))
         service = CrawlerService()
@@ -124,7 +130,11 @@ class PendingChapterTests(unittest.TestCase):
                     return_value=SimpleNamespace(is_available=True, output_file="novel.epub")
                 ),
             ),
-            files=SimpleNamespace(resolve=lambda file: Path(file)),
+            files=SimpleNamespace(
+                resolve=lambda file: Path(file),
+                # every chapter's file is saved and holds its chapter
+                chapters_with_content=lambda novel_id, serials: set(serials),
+            ),
         )
         progress = MagicMock()
         with (
@@ -218,7 +228,8 @@ class PendingChapterTests(unittest.TestCase):
         }
         ctx = SimpleNamespace(
             crawler=SimpleNamespace(
-                pending_chapter_ids=MagicMock(return_value=["chapter"]),
+                # missing before it is downloaded, there after
+                pending_chapter_ids=MagicMock(side_effect=[["chapter"], []]),
                 pending_image_ids=MagicMock(return_value=["a", "b", "c"]),
                 fetch_image=MagicMock(),
                 fetch_chapter=MagicMock(),
@@ -353,14 +364,18 @@ class PendingChapterTests(unittest.TestCase):
 
     def test_only_missing_or_empty_chapters_are_queued(self) -> None:
         chapters = [
-            SimpleNamespace(id="cached", extra={"crawler_version": 2}, is_available=True),
-            SimpleNamespace(id="empty", extra={"crawler_version": 2}, is_available=False),
-            SimpleNamespace(id="outdated", extra={"crawler_version": 1}, is_available=True),
+            SimpleNamespace(id="cached", novel_id="n", serial=1, extra={"crawler_version": 2}),
+            SimpleNamespace(id="empty", novel_id="n", serial=2, extra={"crawler_version": 2}),
+            SimpleNamespace(id="outdated", novel_id="n", serial=3, extra={"crawler_version": 1}),
         ]
         get_many = MagicMock(return_value=chapters)
+        saved = {1, 3}  # chapter 2's file holds no chapter
+        files = SimpleNamespace(
+            chapters_with_content=lambda novel_id, serials: saved & set(serials)
+        )
         with patch(
             "lncrawl.services.crawler.ctx",
-            SimpleNamespace(chapters=SimpleNamespace(get_many=get_many)),
+            SimpleNamespace(chapters=SimpleNamespace(get_many=get_many), files=files),
         ):
             pending = CrawlerService().pending_chapter_ids(
                 ["cached", "empty", "outdated", "unknown", "cached"],

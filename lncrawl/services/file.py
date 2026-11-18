@@ -1,9 +1,11 @@
 from functools import lru_cache
+import json
 import logging
 import os
 from pathlib import Path
 import stat
-from typing import Tuple, Union
+from threading import Lock
+from typing import Dict, Iterable, List, Set, Tuple, Union
 
 from zstd import Error as ZstdError
 
@@ -16,6 +18,11 @@ from ..utils.text_tools import is_compressed, text_compress, text_decompress
 logger = logging.getLogger(__name__)
 
 StrPath = Union[str, Path]
+
+# Kept in each novel's chapters folder: the chapter files already read and found
+# to hold a chapter, by size and time. A file still the same is not read again.
+CHECKED_FILE = ".checked.json"
+_checked_lock = Lock()
 
 
 @lru_cache(maxsize=4096)
@@ -48,6 +55,62 @@ class FileService:
 
     def exists(self, file_path: StrPath):
         return self.resolve(file_path).is_file()
+
+    def chapters_with_content(self, novel_id: str, serials: Iterable[int]) -> Set[int]:
+        """Which of these chapters of a novel have a saved file holding a chapter.
+
+        The answer for each file is kept beside them (`CHECKED_FILE`), and a file
+        whose size and time have not changed since is taken at its word. Every
+        file was read on every run before: 4,932 for one long novel, from an
+        external drive, before its first missing chapter was asked for, and four
+        novels at a time. The folder's listing gives the sizes and times, so a
+        file that is the same costs nothing; a new or changed one is read.
+        """
+        folder = self.resolve(f"novels/{novel_id}/chapters")
+        wanted = {f"{serial:06}.zst": serial for serial in serials}
+        if not wanted:
+            return set()
+        listed: Dict[str, List[int]] = {}
+        try:
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    if entry.name in wanted:
+                        try:
+                            info = entry.stat()
+                        except OSError:
+                            continue
+                        if stat.S_ISREG(info.st_mode):
+                            listed[entry.name] = [info.st_size, info.st_mtime_ns]
+        except FileNotFoundError:
+            return set()
+        index = folder / CHECKED_FILE
+        try:
+            checked = json.loads(index.read_text(encoding="utf-8")).get("files", {})
+            if not isinstance(checked, dict):
+                checked = {}
+        except (OSError, ValueError, AttributeError):
+            checked = {}
+        found: Set[int] = set()
+        changed = False
+        for name, signature in listed.items():
+            if checked.get(name) == signature:
+                found.add(wanted[name])
+                continue
+            if self.has_chapter_content(folder / name):
+                checked[name] = signature
+                found.add(wanted[name])
+                changed = True
+            elif name in checked:
+                del checked[name]
+                changed = True
+        if changed:
+            with _checked_lock:
+                try:
+                    with atomic_write(index) as temporary:
+                        temporary.write(json.dumps({"files": checked}).encode("utf-8"))
+                except OSError as error:
+                    logger.debug(f"Could not keep the chapter checks in {index}: {error}")
+        return found
 
     def has_chapter_content(self, file_path: StrPath) -> bool:
         file = self.resolve(file_path)
