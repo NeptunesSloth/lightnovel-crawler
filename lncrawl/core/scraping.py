@@ -699,6 +699,27 @@ def merge_profiles(profiles: Dict[str, dict]) -> None:
     mem.touch()
 
 
+def follow_data_folder() -> None:
+    """Keep what is learned about sites in the data folder, after it moved while the app ran.
+
+    Every scraper shares the one store, so moving where it writes moves it for
+    all of them. Scrapers made from now on keep their other files (browser
+    profiles) in the new folder too.
+    """
+    with _lock:
+        _configs.clear()
+        _states.clear()
+        if _memory is None:
+            return
+        _memory.path = _build_config(0.0).memory_path
+        if hasattr(_memory, "_dirty"):
+            _memory._dirty = True  # the whole store, written where it is now
+    try:
+        _memory.flush()
+    except Exception:
+        logger.debug("Could not write scraper memory to the new folder", exc_info=True)
+
+
 def close_shared_state() -> None:
     """Flush learned state to disk. Safe to call more than once."""
     global _memory

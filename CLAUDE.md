@@ -95,7 +95,7 @@ Routers in [lncrawl/server/api/](lncrawl/server/api/), aggregated in `__init__.p
 
 [lncrawl/config.py](lncrawl/config.py): typed config. Data dir: `LNCRAWL_DATA_PATH` env var, else `typer.get_app_dir("LNCrawl")` (= `%APPDATA%\LNCrawl` on Windows). Properties marked `Sensitive` are redacted in the admin API.
 
-The library can be moved to another drive from the app (Tools → Storage). [lncrawl/relocation.py](lncrawl/relocation.py) holds the rules: the folder the app starts in (`BASE_DIR`) keeps a `library-location.json` marker, `config.py` follows it to `APP_DIR` at import, and the old copy is only removed after a restart has switched to the new one. `ctx.library_move` runs the copy and the cleanup.
+The library can be moved to another drive from the app (Tools → Library and drives). [lncrawl/relocation.py](lncrawl/relocation.py) holds the rules: the folder the app starts in (`BASE_DIR`) keeps a `library-location.json` marker, and `config.py` follows it to `APP_DIR` at import. `ctx.library_move` copies while the app runs, then switches without a restart: `ctx.db.move_sqlite` holds new database connections back for a moment while the copy is finished, then every connection (including sessions made earlier) opens the new file, and `config.use_data_folder` moves `APP_DIR`. So `ctx.config.app.app_dir` can change while the app runs — read it when needed, don't cache paths built from it. If the database stays busy the switch is left to the next start. The old copy is removed only after the switch.
 
 ## Conventions
 

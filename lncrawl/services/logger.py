@@ -121,6 +121,28 @@ def log_to_file(path: Path, level: int = logging.INFO) -> Optional[Path]:
     return path
 
 
+def move_log_file(old: Path, new: Path) -> Optional[Path]:
+    """Write the log file kept in folder ``old`` in folder ``new`` from now on; where it is now.
+
+    For a library moved while the app runs: the log was in the old folder,
+    whose copy is then removed. None when no log file is kept in ``old``.
+    """
+    root = logging.getLogger()
+    for existing in list(root.handlers):
+        if existing.get_name() != _FILE_HANDLER_NAME:
+            continue
+        path = Path(getattr(existing, "baseFilename", ""))
+        try:
+            relative = path.relative_to(old)
+        except ValueError:
+            return None
+        level = existing.level
+        root.removeHandler(existing)
+        existing.close()
+        return log_to_file(new / relative, level)
+    return None
+
+
 class Logger:
     def __init__(self) -> None:
         self._level = logging.NOTSET

@@ -9,8 +9,10 @@ A move never leaves the library split between two places:
 
 1. While the app runs, with downloads paused, everything is copied except what
    the running app holds open (`LATE`). The marker says ``copied``.
-2. The next start, before anything is opened, copies the rest (the database as
-   a snapshot) and the marker says ``moved``: from then on the new folder is used.
+2. The rest is copied and the marker says ``moved``: from then on the new folder
+   is used. The app does this itself, while it runs, with the database to
+   itself for a moment (see `lncrawl/services/library_move.py`); when it cannot,
+   the next start does it, before anything is opened.
 3. Only then is the old copy removed, and a file only where the new folder has
    the same one.
 
@@ -22,6 +24,7 @@ the data folder, before anything else is loaded.
 """
 
 import errno
+import hashlib
 import json
 import multiprocessing
 import os
@@ -58,6 +61,12 @@ LATE = (
     "logs",
     "export-crash.log",
 )
+# The database is copied in blocks this big, and a block is copied again only
+# when it changed after it was first copied.
+DB_BLOCK = 1024 * 1024
+# Copied again from the old folder when the app next starts, by name: what the
+# app window's browser was still using when the move was made.
+REFRESH_AT_START = ("app-browser",)
 # Never copied: working files that are made again.
 SKIPPED = ("tmp", MARKER, STAMP)
 # Browser caches in the app window's profile: large, and rebuilt on demand.
@@ -314,6 +323,16 @@ def resolve(base: Path) -> Path:
                 f"still using {current}. Start the move again from the app.",
                 file=sys.stderr,
             )
+    refresh = marker.get("refresh")
+    old = marker.get("old")
+    if (
+        isinstance(refresh, list)
+        and refresh
+        and isinstance(old, str)
+        and current.is_dir()
+        and multiprocessing.parent_process() is None
+    ):
+        refresh_from_old(base, Path(old), current, [str(name) for name in refresh])
     if current != base and not current.is_dir():
         raise LibraryMissing(
             f"The library was moved to {current}, which cannot be found. "
@@ -560,6 +579,7 @@ def copy_tree(
     waiting: Optional[Waiting] = None,
     left_behind: Optional[List[str]] = None,
     on_left: Optional[Callable[[str, OSError], None]] = None,
+    only_missing: bool = False,
 ) -> None:
     """Copy what is under ``source`` to ``target``, keeping each file's time.
 
@@ -573,6 +593,10 @@ def copy_tree(
 
     With ``left_behind``, a file that cannot be copied is not waited for either:
     it is added to that list and the copy goes on to the next one.
+
+    With ``only_missing``, a file already there is left as it is whatever it
+    holds: for files written to the old folder after the switch to the new one,
+    where the new folder's own are the newer.
     """
     made: Set[Path] = set()
 
@@ -595,6 +619,8 @@ def copy_tree(
             continue
         info = entry.stat(follow_symlinks=False)
         copy = target / relative
+        if only_missing and os.path.lexists(copy):
+            continue
         if not _same(info, copy):
             began: Optional[float] = None
             pause = RETRY_FIRST_WAIT
@@ -686,6 +712,20 @@ def switch(base: Path, current: Path, target: Path, report: Optional[Report] = N
         say("Copying the database")
         _snapshot_database(current / DATABASE, target / DATABASE, report)
         say("The database is copied")
+    left_behind = copy_late(current, target, say)
+    (target / STAMP).write_text(f"{IN_USE} since it was moved from {current}\n", encoding="utf-8")
+    extra: Dict[str, Any] = {"left_behind": len(left_behind)} if left_behind else {}
+    say(f"Done: the library is now in {target} ({len(left_behind)} file(s) left behind)")
+    write_marker(base, path=str(target), state="moved", cleanup=True, old=str(current), **extra)
+
+
+def copy_late(current: Path, target: Path, say: Report) -> List[str]:
+    """Copy what `LATE` names, but the database; what could not be copied.
+
+    The settings have to arrive, or this raises. The rest (the app window's
+    browser profile, source files, logs) is made again when it is missing: a
+    file of those that cannot be copied is left behind, not waited for.
+    """
     left_behind: List[str] = []
 
     def left(name: str, error: OSError) -> None:
@@ -715,10 +755,107 @@ def switch(base: Path, current: Path, target: Path, report: Optional[Report] = N
                     raise
                 left_behind.append(name)
                 left(name, error)
-    (target / STAMP).write_text(f"{IN_USE} since it was moved from {current}\n", encoding="utf-8")
-    extra: Dict[str, Any] = {"left_behind": len(left_behind)} if left_behind else {}
-    say(f"Done: the library is now in {target} ({len(left_behind)} file(s) left behind)")
-    write_marker(base, path=str(target), state="moved", cleanup=True, old=str(current), **extra)
+    return left_behind
+
+
+def refresh_from_old(base: Path, old: Path, current: Path, names: List[str]) -> None:
+    """Copy these from the old folder again, now nothing is using them there.
+
+    The app window's browser keeps its profile open while the app runs, so what
+    a move made while the app ran copied of it was older than what the window
+    went on to write. Done once, at the start after the move, before the window
+    opens; the old folder's copy is removed after it.
+    """
+    for name in names:
+        source = old / name
+        if not source.is_dir():
+            continue
+        _note(current, f"Copying {name} again from {old}, now the app that used it is closed")
+        try:
+            copy_tree(source, current / name, (), lambda files, size: None, skip_folders=_CACHES)
+        except Exception as error:
+            _note(current, f"Could not copy {name} again: {error!r}")
+    try:
+        _update_marker(base, drop=("refresh",))
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------- #
+# the database, while the app is using it
+# ---------------------------------------------------------------------------- #
+
+
+def _checkpoint(database: Path, mode: str) -> bool:
+    """Write the database's journal into the file; whether all of it could be."""
+    connection = sqlite3.connect(str(database), timeout=30)
+    try:
+        row = connection.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+    finally:
+        connection.close()
+    return row is None or int(row[0]) == 0
+
+
+def _digest(block: bytes) -> bytes:
+    return hashlib.blake2b(block, digest_size=16).digest()
+
+
+def precopy_database(source: Path, target: Path, stop: Optional[Event] = None) -> List[bytes]:
+    """Copy the database file while the app still uses it; what each block of it held.
+
+    Not a copy to use: the app may change the file meanwhile, and part of it
+    may still be in the journal. `finish_database` makes it whole, writing only
+    the blocks that differ, so the app needs the database to itself for a
+    moment rather than for as long as a gigabyte takes to reach another drive.
+    """
+    _checkpoint(source, "PASSIVE")  # most of the journal into the file, without waiting
+    writing = target.with_name(f"{target.name}.moving")
+    digests: List[bytes] = []
+    with open(source, "rb") as reading, open(writing, "wb") as copy:
+        while True:
+            if stop is not None and stop.is_set():
+                raise MoveStopped()
+            block = reading.read(DB_BLOCK)
+            if not block:
+                break
+            copy.write(block)
+            digests.append(_digest(block))
+    return digests
+
+
+def finish_database(source: Path, target: Path, digests: List[bytes]) -> int:
+    """Make `precopy_database`'s copy whole and put it in place; how many blocks it took.
+
+    Only while nothing else uses the database: the journal is written into the
+    file first, and the copy is made to match the file block by block.
+    """
+    if not _checkpoint(source, "TRUNCATE"):
+        raise OSError("the database is still being written to")
+    writing = target.with_name(f"{target.name}.moving")
+    written = 0
+    with open(source, "rb") as reading, open(writing, "r+b") as copy:
+        index = 0
+        while True:
+            block = reading.read(DB_BLOCK)
+            if not block:
+                break
+            if index >= len(digests) or digests[index] != _digest(block):
+                copy.seek(index * DB_BLOCK)
+                copy.write(block)
+                written += 1
+            index += 1
+        copy.truncate(reading.tell())
+        copy.flush()
+        os.fsync(copy.fileno())
+    check = sqlite3.connect(str(writing))
+    try:
+        check.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    finally:
+        check.close()
+    for name in _DATABASE_FILES[1:]:  # a journal left there belongs to no database now
+        target.with_name(name).unlink(missing_ok=True)
+    os.replace(writing, target)
+    return written
 
 
 # ---------------------------------------------------------------------------- #
@@ -727,7 +864,11 @@ def switch(base: Path, current: Path, target: Path, report: Optional[Report] = N
 
 
 def remove_old_copy(
-    old: Path, new: Path, progress: Progress, stop: Optional[Event] = None
+    old: Path,
+    new: Path,
+    progress: Progress,
+    stop: Optional[Event] = None,
+    keep: Tuple[str, ...] = (),
 ) -> Tuple[int, int]:
     """Delete from ``old`` what ``new`` now holds; (bytes freed, files left).
 
@@ -735,6 +876,7 @@ def remove_old_copy(
     place. The exceptions are working files, which are made again, and what was
     copied at the switch (`LATE`): the app has been running from those since, so
     the new ones have moved on and the old ones only need the new to be there.
+    What ``keep`` names, at the top of ``old``, is not touched or counted.
     """
     here, there = _key(old), _key(new)
     if here == there or there.startswith(here + os.sep) or here.startswith(there + os.sep):
@@ -747,6 +889,8 @@ def remove_old_copy(
         if stop is not None and stop.is_set():
             raise MoveStopped()
         top = relative.split("/", 1)[0]
+        if top in keep:
+            continue
         size = entry.stat(follow_symlinks=False).st_size
         if top == "tmp" or top in switched:
             gone = True

@@ -233,6 +233,20 @@ class DownloadWorkers:
         for worker in workers:
             worker.stop()
 
+    def stop_idle(self) -> int:
+        """Stop every worker that is not running anything; how many there were.
+
+        For a library moving while the app runs: a worker has its own connection
+        to the database, in the old folder. New ones are started as before.
+        """
+        with self._lock:
+            idle = [worker for worker in self._workers if not worker.active]
+            for worker in idle:
+                self._workers.remove(worker)
+        for worker in idle:
+            worker.stop()
+        return len(idle)
+
     def run(
         self,
         site: str,

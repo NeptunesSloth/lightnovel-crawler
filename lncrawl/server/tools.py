@@ -95,7 +95,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
   }
   details > summary::-webkit-details-marker { display: none; }
   details > summary::before { content: "+ "; color: var(--faint); }
-  details[open] > summary::before { content: "\2212  "; }
+  details[open] > summary::before { content: "\\2212  "; }
   details > summary:hover { color: var(--paper); }
   label { display: block; font-size: 14px; color: var(--dim); margin: 14px 0 6px; }
   input[type=text], input[type=email], input[type=password], select {
@@ -448,8 +448,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
     </div>
 
     <h3>Move the library to another drive</h3>
-    <p class="hint">Everything is copied while downloads pause, then the app switches over the next
-      time it opens. Nothing is removed from the old place until the new one has it all.</p>
+    <p class="hint">Everything is copied while you keep using the app (downloads pause), then it
+      switches over by itself and removes the old copy. Nothing to close or reopen. Nothing is
+      removed from the old place until the new one has it all.</p>
     <div id="drive-list"><span class="muted">Looking at your drives…</span></div>
     <details>
       <summary>Type a folder yourself</summary>
@@ -1495,15 +1496,22 @@ _TOOLS_HTML = """<!DOCTYPE html>
   // ---- Move the library to another drive ----
   var moveTimer = null;
   function count(n) { return (n || 0).toLocaleString(); }
+  var lastMoveState = null;
   function showMove(s) {
+    var old = s.old_copy;
     document.getElementById("space-notice").classList.toggle("hidden", !s.low);
     if (s.low) {
       document.getElementById("space-title").textContent = "Only " + (fmtSize(s.free) || "0 MB") +
         " is free on the drive the library is on (" + s.folder + ").";
     }
     var line = document.getElementById("move-status");
-    var busyNow = s.state === "pausing" || s.state === "measuring" || s.state === "copying";
-    var old = s.old_copy;
+    var busyNow = ["pausing", "measuring", "copying", "finishing", "switching"].indexOf(s.state) >= 0;
+    var wasMoving = ["pausing", "measuring", "copying", "finishing", "switching"].indexOf(lastMoveState) >= 0;
+    if (wasMoving && s.state === "idle" && old && old.path) {
+      log("✓ The library is now in " + s.folder + ". Removing the old copy from " + old.path + ".", "log-ok");
+      loadPlaces();
+    }
+    lastMoveState = s.state;
     var text;
     if (s.state === "pausing") {
       text = "Pausing downloads before the copy starts…";
@@ -1518,8 +1526,14 @@ _TOOLS_HTML = """<!DOCTYPE html>
         text = "⏳ " + s.target + " is not answering (" + s.problem + "). Waiting and trying again by " +
           "itself for up to 15 minutes; check the drive is still connected. " + text;
       }
+    } else if (s.state === "finishing") {
+      text = "Almost done: " + (s.step || "finishing the copy") + "… The library is still in use from " +
+        s.folder + ".";
+    } else if (s.state === "switching") {
+      text = "Switching over to " + s.target + ". The app may stop answering for a few seconds.";
     } else if (s.state === "copied") {
-      text = "✓ Copied to " + s.target + ". Close the app and open it again to finish: it then runs " +
+      text = "✓ Copied to " + s.target + ", but the app could not switch over while it was running " +
+        "(something kept the database busy). Close the app and open it again to finish: it then runs " +
         "from there and removes the old copy from " + s.folder + ". Downloads stay paused until then.";
     } else if (s.state === "chosen") {
       text = "✓ Close the app and open it again: it then runs from the library in " + s.target +
@@ -1633,8 +1647,8 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var folder = document.getElementById("move-folder").value.trim();
     if (!folder) { log("Type the folder to move the library to, for example D:\\\\LNCrawl.", "log-err"); return; }
     if (!confirm("Move the whole library to " + folder + "?\\n\\nDownloads pause while it copies (a big " +
-        "library can take hours). Then close the app and open it again: it runs from the new place " +
-        "and removes the old copy.")) return;
+        "library can take hours); you can keep reading meanwhile. When the copy is done the app " +
+        "switches over by itself and removes the old copy.")) return;
     api("/admin/library/move", { method: "POST", body: JSON.stringify({ folder: folder }) })
       .then(function (s) { log("Moving the library to " + s.target + "…", "log-info"); showMove(s); })
       .catch(function (e) { log("Could not start the move: " + e.message, "log-err"); });

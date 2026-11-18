@@ -450,6 +450,70 @@ class SwitchTests(unittest.TestCase):
         self.assertIs(read_marker(self.old)["copied"], True)  # left for the app itself
 
 
+class DatabaseWhileInUseTests(unittest.TestCase):
+    """The database copied while the app writes to it, made whole in a moment at the end."""
+
+    def setUp(self) -> None:
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.source = root / "c" / "sqlite.db"
+        self.target = root / "ssd" / "sqlite.db"
+        self.source.parent.mkdir()
+        self.target.parent.mkdir()
+        self.app = sqlite3.connect(str(self.source))
+        self.addCleanup(self.app.close)
+        self.app.execute("pragma journal_mode=wal")
+        self.app.execute("create table novels (title text, body blob)")
+        with self.app:  # a few megabytes, so it is more than one block
+            for number in range(40):
+                self.app.execute(
+                    "insert into novels values (?, ?)", (f"Novel {number}", os.urandom(100_000))
+                )
+
+    def rows(self, database: Path) -> list:
+        with sqlite3.connect(str(database)) as connection:
+            return connection.execute("select title, body from novels order by rowid").fetchall()
+
+    def test_what_is_written_during_the_copy_is_in_the_finished_copy(self) -> None:
+        digests = relocation.precopy_database(self.source, self.target)
+        with self.app:  # the app goes on using it
+            self.app.execute("insert into novels values ('Written meanwhile', x'00')")
+            self.app.execute("update novels set title = 'Renamed' where title = 'Novel 3'")
+            self.app.execute("delete from novels where title = 'Novel 7'")
+        written = relocation.finish_database(self.source, self.target, digests)
+        self.assertEqual(self.rows(self.target), self.rows(self.source))
+        self.assertGreater(written, 0)
+        self.assertLess(written, len(digests))  # only the blocks that changed
+        self.assertFalse(self.target.with_name("sqlite.db.moving").exists())
+
+    def test_an_unchanged_database_is_not_written_again(self) -> None:
+        digests = relocation.precopy_database(self.source, self.target)
+        self.assertEqual(relocation.finish_database(self.source, self.target, digests), 0)
+        self.assertEqual(self.rows(self.target), self.rows(self.source))
+
+    def test_a_database_that_shrank_is_cut_to_its_size(self) -> None:
+        digests = relocation.precopy_database(self.source, self.target)
+        with self.app:
+            self.app.execute("delete from novels")
+        self.app.execute("vacuum")
+        relocation.finish_database(self.source, self.target, digests)
+        self.assertEqual(self.target.stat().st_size, self.source.stat().st_size)
+        self.assertEqual(self.rows(self.target), [])
+
+    def test_it_is_not_finished_while_something_still_writes(self) -> None:
+        digests = relocation.precopy_database(self.source, self.target)
+        reader = sqlite3.connect(str(self.source))
+        self.addCleanup(reader.close)
+        reader.execute("begin")
+        reader.execute("select count(*) from novels").fetchone()  # holds the journal
+        with self.app:
+            self.app.execute("insert into novels values ('Still in the journal', x'00')")
+        with self.assertRaisesRegex(OSError, "still being written to"):
+            relocation.finish_database(self.source, self.target, digests)
+        self.assertFalse(self.target.exists())  # nothing half made is put in place
+
+
 class RemoveOldCopyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = TemporaryDirectory()
@@ -568,6 +632,7 @@ class ServiceTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         service = self.module.LibraryMoveService()
+        service.live = False  # the move left for the restart; finished live in LiveMoveTests
         self.addCleanup(service.close)
         return service
 
@@ -841,6 +906,66 @@ print("TARGET", status["target"])
 ctx.destroy()
 """
 
+LIVE_MOVE = """
+import sys, time, sqlite3
+from pathlib import Path
+from lncrawl.context import ctx
+ctx.setup(sync_remote_index=False)
+from lncrawl.dao import Novel
+early = ctx.db.session()  # made before the move, used after it
+ctx.library_move.start(sys.argv[1])
+seen = set()
+while True:
+    status = ctx.library_move.status()
+    seen.add(status["state"])
+    done = (status["old_copy"] or {}).get("state") in ("done", "failed")
+    if status["state"] in ("copied", "failed") or (status["state"] == "idle" and done):
+        break
+    time.sleep(0.005)
+print("STATES", sorted(seen))
+print("STATE", status["state"], status["error"])
+print("FOLDER", ctx.config.app.app_dir)
+print("DATABASE", ctx.config.db.url)
+print("CONFIG", ctx.config.config_file)
+print("OLD", (status["old_copy"] or {}).get("state"))
+early.add(Novel(id="after", url="https://example.com/after", domain="example.com",
+                title="Written After"))
+early.commit()
+early.close()
+with ctx.db.session() as session:
+    print("NOVEL", session.get(Novel, "moved").title)
+ctx.files.save_text("novels/after/chapters/000001.zst", "<p>New.</p>")
+print("FILE", ctx.files.resolve("novels/after/chapters/000001.zst"))
+database = sqlite3.connect(str(ctx.config.app.app_dir / "sqlite.db"))
+print("IN NEW", sorted(row[0] for row in database.execute(f"select id from {Novel.__tablename__}")))
+database.close()
+ctx.destroy()
+"""
+
+BUSY_MOVE = """
+import sys, time
+from lncrawl.context import ctx
+import lncrawl.services.library_move as library_move
+library_move.GATE_TIMEOUT = 1.0
+ctx.setup(sync_remote_index=False)
+from lncrawl.dao import Novel
+busy = ctx.db.session()
+busy.add(Novel(id="busy", url="https://example.com/busy", domain="example.com",
+               title="Written While Busy"))
+busy.flush()  # holds the database, uncommitted, for the whole move
+ctx.library_move.start(sys.argv[1])
+while ctx.library_move.status()["state"] not in ("copied", "failed", "idle"):
+    time.sleep(0.02)
+status = ctx.library_move.status()
+busy.commit()
+busy.close()
+print("STATE", status["state"], status["error"])
+print("FOLDER", ctx.config.app.app_dir)
+with ctx.db.session() as session:
+    print("WRITTEN", "while busy" if session.get(Novel, "busy") else "lost")
+ctx.destroy()
+"""
+
 AFTER_RESTART = """
 import time
 from lncrawl.context import ctx
@@ -852,6 +977,9 @@ print("FOLDER", ctx.config.app.app_dir)
 print("NOVEL", novel.title if novel else None)
 print("CHAPTER", ctx.files.load_text("novels/moved/chapters/000001.zst"))
 print("DATABASE", ctx.config.db.url)
+with ctx.db.session() as session:
+    busy = session.get(Novel, "busy")
+    print("BUSY", busy.title if busy else None)
 ctx.library_move.on_startup()
 while (ctx.library_move.status()["old_copy"] or {}).get("state") not in ("done", "failed"):
     time.sleep(0.05)
@@ -879,37 +1007,65 @@ def run_app(code: str, data: Path, *args: str) -> str:
 
 
 class RealAppTests(unittest.TestCase):
-    def test_a_library_moved_from_the_app_is_all_there_after_the_restart(self) -> None:
+    def test_a_library_moved_from_the_app_is_used_from_the_new_drive_at_once(self) -> None:
         with TemporaryDirectory() as temp:
             old, drive = Path(temp) / "c" / "LNCrawl", Path(temp) / "ssd"
             (drive / "Games").mkdir(parents=True)  # a drive with other things on it
             run_app(FIRST_RUN, old)
+            window = old / "app-browser" / "Default" / "Preferences"
+            window.parent.mkdir(parents=True)
+            window.write_text("as the window left it")
 
-            output = run_app(MOVE, old, str(drive))
+            output = run_app(LIVE_MOVE, old, str(drive))
             target = drive / "LNCrawl"
-            self.assertIn("STATE copied None", output)
-            self.assertIn(f"TARGET {target}", output)
-            self.assertTrue((old / "sqlite.db").is_file())  # still the library until a restart
+            self.assertIn("STATE idle None", output)
+            self.assertIn("finishing", output)
+            self.assertIn("switching", output)
+            self.assertIn(f"FOLDER {target}", output)
+            self.assertIn(f"DATABASE sqlite:///{target.resolve().as_posix()}/sqlite.db", output)
+            self.assertIn(f"CONFIG {target / 'config.json'}", output)
+            self.assertIn("OLD done", output)
+            # a session made before the move writes to the new database after it
+            self.assertIn("IN NEW ['after', 'moved']", output)
+            self.assertIn("NOVEL Moved Novel", output)
+            self.assertIn(f"FILE {target / 'novels/after/chapters/000001.zst'}", output)
+            # the old copy is gone but for what the app window may still be using
+            self.assertEqual(sorted(p.name for p in old.iterdir()), ["app-browser", MARKER])
+            self.assertEqual(read_marker(old)["refresh"], ["app-browser"])
+            self.assertIn("Switched: the app runs from", (target / relocation.MOVE_LOG).read_text())
 
+            window.write_text("what the window wrote after the move")
             output = run_app(AFTER_RESTART, old)  # started the same way as ever
             self.assertIn(f"FOLDER {target}", output)
             self.assertIn("NOVEL Moved Novel", output)
-            self.assertIn("CHAPTER <p>The story so far.</p>", output)
-            self.assertIn(f"DATABASE sqlite:///{target.resolve().as_posix()}/sqlite.db", output)
             self.assertIn("OLD done", output)
+            self.assertEqual(
+                (target / "app-browser" / "Default" / "Preferences").read_text(),
+                "what the window wrote after the move",
+            )
             self.assertEqual(sorted(p.name for p in old.iterdir()), [MARKER])
             self.assertEqual(sorted(p.name for p in drive.iterdir()), ["Games", "LNCrawl"])
+            self.assertEqual(read_marker(old), {"path": str(target), "state": "moved"})
 
-            output = run_app(
-                AFTER_RESTART.replace("ctx.library_move.on_startup()", "pass")
-                .replace(
-                    'while (ctx.library_move.status()["old_copy"] or {}).get("state") not in ("done", "failed"):\n    time.sleep(0.05)\n',
-                    "",
-                )
-                .replace('print("OLD", ctx.library_move.status()["old_copy"]["state"])', ""),
-                old,
-            )
-            self.assertIn(f"FOLDER {target}", output)  # and on every start after that
+    def test_a_database_that_stays_busy_leaves_the_switch_to_the_restart(self) -> None:
+        with TemporaryDirectory() as temp:
+            old, drive = Path(temp) / "c" / "LNCrawl", Path(temp) / "ssd"
+            run_app(FIRST_RUN, old)
+
+            output = run_app(BUSY_MOVE, old, str(drive))
+            target = drive  # new and empty, so the library goes in it as it is
+            self.assertIn("STATE copied None", output)
+            self.assertIn(f"FOLDER {old}", output)  # still the library until a restart
+            self.assertIn("WRITTEN while busy", output)
+            self.assertTrue((old / "sqlite.db").is_file())
+            self.assertIn("stayed busy", (target / relocation.MOVE_LOG).read_text())
+
+            output = run_app(AFTER_RESTART, old)
+            self.assertIn(f"FOLDER {target}", output)
+            self.assertIn("NOVEL Moved Novel", output)
+            self.assertIn("BUSY Written While Busy", output)
+            self.assertIn("OLD done", output)
+            self.assertEqual(sorted(p.name for p in old.iterdir()), [MARKER])
 
     def test_a_moved_library_whose_drive_is_unplugged_stops_the_app_with_the_reason(self) -> None:
         with TemporaryDirectory() as temp:
