@@ -25,6 +25,7 @@ from ..relocation import (
     cleanup_done,
     copy_done,
     copy_tree,
+    failure_shown,
     forget_move,
     measure,
     read_marker,
@@ -60,6 +61,7 @@ class LibraryMoveService:
         self._problem: Optional[str] = None  # why the copy is waiting to try a file again
         self._paused = False  # downloads were running, and were stopped for the copy
         self._old: Dict[str, Any] = {}  # the old copy being removed after a move
+        self._left_behind = 0  # files the switch to this folder could not bring along
 
     def close(self) -> None:
         self._stop.set()
@@ -83,6 +85,7 @@ class LibraryMoveService:
                 "error": self._error,
                 "problem": self._problem,
                 "old_copy": dict(self._old) or None,
+                "left_behind": self._left_behind,
             }
 
     def start(self, folder: str) -> Dict[str, Any]:
@@ -135,6 +138,24 @@ class LibraryMoveService:
             # a copy the last run did not finish: the library is where it was,
             # and what was copied waits there for another try
             forget_move(base)
+        failed = marker.get("failed")
+        if isinstance(failed, str) and failed:
+            # the start could not finish the move: say why, once
+            went_to = marker.get("failed_target")
+            logger.error(f"The library could not be moved to {went_to}: {failed}")
+            with self._lock:
+                self._state = "failed"
+                self._error = f"it could not be finished when the app started ({failed})"
+                self._target = Path(went_to) if isinstance(went_to, str) and went_to else None
+            try:
+                failure_shown(base)
+            except OSError:
+                pass
+        left = marker.get("left_behind")
+        if isinstance(left, int) and left:
+            logger.warning(f"{left} file(s) in use could not be brought along with the library")
+            with self._lock:
+                self._left_behind = left
         old = marker.get("old")
         if marker.get("cleanup") and isinstance(old, str) and old:
             Thread(

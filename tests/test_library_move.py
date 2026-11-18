@@ -255,9 +255,87 @@ class SwitchTests(unittest.TestCase):
         (self.new / STAMP).unlink()  # the drive came back without it, or it was deleted
         with patch.object(sys, "stderr", MagicMock()):
             self.assertEqual(resolve(self.old), self.old)
-        self.assertEqual(read_marker(self.old), {})
+        self.assertNotIn("moving_to", read_marker(self.old))
         before.pop(MARKER)
-        self.assertEqual(tree(self.old), before)
+        after = tree(self.old)
+        after.pop(MARKER)
+        self.assertEqual(after, before)
+
+    def locked(self, *names: str):
+        """`shutil.copy2` refusing the named files, as Windows does for one a program holds open."""
+        real = relocation.shutil.copy2
+        tried = []
+
+        def copy2(source, target, **kwargs):
+            if Path(source).name in names:
+                tried.append(Path(source).name)
+                raise PermissionError(13, "The process cannot access the file", str(source))
+            return real(source, target, **kwargs)
+
+        patcher = patch.object(relocation.shutil, "copy2", copy2)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return tried
+
+    def test_a_file_the_app_window_still_holds_does_not_undo_the_move(self) -> None:
+        # The browser behind the app window can outlive the app, holding files of
+        # its profile open. Hours of copying were thrown away over one of them.
+        for relative in ("app-browser/Default/Cookies", "app-browser/Default/Preferences"):
+            (self.old / relative).parent.mkdir(parents=True, exist_ok=True)
+            (self.old / relative).write_bytes(b"profile")
+        self.copied()
+        tried = self.locked("Cookies", "app.log")
+        began = time.monotonic()
+        self.assertEqual(resolve(self.old), self.new)
+        self.assertLess(time.monotonic() - began, 1.0)  # nothing is waited for at a start
+        self.assertEqual(tried, ["Cookies", "app.log"])  # and each is tried once
+        marker = read_marker(self.old)
+        self.assertEqual(marker["state"], "moved")
+        self.assertEqual(marker["path"], str(self.new))
+        self.assertEqual(marker["left_behind"], 2)
+        self.assertTrue((self.new / "app-browser/Default/Preferences").is_file())
+        self.assertFalse((self.new / "app-browser/Default/Cookies").exists())
+        self.assertFalse(list(self.new.rglob("*.moving")))
+        with sqlite3.connect(self.new / "sqlite.db") as database:
+            self.assertEqual(
+                database.execute("select title from novels").fetchall(), [("Moved Novel",)]
+            )
+
+    def test_settings_that_cannot_be_copied_keep_the_library_where_it_is(self) -> None:
+        self.copied()
+        self.locked("config.json")
+        with patch.object(sys, "stderr", MagicMock()):
+            self.assertEqual(resolve(self.old), self.old)
+        self.assertEqual(read_marker(self.old).get("state"), None)
+
+    def test_a_move_that_could_not_be_finished_leaves_the_reason(self) -> None:
+        # The desktop app has no console: printed, the reason was never seen, and
+        # the card went back to "The library is in C:" as if nothing was asked.
+        self.copied()
+        (self.new / STAMP).unlink()
+        with patch.object(sys, "stderr", MagicMock()):
+            self.assertEqual(resolve(self.old), self.old)
+        marker = read_marker(self.old)
+        self.assertEqual(
+            marker, {"failed": "the copy made there is gone", "failed_target": str(self.new)}
+        )
+        self.assertEqual(resolve(self.old), self.old)  # not tried again by itself
+
+    def test_a_marker_that_cannot_be_written_does_not_stop_the_app_starting(self) -> None:
+        self.copied()
+        (self.new / STAMP).unlink()
+        real = relocation.write_marker
+
+        def full(base, **fields):
+            if "moving_to" not in fields:  # the drive the app starts on has no room left
+                raise OSError(28, "No space left on device")
+            return real(base, **fields)
+
+        with (
+            patch.object(relocation, "write_marker", full),
+            patch.object(sys, "stderr", MagicMock()),
+        ):
+            self.assertEqual(resolve(self.old), self.old)
 
     def test_a_library_moved_once_can_be_moved_again(self) -> None:
         self.copied()
@@ -513,6 +591,37 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(resolve(self.old), self.old)
         self.app(self.old).on_startup()
         self.assertEqual(read_marker(self.old), {})
+
+    def test_a_move_the_restart_could_not_finish_is_said_on_the_card(self) -> None:
+        target = self.moved()
+        (target / STAMP).unlink()
+        with patch.object(sys, "stderr", MagicMock()):
+            self.assertEqual(resolve(self.old), self.old)  # the restart
+        service = self.app(self.old)
+        service.on_startup()
+        status = service.status()
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["target"], str(target))
+        self.assertIn("the copy made there is gone", status["error"])
+        self.assertEqual(read_marker(self.old), {})  # said once
+        service.start(str(self.ssd))  # and the move can be started again
+        self.wait(lambda s: s["state"] == "copied", service)
+
+    def test_files_left_behind_at_the_switch_are_said_on_the_card(self) -> None:
+        target = self.moved()
+        real = relocation.shutil.copy2
+
+        def copy2(source, copy, **kwargs):
+            if Path(source).name == "app.log":
+                raise PermissionError(13, "in use")
+            return real(source, copy, **kwargs)
+
+        with patch.object(relocation.shutil, "copy2", copy2):
+            self.assertEqual(resolve(self.old), target)
+        service = self.app(target)
+        service.on_startup()
+        status = self.wait(lambda s: (s["old_copy"] or {}).get("state") == "done", service)
+        self.assertEqual(status["left_behind"], 1)
 
     def test_after_the_restart_the_old_copy_is_removed(self) -> None:
         target = self.moved()

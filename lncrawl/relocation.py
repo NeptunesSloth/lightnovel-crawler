@@ -86,6 +86,8 @@ def read_marker(base: Path) -> Dict[str, Any]:
     ``path`` with ``state`` "moved": the folder the library is in now.
     ``moving_to`` and ``copied``: a move under way, and whether its copy is done.
     ``cleanup`` and ``old``: the copy still to be removed from the folder it left.
+    ``left_behind``: how many files the switch could not bring along.
+    ``failed`` and ``failed_target``: why the last start could not finish a move.
     """
     try:
         data = json.loads((base / MARKER).read_text(encoding="utf-8"))
@@ -136,7 +138,16 @@ def forget_move(base: Path) -> None:
 
 
 def cleanup_done(base: Path) -> None:
-    _update_marker(base, drop=("cleanup", "old"))
+    _update_marker(base, drop=("cleanup", "old", "left_behind"))
+
+
+def move_failed(base: Path, target: str, reason: str) -> None:
+    """Drop a move the start could not finish, keeping why for the app to show."""
+    _update_marker(base, drop=("moving_to", "copied"), failed=reason, failed_target=target)
+
+
+def failure_shown(base: Path) -> None:
+    _update_marker(base, drop=("failed", "failed_target"))
 
 
 def resolve(base: Path) -> Path:
@@ -161,7 +172,13 @@ def resolve(base: Path) -> Path:
             switch(base, current, Path(target))
             return Path(target)
         except Exception as error:  # the library is whole where it was: use it, and say why
-            forget_move(base)
+            # The desktop app has no console, so the reason is kept for its
+            # storage card. If even that cannot be written (the drive the app
+            # starts on is full), the app still has to start.
+            try:
+                move_failed(base, target, str(error) or type(error).__name__)
+            except OSError:
+                pass
             print(
                 f"Could not finish moving the library to {target} ({error}); "
                 f"still using {current}. Start the move again from the app.",
@@ -305,6 +322,7 @@ def copy_tree(
     stop: Optional[Event] = None,
     skip_folders: Optional[Set[str]] = None,
     waiting: Optional[Waiting] = None,
+    left_behind: Optional[List[str]] = None,
 ) -> None:
     """Copy what is under ``source`` to ``target``, keeping each file's time.
 
@@ -315,6 +333,9 @@ def copy_tree(
     A file that cannot be copied is tried again after a wait (see
     `RETRY_PATIENCE`): 790 GB to an external drive stopped at 3 GB because the
     drive did not answer for a moment. A full drive is not waited for.
+
+    With ``left_behind``, a file that cannot be copied is not waited for either:
+    it is added to that list and the copy goes on to the next one.
     """
     made: Set[Path] = set()
 
@@ -349,6 +370,13 @@ def copy_tree(
                         raise
                     if not os.path.lexists(entry.path):
                         break  # the file itself is gone: there is nothing to copy
+                    if left_behind is not None:
+                        try:
+                            copy.with_name(f"{copy.name}.moving").unlink()
+                        except OSError:
+                            pass
+                        left_behind.append(f"{source.name}/{relative}")
+                        break
                     now = time.monotonic()
                     began = now if began is None else began
                     if now - began >= RETRY_PATIENCE:
@@ -393,20 +421,41 @@ def switch(base: Path, current: Path, target: Path) -> None:
     """Finish a move whose copy is done: copy what was left for last, then use ``target``.
 
     ``current`` is where the library is until this returns; ``base`` holds the marker.
+
+    The database and the settings have to arrive, or the move is not made. The
+    rest (the app window's browser profile, source files, logs) is made again
+    when it is missing, and this runs before the app has a window to say it is
+    waiting: a file of those that cannot be copied is left behind, not waited
+    for. The browser behind the app window can outlive the app and hold its
+    profile open, and one such file undid a move of hours of copying.
     """
     if not (target / STAMP).is_file():
         raise OSError("the copy made there is gone")
     if (current / DATABASE).is_file():
         _snapshot_database(current / DATABASE, target / DATABASE)
+    left_behind: List[str] = []
     for name in LATE:
         if name in _DATABASE_FILES:
             continue
         entry = current / name
         if entry.is_dir():
-            copy_tree(entry, target / name, (), lambda files, size: None, skip_folders=_CACHES)
+            copy_tree(
+                entry,
+                target / name,
+                (),
+                lambda files, size: None,
+                skip_folders=_CACHES,
+                left_behind=left_behind,
+            )
         elif entry.is_file():
-            shutil.copy2(entry, target / name)
-    write_marker(base, path=str(target), state="moved", cleanup=True, old=str(current))
+            try:
+                shutil.copy2(entry, target / name)
+            except OSError as error:
+                if name == "config.json" or error.errno == errno.ENOSPC:
+                    raise
+                left_behind.append(name)
+    extra: Dict[str, Any] = {"left_behind": len(left_behind)} if left_behind else {}
+    write_marker(base, path=str(target), state="moved", cleanup=True, old=str(current), **extra)
 
 
 # ---------------------------------------------------------------------------- #

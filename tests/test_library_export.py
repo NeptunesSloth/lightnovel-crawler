@@ -45,6 +45,24 @@ class LibraryExportTests(unittest.TestCase):
                 self.assertIn("completeness not checked", index)
                 self.assertEqual(archive.read("books/Story.epub"), first)
 
+    def test_nothing_is_written_to_the_system_temp_folder(self):
+        # With the system drive full, every export ended in "Internal Server
+        # Error": each book was copied through the temp folder to be read.
+        with TemporaryDirectory() as temp:
+            root = Path(temp) / "data"
+            books = root / "novels" / "one"
+            books.mkdir(parents=True)
+            (books / "Story.epub").write_bytes(ebook("story one"))
+            (root / "exports").mkdir()
+            with zipfile.ZipFile(root / "exports" / "old.zip", "w") as archive:
+                archive.writestr("Other.epub", ebook("story two"))
+            save = Path(temp) / "other-drive"
+            save.mkdir()
+            full = Path(temp) / "full-system-temp"  # does not exist: any write there fails
+            with patch("tempfile.tempdir", str(full)):
+                self.assertEqual(build_library_zip(root, save / "library.zip"), 2)
+            self.assertEqual([p.name for p in save.iterdir()], ["library.zip"])
+
     def test_empty_library_has_index_and_no_books(self):
         with TemporaryDirectory() as temp:
             output = Path(temp) / "library.zip"

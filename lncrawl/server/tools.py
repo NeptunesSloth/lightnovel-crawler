@@ -1354,6 +1354,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
         "exports and the database. Downloads pause while it copies, and nothing is removed from " +
         "the old place until the new one has it all.";
     }
+    if (s.left_behind && s.state === "idle") {
+      text += " " + count(s.left_behind) + " file(s) another program was holding open (the app window's " +
+        "browser profile, logs) were not brought along; they are made again as needed.";
+    }
     line.textContent = text;
     document.getElementById("move-btn").disabled = busyNow || s.state === "copied";
     document.getElementById("move-cancel").classList.toggle("hidden", !(busyNow || s.state === "copied"));
