@@ -401,7 +401,8 @@ def drive_roots() -> List[Path]:
     return roots
 
 
-def _is_library(folder: Path) -> bool:
+def is_library(folder: Path) -> bool:
+    """Whether ``folder`` holds a library: its database, and its stamp or novels."""
     try:
         return (folder / DATABASE).is_file() and (
             (folder / STAMP).is_file() or (folder / "novels").is_dir()
@@ -433,7 +434,7 @@ def find_libraries(roots: List[Path], current: Path, limit: int = 500) -> List[P
         except OSError:
             continue
         for folder in candidates:
-            if _key(folder) != here and _is_library(folder):
+            if _key(folder) != here and is_library(folder):
                 found.append(folder)
     return found
 

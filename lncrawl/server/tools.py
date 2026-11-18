@@ -164,6 +164,51 @@ _TOOLS_HTML = """<!DOCTYPE html>
   .notice .grow { flex: 1 1 auto; }
   .notice button { margin: 0; flex: 0 0 auto; }
 
+  /* picking a folder */
+  .picker-row { flex-wrap: nowrap; }
+  .picker-row > input[type=text] { flex: 1 1 auto; min-width: 0; }
+  .picker-row > button { margin-top: 0; }
+  dialog#folder-picker {
+    border: 1px solid var(--line); border-radius: 14px; padding: 0; width: min(640px, calc(100vw - 32px));
+    background: var(--panel); color: var(--paper);
+  }
+  dialog#folder-picker::backdrop { background: rgba(10, 8, 16, .66); }
+  .picker { padding: 20px 22px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .picker h2 { font-family: var(--serif); font-weight: 500; font-size: 24px; margin: 0; }
+  .trail { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; font-size: 14px; }
+  .trail button {
+    margin: 0; padding: 4px 8px; background: transparent; color: var(--sky); font-weight: 500; border-radius: 6px;
+  }
+  .trail button:hover { background: var(--raised); }
+  .trail button[aria-current] { color: var(--paper); }
+  .trail .sep { color: var(--faint); }
+  .picker-note { min-height: 20px; margin: 0; }
+  .picker-list {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--ink);
+    height: min(52vh, 400px); overflow-y: auto;
+  }
+  .picker-list button {
+    display: flex; width: 100%; align-items: center; gap: 12px; margin: 0; text-align: left;
+    background: transparent; color: var(--paper); font-weight: 400; border-radius: 0;
+    padding: 10px 14px; border-bottom: 1px solid var(--shelf);
+  }
+  .picker-list button:hover, .picker-list button:focus-visible { background: var(--raised); outline-offset: -2px; }
+  .picker-list .glyph { width: 18px; color: var(--lamp); flex: 0 0 auto; text-align: center; }
+  .picker-list .label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .picker-list .meta { color: var(--faint); font-size: 13px; flex: 0 0 auto; }
+  .picker-list .tag {
+    color: var(--leaf); background: rgba(127, 209, 165, .14); border-radius: 999px;
+    padding: 1px 9px; font-size: 12.5px; flex: 0 0 auto;
+  }
+  .picker-list .empty { padding: 18px 14px; color: var(--faint); }
+  .picker-actions { flex-wrap: nowrap; }
+  .picker-actions .grow { flex: 1 1 auto; }
+  .picker-actions button { margin-top: 4px; }
+  @media (max-width: 520px) {
+    .picker-actions { flex-wrap: wrap; }
+    .picker-actions .grow { display: none; }
+  }
+
   /* what has happened */
   .activity { margin-top: 36px; border-top: 1px solid var(--line); padding-top: 16px; }
   .activity h2 { font-size: 14px; font-weight: 600; color: var(--dim); margin: 0 0 8px; font-family: var(--sans); }
@@ -284,7 +329,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
       </div>
       <div style="flex:3">
         <label for="exp-savedir">Save the ZIP to folder</label>
-        <input id="exp-savedir" type="text" placeholder="blank = Desktop, e.g. D:\\Novels" />
+        <div class="row picker-row">
+          <input id="exp-savedir" type="text" placeholder="blank = Desktop, e.g. D:\\Novels" />
+          <button type="button" class="secondary browse" data-for="exp-savedir">Browse…</button>
+        </div>
       </div>
     </div>
     <div class="row checkbox">
@@ -420,7 +468,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <label for="library-completeonly" style="margin:0">Only fully downloaded novels (every chapter downloaded)</label>
     </div>
     <label for="library-savedir">Save the ZIP to folder</label>
-    <input id="library-savedir" type="text" placeholder="blank = download in the browser, e.g. D:\\Novels" />
+    <div class="row picker-row">
+      <input id="library-savedir" type="text" placeholder="blank = download in the browser, e.g. D:\\Novels" />
+      <button type="button" class="secondary browse" data-for="library-savedir">Browse…</button>
+    </div>
     <button id="library-export">Make the ZIP</button>
     <p class="hint">Includes saved EPUBs, CBZ manga and books inside past export ZIPs, one copy
       per novel (the most complete one). NSFW is judged by a novel's tags (Adult, Mature, Smut,
@@ -453,10 +504,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
       removed from the old place until the new one has it all.</p>
     <div id="drive-list"><span class="muted">Looking at your drives…</span></div>
     <details>
-      <summary>Type a folder yourself</summary>
+      <summary>Choose a folder yourself</summary>
       <label for="move-folder">Folder</label>
       <div class="row">
         <input id="move-folder" type="text" placeholder="e.g. D:\\LNCrawl" />
+        <button type="button" class="secondary browse" data-for="move-folder" style="margin-top:0">Browse…</button>
         <button id="move-btn" class="secondary" style="margin-top:0">Move the library here</button>
         <button id="move-use" class="secondary" style="margin-top:0"
           title="For a library that is already in that folder. Nothing is copied.">Use the library in this folder</button>
@@ -516,6 +568,25 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <div id="log"><span class="muted">Nothing yet. What you start shows up here.</span></div>
   </div>
   <p class="build">__BUILD_INFO__</p>
+
+  <dialog id="folder-picker" aria-labelledby="picker-title">
+    <form method="dialog" class="picker">
+      <h2 id="picker-title">Choose a folder</h2>
+      <nav id="picker-trail" class="trail" aria-label="Where you are"></nav>
+      <p id="picker-note" class="muted picker-note"></p>
+      <div id="picker-list" class="picker-list" role="list"></div>
+      <div id="picker-new" class="row hidden">
+        <input id="picker-name" type="text" placeholder="Name of the new folder" />
+        <button type="button" id="picker-make" class="secondary" style="margin-top:0">Make it</button>
+      </div>
+      <div class="row picker-actions">
+        <button type="button" id="picker-new-btn" class="secondary">New folder</button>
+        <span class="grow"></span>
+        <button type="submit" value="cancel" class="secondary">Cancel</button>
+        <button type="button" id="picker-use">Use this folder</button>
+      </div>
+    </form>
+  </dialog>
 </main>
 </div>
 
@@ -1573,6 +1644,133 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (watching && !moveTimer) moveTimer = setInterval(loadMove, 2000);
     if (!watching && moveTimer) { clearInterval(moveTimer); moveTimer = null; }
   }
+  // ---- a folder picker for every folder box: walk the drives instead of typing ----
+  var picker = document.getElementById("folder-picker");
+  var pickerFor = null, pickerAt = null;
+  function pickerRow(glyph, label, meta, tag, open) {
+    var b = document.createElement("button");
+    b.type = "button"; b.setAttribute("role", "listitem");
+    var g = document.createElement("span"); g.className = "glyph"; g.textContent = glyph; g.setAttribute("aria-hidden", "true");
+    var l = document.createElement("span"); l.className = "label"; l.textContent = label;
+    b.appendChild(g); b.appendChild(l);
+    if (tag) { var t = document.createElement("span"); t.className = "tag"; t.textContent = tag; b.appendChild(t); }
+    if (meta) { var m = document.createElement("span"); m.className = "meta"; m.textContent = meta; b.appendChild(m); }
+    b.addEventListener("click", open);
+    return b;
+  }
+  var BS = String.fromCharCode(92);  // a backslash, without escaping it twice over
+  function pickerTrail(path) {
+    var trail = document.getElementById("picker-trail");
+    trail.innerHTML = "";
+    var top = document.createElement("button");
+    top.type = "button"; top.textContent = "This computer";
+    top.addEventListener("click", function () { pickerOpen(null); });
+    if (!path) top.setAttribute("aria-current", "location");
+    trail.appendChild(top);
+    if (!path) return;
+    var windows = /^[A-Za-z]:[\\\\/]/.test(path);
+    var sep = windows ? BS : "/";
+    var parts = path.split(/[\\\\/]+/).filter(function (x) { return x; });
+    var built = windows ? "" : "/";
+    parts.forEach(function (part, i) {
+      built = windows ? (i === 0 ? part + BS : built + (built.slice(-1) === BS ? "" : BS) + part)
+                      : built + (built.slice(-1) === "/" ? "" : "/") + part;
+      var s = document.createElement("span"); s.className = "sep"; s.textContent = "›"; trail.appendChild(s);
+      var b = document.createElement("button"); b.type = "button"; b.textContent = part;
+      var target = built;
+      b.addEventListener("click", function () { pickerOpen(target); });
+      if (i === parts.length - 1) b.setAttribute("aria-current", "location");
+      trail.appendChild(b);
+    });
+    if (!parts.length) {  // the root folder "/"
+      var s0 = document.createElement("span"); s0.className = "sep"; s0.textContent = "›"; trail.appendChild(s0);
+      var r = document.createElement("button"); r.type = "button"; r.textContent = sep; r.setAttribute("aria-current", "location");
+      trail.appendChild(r);
+    }
+  }
+  function pickerOpen(path) {
+    var list = document.getElementById("picker-list");
+    var note = document.getElementById("picker-note");
+    list.innerHTML = "<div class='empty'>Looking…</div>";
+    var query = path ? "?path=" + encodeURIComponent(path) : "";
+    api("/admin/folders" + query, { method: "GET" }).then(function (r) {
+      pickerAt = r.path;
+      pickerTrail(r.path);
+      list.innerHTML = "";
+      document.getElementById("picker-use").disabled = !r.path;
+      document.getElementById("picker-new-btn").disabled = !r.path;
+      if (!r.path) {
+        note.textContent = "Pick a drive or one of your folders to look in.";
+        (r.places || []).forEach(function (p) {
+          var meta = p.free != null ? (fmtSize(p.free) || "0 MB") + " free" : "";
+          list.appendChild(pickerRow(p.kind === "drive" ? "◼" : "▸", p.name, meta, "", function () { pickerOpen(p.path); }));
+        });
+        return;
+      }
+      note.textContent = (r.library ? "This folder holds a library. " : "") +
+        (r.free != null ? (fmtSize(r.free) || "0 MB") + " free on this drive." : "");
+      if (r.parent) list.appendChild(pickerRow("↰", "Up one level", "", "", function () { pickerOpen(r.parent); }));
+      r.folders.forEach(function (f) {
+        list.appendChild(pickerRow("▸", f.name, "", f.library ? "library" : "", function () { pickerOpen(f.path); }));
+      });
+      if (!r.folders.length) {
+        var e = document.createElement("div"); e.className = "empty";
+        e.textContent = "No folders in here. Use this one, or make a new folder.";
+        list.appendChild(e);
+      }
+      if (r.more) {
+        var m = document.createElement("div"); m.className = "empty";
+        m.textContent = count(r.more) + " more folders are not listed. Type the path in the box instead.";
+        list.appendChild(m);
+      }
+      var first = list.querySelector("button");
+      if (first) first.focus();
+    }).catch(function (e) {
+      note.textContent = e.message;
+      list.innerHTML = "";
+      if (pickerAt !== path) {
+        list.appendChild(pickerRow("↰", "Back", "", "", function () { pickerOpen(pickerAt); }));
+      }
+    });
+  }
+  document.querySelectorAll("button.browse").forEach(function (button) {
+    button.addEventListener("click", function () {
+      if (!requireAuth()) return;
+      pickerFor = document.getElementById(button.getAttribute("data-for"));
+      document.getElementById("picker-new").classList.add("hidden");
+      pickerAt = null;
+      if (typeof picker.showModal === "function") picker.showModal(); else picker.setAttribute("open", "");
+      pickerOpen(pickerFor.value.trim() || null);
+    });
+  });
+  document.getElementById("picker-use").addEventListener("click", function () {
+    if (pickerFor && pickerAt) {
+      pickerFor.value = pickerAt;
+      pickerFor.dispatchEvent(new Event("change"));
+    }
+    picker.close();
+  });
+  document.getElementById("picker-new-btn").addEventListener("click", function () {
+    var row = document.getElementById("picker-new");
+    row.classList.remove("hidden");
+    document.getElementById("picker-name").value = "";
+    document.getElementById("picker-name").focus();
+  });
+  function pickerMake() {
+    var name = document.getElementById("picker-name").value.trim();
+    if (!name || !pickerAt) return;
+    api("/admin/folders", { method: "POST", body: JSON.stringify({ path: pickerAt, name: name }) })
+      .then(function (r) {
+        document.getElementById("picker-new").classList.add("hidden");
+        pickerOpen(r.path);
+      })
+      .catch(function (e) { document.getElementById("picker-note").textContent = e.message; });
+  }
+  document.getElementById("picker-make").addEventListener("click", pickerMake);
+  document.getElementById("picker-name").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); pickerMake(); }
+  });
+
   // ---- drives and libraries to pick from, so no folder has to be typed ----
   function placeRow(name, about, label, act, share) {
     var row = document.createElement("div"); row.className = "place";

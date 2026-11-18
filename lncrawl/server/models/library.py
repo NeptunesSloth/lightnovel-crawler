@@ -39,6 +39,11 @@ class LibraryExportRequest(BaseModel):
     )
 
 
+class NewFolderRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=1024, description="Folder to make it in")
+    name: str = Field(min_length=1, max_length=255, description="Name of the new folder")
+
+
 class LibraryUseRequest(BaseModel):
     folder: str = Field(
         min_length=1,

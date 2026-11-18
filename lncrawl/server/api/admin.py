@@ -24,7 +24,12 @@ from ..models.activity import (
     GlobalActivitySummary,
     TopUserActivity,
 )
-from ..models.library import LibraryExportRequest, LibraryMoveRequest, LibraryUseRequest
+from ..models.library import (
+    LibraryExportRequest,
+    LibraryMoveRequest,
+    LibraryUseRequest,
+    NewFolderRequest,
+)
 
 # The root router
 router = APIRouter()
@@ -142,6 +147,28 @@ def export_library_to_folder(body: LibraryExportRequest = Body()) -> Dict[str, A
 @router.get("/library/location", summary="Where the library is, and any move under way")
 def library_location() -> Dict[str, Any]:
     return ctx.library_move.status()
+
+
+@router.get("/folders", summary="The folders in a folder on this computer, to pick one")
+def list_folders(
+    path: Optional[str] = Query(default=None, description="Blank: the drives and own folders"),
+) -> Dict[str, Any]:
+    from ...utils.folders import list_folder
+
+    try:
+        return list_folder(path)
+    except ValueError as error:
+        raise ServerErrors.invalid_input.with_extra(str(error)) from error
+
+
+@router.post("/folders", summary="Make a folder on this computer")
+def make_folder(body: NewFolderRequest = Body()) -> Dict[str, Any]:
+    from ...utils.folders import new_folder
+
+    try:
+        return {"path": new_folder(body.path, body.name)}
+    except ValueError as error:
+        raise ServerErrors.invalid_input.with_extra(str(error)) from error
 
 
 @router.get("/library/places", summary="Drives the library could go to, and libraries on them")
