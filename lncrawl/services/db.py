@@ -1,8 +1,9 @@
 from functools import cached_property
 import logging
 from pathlib import Path
+from threading import Condition, Lock
 import time
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence, Set
 
 from sqlalchemy.engine import make_url
 import sqlmodel as sa
@@ -13,13 +14,120 @@ from ..dao import SQLModel
 logger = logging.getLogger(__name__)
 
 
+class _Gate:
+    """Counts the database connections in use, and can hold new ones back.
+
+    Nothing waits to be let in while it is open, so a thread that already has a
+    connection and asks for another is never stuck behind a `close` waiting for
+    it: `close` only succeeds once nothing at all is in use.
+    """
+
+    def __init__(self) -> None:
+        self._state = Condition()
+        self._in_use = 0
+        self._closed = False
+
+    @property
+    def in_use(self) -> int:
+        return self._in_use
+
+    def enter(self) -> None:
+        with self._state:
+            while self._closed:
+                self._state.wait()
+            self._in_use += 1
+
+    def leave(self) -> None:
+        with self._state:
+            self._in_use = max(0, self._in_use - 1)
+            self._state.notify_all()
+
+    def close(self, timeout: float) -> bool:
+        """Hold new connections back once none is in use; False if that took too long."""
+        with self._state:
+            if not self._state.wait_for(lambda: self._in_use == 0, timeout):
+                return False
+            self._closed = True
+            return True
+
+    def open(self) -> None:
+        with self._state:
+            self._closed = False
+            self._state.notify_all()
+
+
 class DB:
     def __init__(self) -> None:
-        pass
+        self._gate = _Gate()
+        self._held: Set[int] = set()  # connections handed out, by their pool record
+        self._held_lock = Lock()
+        self._generation = 0  # how many times the database file has moved
+        self._sqlite_file: Optional[str] = None  # where it is now, once it has moved
 
     @cached_property
     def engine(self):
-        return self._create_engine(ctx.config.db.url)
+        engine = self._create_engine(ctx.config.db.url)
+        if engine.dialect.name == "sqlite":
+            self._watch(engine)
+        return engine
+
+    def _watch(self, engine: Any) -> None:
+        """Count the connections in use, and open new ones where the database is now."""
+        from sqlalchemy import event, exc
+
+        @event.listens_for(engine, "do_connect")
+        def _where(_dialect: Any, _record: Any, cargs: list, cparams: dict) -> None:
+            if self._sqlite_file:
+                if cargs:
+                    cargs[0] = self._sqlite_file
+                else:
+                    cparams["database"] = self._sqlite_file
+
+        @event.listens_for(engine, "connect")
+        def _made(_dbapi_conn: Any, record: Any) -> None:
+            record.info["lncrawl_generation"] = self._generation
+
+        @event.listens_for(engine, "checkout")
+        def _out(_dbapi_conn: Any, record: Any, _proxy: Any) -> None:
+            self._gate.enter()
+            if record.info.get("lncrawl_generation") != self._generation:
+                # opened before the database moved: the pool makes a new one
+                self._gate.leave()
+                raise exc.DisconnectionError("the database has moved")
+            with self._held_lock:
+                self._held.add(id(record))
+
+        @event.listens_for(engine, "checkin")
+        def _in(_dbapi_conn: Any, record: Any) -> None:
+            with self._held_lock:
+                held = id(record) in self._held
+                self._held.discard(id(record))
+            if held:
+                self._gate.leave()
+
+    def move_sqlite(self, new_file: str, finish: Callable[[], None], timeout: float) -> bool:
+        """Use the database file at ``new_file`` from now on, without a restart.
+
+        Waits up to ``timeout`` seconds for no connection to be in use, then
+        holds new ones back while ``finish`` runs: it makes ``new_file`` a whole
+        copy of the database. After that every connection, including those of
+        sessions made earlier, is to ``new_file``. False, with nothing changed,
+        when the database could not be had to itself in time; an error from
+        ``finish`` also changes nothing, and is raised.
+        """
+        engine = self.engine
+        if engine.dialect.name != "sqlite":
+            raise ValueError("Only a database file can be moved")
+        if not self._gate.close(timeout):
+            return False
+        try:
+            finish()
+            self._sqlite_file = new_file
+            self._generation += 1
+            engine.dispose()  # the connections to the old file, all idle now
+        finally:
+            self._gate.open()
+        return True
 
     def close(self):
         if "engine" in self.__dict__:

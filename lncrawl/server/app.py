@@ -38,6 +38,32 @@ _TOOLS_LAUNCHER = """<script>(function(){
       + 'font:600 13px system-ui,sans-serif;text-decoration:none;'
       + 'box-shadow:0 2px 10px rgba(0,0,0,.4)';
     document.body.appendChild(a);
+    // The drive the library is on running out stops downloads and then the app
+    // itself: say so here too, while there is still room to move the library.
+    var token = t;
+    try { token = token || localStorage.getItem('lncrawl_token') || ''; } catch (e) {}
+    function space(){
+      if (!token) return;
+      fetch('/api/admin/library/location', {headers: {Authorization: 'Bearer ' + token}})
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(s){
+          var b = document.getElementById('lncrawl-space-warning');
+          if (!s || !s.low) { if (b) b.remove(); return; }
+          if (!b) {
+            b = document.createElement('a');
+            b.id = 'lncrawl-space-warning';
+            b.href = '/tools?authToken=' + encodeURIComponent(token) + '#library';
+            b.style.cssText = 'position:fixed;right:14px;bottom:58px;z-index:99999;max-width:320px;'
+              + 'background:#f2b84b;color:#201803;padding:10px 14px;border-radius:10px;'
+              + 'font:600 13px system-ui,sans-serif;text-decoration:none;'
+              + 'box-shadow:0 2px 10px rgba(0,0,0,.4)';
+            document.body.appendChild(b);
+          }
+          var gb = (s.free / 1073741824).toFixed(1);
+          b.textContent = 'Only ' + gb + ' GB free on the library\u2019s drive. Move the library';
+        }).catch(function(){});
+    }
+    space(); setInterval(space, 60000);
   });
 })();</script>"""
 

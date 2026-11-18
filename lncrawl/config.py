@@ -57,6 +57,18 @@ APP_DIR = _data_folder()
 DEFAULT_CONFIG_FILE = APP_DIR / "config.json"
 
 
+def use_data_folder(folder: Path) -> None:
+    """From now on the data folder is ``folder``: the library was moved there while the app ran.
+
+    Everything that asks `AppConfig.app_dir` for the folder follows at once.
+    `Config.follow_data_folder` brings the settings file and the paths worked
+    out from the folder along.
+    """
+    global APP_DIR, DEFAULT_CONFIG_FILE
+    APP_DIR = folder
+    DEFAULT_CONFIG_FILE = folder / "config.json"
+
+
 class Sensitive:
     """Use with `typing.Annotated` on config property return types.
 
@@ -235,6 +247,20 @@ class Config(object):
 
         self.save()
 
+    def follow_data_folder(self, old: Path) -> None:
+        """After `use_data_folder`: keep the settings, and the paths made from the folder, in it.
+
+        A settings file someone chose elsewhere (``LNCRAWL_CONFIG``) stays where it is.
+        """
+        if self.config_file is not None and os.path.normcase(
+            os.path.abspath(self.config_file.parent)
+        ) == os.path.normcase(os.path.abspath(old)):
+            self.config_file = DEFAULT_CONFIG_FILE
+        for name in ("user_sources", "user_index_file"):
+            self.crawler.__dict__.pop(name, None)
+        self.db.url  # noqa: B018 -- a stored address of the old file is written as the new one
+        self.save()
+
     def save(self) -> None:
         if not self.config_file:
             return
@@ -303,8 +329,9 @@ class AppConfig(_Section):
             return build_file.read_text(encoding="utf8").strip()
         return "dev"
 
-    @cached_property
+    @property
     def app_dir(self) -> Path:
+        # read each time: the library can move to another folder while the app runs
         return APP_DIR
 
     @property

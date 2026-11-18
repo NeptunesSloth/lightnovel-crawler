@@ -9,8 +9,10 @@ A move never leaves the library split between two places:
 
 1. While the app runs, with downloads paused, everything is copied except what
    the running app holds open (`LATE`). The marker says ``copied``.
-2. The next start, before anything is opened, copies the rest (the database as
-   a snapshot) and the marker says ``moved``: from then on the new folder is used.
+2. The rest is copied and the marker says ``moved``: from then on the new folder
+   is used. The app does this itself, while it runs, with the database to
+   itself for a moment (see `lncrawl/services/library_move.py`); when it cannot,
+   the next start does it, before anything is opened.
 3. Only then is the old copy removed, and a file only where the new folder has
    the same one.
 
@@ -22,6 +24,7 @@ the data folder, before anything else is loaded.
 """
 
 import errno
+import hashlib
 import json
 import multiprocessing
 import os
@@ -29,7 +32,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import sys
-from threading import Event
+from threading import Event, Thread
 import time
 from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Set, Tuple
 
@@ -37,6 +40,12 @@ MARKER = "library-location.json"
 # Left in a folder a move is copying into, so a later try is known to carry on
 # from that copy and not to be writing over someone's own folder.
 STAMP = ".lncrawl-library"
+# What the start that finishes a move did, step by step, in the folder moved to:
+# it runs before the app has a window or a log of its own.
+MOVE_LOG = "move.log"
+# What the stamp says once the app runs from the folder. A folder that says so
+# and has a database is somebody's library, not the leftovers of a move.
+IN_USE = "Lightnovel Crawler library, in use"
 DATABASE = "sqlite.db"
 _DATABASE_FILES = (DATABASE, f"{DATABASE}-wal", f"{DATABASE}-shm")
 # Copied when the app next starts: the running app has these open or keeps
@@ -47,11 +56,18 @@ LATE = (
     *_DATABASE_FILES,
     "config.json",
     "app-browser",
+    "webdriver",  # the browser some sites are read with: a profile, made again
     "scraper",
     "sources",
     "logs",
     "export-crash.log",
 )
+# The database is copied in blocks this big, and a block is copied again only
+# when it changed after it was first copied.
+DB_BLOCK = 1024 * 1024
+# Copied again from the old folder when the app next starts, by name: what the
+# app window's browser was still using when the move was made.
+REFRESH_AT_START = ("app-browser",)
 # Never copied: working files that are made again.
 SKIPPED = ("tmp", MARKER, STAMP)
 # Browser caches in the app window's profile: large, and rebuilt on demand.
@@ -67,6 +83,7 @@ RETRY_FIRST_WAIT = 2.0
 RETRY_LONGEST_WAIT = 60.0
 
 Progress = Callable[[int, int], None]  # (files, bytes) since the last call
+Report = Callable[[str], None]  # what the switch is doing now, in a few words
 # Told the error each time a file could not be copied and is about to be tried
 # again, and None once one gets through.
 Waiting = Callable[[Optional[OSError]], None]
@@ -86,6 +103,8 @@ def read_marker(base: Path) -> Dict[str, Any]:
     ``path`` with ``state`` "moved": the folder the library is in now.
     ``moving_to`` and ``copied``: a move under way, and whether its copy is done.
     ``cleanup`` and ``old``: the copy still to be removed from the folder it left.
+    ``left_behind``: how many files the switch could not bring along.
+    ``failed`` and ``failed_target``: why the last start could not finish a move.
     """
     try:
         data = json.loads((base / MARKER).read_text(encoding="utf-8"))
@@ -136,7 +155,137 @@ def forget_move(base: Path) -> None:
 
 
 def cleanup_done(base: Path) -> None:
-    _update_marker(base, drop=("cleanup", "old"))
+    _update_marker(base, drop=("cleanup", "old", "left_behind"))
+
+
+def move_failed(base: Path, target: str, reason: str) -> None:
+    """Drop a move the start could not finish, keeping why for the app to show."""
+    _update_marker(base, drop=("moving_to", "copied"), failed=reason, failed_target=target)
+
+
+def failure_shown(base: Path) -> None:
+    _update_marker(base, drop=("failed", "failed_target"))
+
+
+def _note(folder: Path, text: str) -> None:
+    """Add a line to the move's log in ``folder``; a log that cannot be written is done without."""
+    try:
+        with open(folder / MOVE_LOG, "a", encoding="utf-8") as log:
+            log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {text}\n")
+    except OSError:
+        pass
+
+
+class _Notice:
+    """A small window saying what the start is busy with, where there is no console.
+
+    The desktop app on Windows carries no GUI toolkit, so this is a bare system
+    text box. Nothing depends on it: if it cannot be made, the work goes on unseen.
+    """
+
+    def __init__(self, text: str) -> None:
+        import ctypes
+
+        self._user32 = user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        user32.CreateWindowExW.restype = ctypes.c_void_p
+        width, height = 560, 150
+        left = max(0, (int(user32.GetSystemMetrics(0)) - width) // 2)
+        top = max(0, (int(user32.GetSystemMetrics(1)) - height) // 2)
+        # topmost | a text box, centred, with a border, shown at once
+        handle = user32.CreateWindowExW(
+            0x00000008,
+            "STATIC",
+            text,
+            0x80000000 | 0x10000000 | 0x00800000 | 0x00000001,
+            left,
+            top,
+            width,
+            height,
+            None,
+            None,
+            None,
+            None,
+        )
+        if not handle:
+            raise OSError("the window could not be made")
+        self._handle = ctypes.c_void_p(handle)
+        gdi32 = ctypes.windll.gdi32  # type: ignore[attr-defined]
+        gdi32.GetStockObject.restype = ctypes.c_void_p
+        font = ctypes.c_void_p(gdi32.GetStockObject(17))  # the font dialogs use
+        user32.SendMessageW(self._handle, 0x0030, font, ctypes.c_void_p(1))
+        self._text = text
+        self._pump()
+
+    def _pump(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        message = wintypes.MSG()
+        while self._user32.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
+            self._user32.TranslateMessage(ctypes.byref(message))
+            self._user32.DispatchMessageW(ctypes.byref(message))
+
+    def show(self, text: str) -> None:
+        if text != self._text:
+            self._user32.SetWindowTextW(self._handle, text)
+            self._text = text
+        self._pump()
+
+    def close(self) -> None:
+        self._user32.DestroyWindow(self._handle)
+
+
+def _desktop_app() -> bool:
+    return os.name == "nt" and bool(getattr(sys, "frozen", False))
+
+
+def _open_notice(text: str) -> Optional[_Notice]:
+    if not _desktop_app():
+        return None
+    try:
+        return _Notice(text)
+    except Exception:
+        return None
+
+
+def finish_in_view(work: Callable[[Report], None]) -> None:
+    """Run ``work``, showing what it reports: in a small window, or on the console.
+
+    The start that finishes a move snapshots a database of a gigabyte or more
+    before the app has a window. With nothing on screen that looked like an app
+    that would not open, and was closed or started a second time.
+    """
+    heading = "Lightnovel Crawler is finishing the library move.\nPlease leave it open."
+    state: Dict[str, Any] = {"text": "Starting…", "error": None}
+
+    def report(text: str) -> None:
+        state["text"] = text
+        if not _desktop_app():
+            print(f"Finishing the library move: {text}", file=sys.stderr)
+
+    def run() -> None:
+        try:
+            work(report)
+        except BaseException as error:  # handed back to the caller below
+            state["error"] = error
+
+    thread = Thread(target=run, name="library-move-switch")
+    thread.start()
+    notice = _open_notice(f"\n{heading}\n\n{state['text']}")
+    while thread.is_alive():
+        thread.join(0.2)
+        if notice is not None:
+            try:
+                notice.show(f"\n{heading}\n\n{state['text']}")
+            except Exception:
+                notice = None
+    if notice is not None:
+        try:
+            notice.close()
+        except Exception:
+            pass
+    if state["error"] is not None:
+        raise state["error"]
 
 
 def resolve(base: Path) -> Path:
@@ -158,15 +307,33 @@ def resolve(base: Path) -> Path:
         and multiprocessing.parent_process() is None
     ):
         try:
-            switch(base, current, Path(target))
+            finish_in_view(lambda report: switch(base, current, Path(target), report))
             return Path(target)
         except Exception as error:  # the library is whole where it was: use it, and say why
-            forget_move(base)
+            if Path(target).is_dir():
+                _note(Path(target), f"The move was not finished: {error!r}. Still using {current}.")
+            # The desktop app has no console, so the reason is kept for its
+            # storage card. If even that cannot be written (the drive the app
+            # starts on is full), the app still has to start.
+            try:
+                move_failed(base, target, str(error) or type(error).__name__)
+            except OSError:
+                pass
             print(
                 f"Could not finish moving the library to {target} ({error}); "
                 f"still using {current}. Start the move again from the app.",
                 file=sys.stderr,
             )
+    refresh = marker.get("refresh")
+    old = marker.get("old")
+    if (
+        isinstance(refresh, list)
+        and refresh
+        and isinstance(old, str)
+        and current.is_dir()
+        and multiprocessing.parent_process() is None
+    ):
+        refresh_from_old(base, Path(old), current, [str(name) for name in refresh])
     if current != base and not current.is_dir():
         raise LibraryMissing(
             f"The library was moved to {current}, which cannot be found. "
@@ -178,6 +345,106 @@ def resolve(base: Path) -> Path:
 
 def _key(path: Path) -> str:
     return os.path.normcase(os.path.abspath(path))
+
+
+def holds_library(folder: Path) -> bool:
+    """Whether ``folder`` is a library the app has run from, with its database."""
+    try:
+        stamp = (folder / STAMP).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return stamp.startswith(IN_USE) and (folder / DATABASE).is_file()
+
+
+def choose_existing(current: Path, folder: Path) -> Path:
+    """``folder``, checked to be a library the app can start from in place of ``current``.
+
+    For a library that is already somewhere: on a drive that outlived the
+    computer it was made on, say. Nothing is copied or changed in either folder.
+    Raises ValueError, with the reason, for a folder that is not one.
+    """
+    if not folder.is_absolute():
+        raise ValueError(f"{folder} is not a full path to a folder")
+    if not folder.is_dir():
+        raise ValueError(f"{folder} cannot be found")
+    if _key(folder) == _key(current):
+        raise ValueError(f"The library in {folder} is the one in use now")
+    if not (folder / DATABASE).is_file():
+        inside = folder / "LNCrawl"
+        hint = f"; did you mean {inside}?" if (inside / DATABASE).is_file() else ""
+        raise ValueError(f"{folder} has no library in it (no {DATABASE} there){hint}")
+    return folder
+
+
+def drive_roots() -> List[Path]:
+    """The drives a library could be on: every drive letter, or what is mounted for the user."""
+    if os.name == "nt":
+        import string
+
+        return [
+            Path(f"{letter}:\\")
+            for letter in string.ascii_uppercase
+            if os.path.isdir(f"{letter}:\\")
+        ]
+    roots: List[Path] = []
+    for parent in ("/Volumes", "/media", "/mnt", "/run/media"):
+        try:
+            entries = sorted(os.scandir(parent), key=lambda entry: entry.name)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir() and os.path.ismount(entry.path):
+                    roots.append(Path(entry.path))
+            except OSError:
+                continue
+    return roots
+
+
+def is_library(folder: Path) -> bool:
+    """Whether ``folder`` holds a library: its database, and its stamp or novels."""
+    try:
+        return (folder / DATABASE).is_file() and (
+            (folder / STAMP).is_file() or (folder / "novels").is_dir()
+        )
+    except OSError:
+        return False
+
+
+def find_libraries(roots: List[Path], current: Path, limit: int = 500) -> List[Path]:
+    """Libraries on these drives other than ``current``: a drive itself, or a folder at its top.
+
+    So that nobody has to know or type where theirs is. Only the top of each
+    drive is looked at (``limit`` folders of it), which is where a move puts one.
+    """
+    found: List[Path] = []
+    here = _key(current)
+    for root in roots:
+        candidates = [root]
+        try:
+            with os.scandir(root) as entries:
+                for index, entry in enumerate(entries):
+                    if index >= limit:
+                        break
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            candidates.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+        for folder in candidates:
+            if _key(folder) != here and is_library(folder):
+                found.append(folder)
+    return found
+
+
+def point_at(base: Path, folder: Path) -> None:
+    """From the next start, use the library in ``folder``. Nothing is moved or removed."""
+    if _key(folder) == _key(base):
+        write_marker(base)
+    else:
+        write_marker(base, path=str(folder), state="moved")
 
 
 def choose_target(current: Path, folder: Path) -> Path:
@@ -202,6 +469,13 @@ def choose_target(current: Path, folder: Path) -> Path:
         raise ValueError(f"The library is already in {current}; choose a folder outside it")
     if target.exists() and (not target.is_dir() or taken(target)):
         raise ValueError(f"{target} already has other files in it")
+    if holds_library(target):
+        # Moving there would put this library's database over that one's: after
+        # a reinstall, an empty library over the one the drive was kept for.
+        raise ValueError(
+            f"{target} already holds a library. To open that one, use "
+            f'"Use the library in this folder"; to replace it, delete the folder first'
+        )
     return target
 
 
@@ -305,6 +579,9 @@ def copy_tree(
     stop: Optional[Event] = None,
     skip_folders: Optional[Set[str]] = None,
     waiting: Optional[Waiting] = None,
+    left_behind: Optional[List[str]] = None,
+    on_left: Optional[Callable[[str, OSError], None]] = None,
+    only_missing: bool = False,
 ) -> None:
     """Copy what is under ``source`` to ``target``, keeping each file's time.
 
@@ -315,6 +592,13 @@ def copy_tree(
     A file that cannot be copied is tried again after a wait (see
     `RETRY_PATIENCE`): 790 GB to an external drive stopped at 3 GB because the
     drive did not answer for a moment. A full drive is not waited for.
+
+    With ``left_behind``, a file that cannot be copied is not waited for either:
+    it is added to that list and the copy goes on to the next one.
+
+    With ``only_missing``, a file already there is left as it is whatever it
+    holds: for files written to the old folder after the switch to the new one,
+    where the new folder's own are the newer.
     """
     made: Set[Path] = set()
 
@@ -337,6 +621,8 @@ def copy_tree(
             continue
         info = entry.stat(follow_symlinks=False)
         copy = target / relative
+        if only_missing and os.path.lexists(copy):
+            continue
         if not _same(info, copy):
             began: Optional[float] = None
             pause = RETRY_FIRST_WAIT
@@ -349,6 +635,15 @@ def copy_tree(
                         raise
                     if not os.path.lexists(entry.path):
                         break  # the file itself is gone: there is nothing to copy
+                    if left_behind is not None:
+                        try:
+                            copy.with_name(f"{copy.name}.moving").unlink()
+                        except OSError:
+                            pass
+                        left_behind.append(f"{source.name}/{relative}")
+                        if on_left is not None:
+                            on_left(f"{source.name}/{relative}", error)
+                        break
                     now = time.monotonic()
                     began = now if began is None else began
                     if now - began >= RETRY_PATIENCE:
@@ -370,8 +665,13 @@ def copy_tree(
         progress(1, info.st_size)
 
 
-def _snapshot_database(source: Path, target: Path) -> None:
+def _snapshot_database(source: Path, target: Path, report: Optional[Report] = None) -> None:
     """A consistent copy of the database, whatever is still writing to it."""
+
+    def progress(status: int, remaining: int, total: int) -> None:
+        if report is not None and total > 0:
+            report(f"Copying the database: {100 * (total - remaining) // total}%")
+
     writing = target.with_name(f"{target.name}.moving")
     writing.unlink(missing_ok=True)
     original = sqlite3.connect(str(source))
@@ -379,7 +679,7 @@ def _snapshot_database(source: Path, target: Path) -> None:
         copy = sqlite3.connect(str(writing))
         try:
             with copy:
-                original.backup(copy)
+                original.backup(copy, pages=4096, progress=progress)
         finally:
             copy.close()
     finally:
@@ -389,24 +689,175 @@ def _snapshot_database(source: Path, target: Path) -> None:
     os.replace(writing, target)
 
 
-def switch(base: Path, current: Path, target: Path) -> None:
+def switch(base: Path, current: Path, target: Path, report: Optional[Report] = None) -> None:
     """Finish a move whose copy is done: copy what was left for last, then use ``target``.
 
     ``current`` is where the library is until this returns; ``base`` holds the marker.
+
+    The database and the settings have to arrive, or the move is not made. The
+    rest (the app window's browser profile, source files, logs) is made again
+    when it is missing, and this runs before the app has a window to say it is
+    waiting: a file of those that cannot be copied is left behind, not waited
+    for. The browser behind the app window can outlive the app and hold its
+    profile open, and one such file undid a move of hours of copying.
     """
+
+    def say(text: str) -> None:
+        _note(target, text)
+        if report is not None:
+            report(text)
+
     if not (target / STAMP).is_file():
         raise OSError("the copy made there is gone")
+    say(f"Finishing the move from {current} to {target}")
     if (current / DATABASE).is_file():
-        _snapshot_database(current / DATABASE, target / DATABASE)
+        say("Copying the database")
+        _snapshot_database(current / DATABASE, target / DATABASE, report)
+        say("The database is copied")
+    left_behind = copy_late(current, target, say)
+    (target / STAMP).write_text(f"{IN_USE} since it was moved from {current}\n", encoding="utf-8")
+    extra: Dict[str, Any] = {"left_behind": len(left_behind)} if left_behind else {}
+    say(f"Done: the library is now in {target} ({len(left_behind)} file(s) left behind)")
+    write_marker(base, path=str(target), state="moved", cleanup=True, old=str(current), **extra)
+
+
+def copy_late(current: Path, target: Path, say: Report) -> List[str]:
+    """Copy what `LATE` names, but the database; what could not be copied.
+
+    The settings have to arrive, or this raises. The rest (the app window's
+    browser profile, source files, logs) is made again when it is missing: a
+    file of those that cannot be copied is left behind, not waited for.
+    """
+    left_behind: List[str] = []
+
+    def left(name: str, error: OSError) -> None:
+        _note(target, f"Left behind, in use or unreadable: {name} ({error})")
+
     for name in LATE:
         if name in _DATABASE_FILES:
             continue
         entry = current / name
+        if entry.exists():
+            say(f"Copying {name}")
         if entry.is_dir():
-            copy_tree(entry, target / name, (), lambda files, size: None, skip_folders=_CACHES)
+            copy_tree(
+                entry,
+                target / name,
+                (),
+                lambda files, size: None,
+                skip_folders=_CACHES,
+                left_behind=left_behind,
+                on_left=left,
+            )
         elif entry.is_file():
-            shutil.copy2(entry, target / name)
-    write_marker(base, path=str(target), state="moved", cleanup=True, old=str(current))
+            try:
+                shutil.copy2(entry, target / name)
+            except OSError as error:
+                if name == "config.json" or error.errno == errno.ENOSPC:
+                    raise
+                left_behind.append(name)
+                left(name, error)
+    return left_behind
+
+
+def refresh_from_old(base: Path, old: Path, current: Path, names: List[str]) -> None:
+    """Copy these from the old folder again, now nothing is using them there.
+
+    The app window's browser keeps its profile open while the app runs, so what
+    a move made while the app ran copied of it was older than what the window
+    went on to write. Done once, at the start after the move, before the window
+    opens; the old folder's copy is removed after it.
+    """
+    for name in names:
+        source = old / name
+        if not source.is_dir():
+            continue
+        _note(current, f"Copying {name} again from {old}, now the app that used it is closed")
+        try:
+            copy_tree(source, current / name, (), lambda files, size: None, skip_folders=_CACHES)
+        except Exception as error:
+            _note(current, f"Could not copy {name} again: {error!r}")
+    try:
+        _update_marker(base, drop=("refresh",))
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------- #
+# the database, while the app is using it
+# ---------------------------------------------------------------------------- #
+
+
+def _checkpoint(database: Path, mode: str) -> bool:
+    """Write the database's journal into the file; whether all of it could be."""
+    connection = sqlite3.connect(str(database), timeout=30)
+    try:
+        row = connection.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+    finally:
+        connection.close()
+    return row is None or int(row[0]) == 0
+
+
+def _digest(block: bytes) -> bytes:
+    return hashlib.blake2b(block, digest_size=16).digest()
+
+
+def precopy_database(source: Path, target: Path, stop: Optional[Event] = None) -> List[bytes]:
+    """Copy the database file while the app still uses it; what each block of it held.
+
+    Not a copy to use: the app may change the file meanwhile, and part of it
+    may still be in the journal. `finish_database` makes it whole, writing only
+    the blocks that differ, so the app needs the database to itself for a
+    moment rather than for as long as a gigabyte takes to reach another drive.
+    """
+    _checkpoint(source, "PASSIVE")  # most of the journal into the file, without waiting
+    writing = target.with_name(f"{target.name}.moving")
+    digests: List[bytes] = []
+    with open(source, "rb") as reading, open(writing, "wb") as copy:
+        while True:
+            if stop is not None and stop.is_set():
+                raise MoveStopped()
+            block = reading.read(DB_BLOCK)
+            if not block:
+                break
+            copy.write(block)
+            digests.append(_digest(block))
+    return digests
+
+
+def finish_database(source: Path, target: Path, digests: List[bytes]) -> int:
+    """Make `precopy_database`'s copy whole and put it in place; how many blocks it took.
+
+    Only while nothing else uses the database: the journal is written into the
+    file first, and the copy is made to match the file block by block.
+    """
+    if not _checkpoint(source, "TRUNCATE"):
+        raise OSError("the database is still being written to")
+    writing = target.with_name(f"{target.name}.moving")
+    written = 0
+    with open(source, "rb") as reading, open(writing, "r+b") as copy:
+        index = 0
+        while True:
+            block = reading.read(DB_BLOCK)
+            if not block:
+                break
+            if index >= len(digests) or digests[index] != _digest(block):
+                copy.seek(index * DB_BLOCK)
+                copy.write(block)
+                written += 1
+            index += 1
+        copy.truncate(reading.tell())
+        copy.flush()
+        os.fsync(copy.fileno())
+    check = sqlite3.connect(str(writing))
+    try:
+        check.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    finally:
+        check.close()
+    for name in _DATABASE_FILES[1:]:  # a journal left there belongs to no database now
+        target.with_name(name).unlink(missing_ok=True)
+    os.replace(writing, target)
+    return written
 
 
 # ---------------------------------------------------------------------------- #
@@ -414,8 +865,17 @@ def switch(base: Path, current: Path, target: Path) -> None:
 # ---------------------------------------------------------------------------- #
 
 
+def _delete(path: str) -> None:
+    os.unlink(path)
+
+
 def remove_old_copy(
-    old: Path, new: Path, progress: Progress, stop: Optional[Event] = None
+    old: Path,
+    new: Path,
+    progress: Progress,
+    stop: Optional[Event] = None,
+    keep: Tuple[str, ...] = (),
+    in_use: Optional[List[str]] = None,
 ) -> Tuple[int, int]:
     """Delete from ``old`` what ``new`` now holds; (bytes freed, files left).
 
@@ -423,6 +883,11 @@ def remove_old_copy(
     place. The exceptions are working files, which are made again, and what was
     copied at the switch (`LATE`): the app has been running from those since, so
     the new ones have moved on and the old ones only need the new to be there.
+    What ``keep`` names, at the top of ``old``, is not touched or counted.
+
+    A file that cannot be deleted (on Windows, one something still has open:
+    a download being served, a virus scan) is added to ``in_use`` and not
+    counted as left: it is to go, just not yet.
     """
     here, there = _key(old), _key(new)
     if here == there or there.startswith(here + os.sep) or here.startswith(there + os.sep):
@@ -435,6 +900,8 @@ def remove_old_copy(
         if stop is not None and stop.is_set():
             raise MoveStopped()
         top = relative.split("/", 1)[0]
+        if top in keep:
+            continue
         size = entry.stat(follow_symlinks=False).st_size
         if top == "tmp" or top in switched:
             gone = True
@@ -445,8 +912,13 @@ def remove_old_copy(
                 gone = False
         if gone:
             try:
-                os.unlink(entry.path)
+                _delete(entry.path)
+            except FileNotFoundError:
+                pass
             except OSError:
+                if in_use is not None:
+                    in_use.append(relative)
+                    continue
                 gone = False
         if gone:
             freed += size

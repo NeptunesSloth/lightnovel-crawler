@@ -113,6 +113,10 @@ STALL_COOLDOWN = 300.0  # wait after replacing a hung lane's downloaders
 # export ran on at under a chapter a minute without saying why.
 MIN_FREE_SPACE = 256 * 1024 * 1024
 DISK_FULL_WAIT = 60.0  # how often to look again while waiting for room
+# A novel is not started unless the drive has room for all of it: what its
+# chapters are expected to take, going by the novels this export has finished,
+# and this much over, since the next one is never quite the average.
+ROOM_MARGIN = 1.25
 DISCOVERY_MAX_MINUTES = 180.0  # longest a continued discovery round may run
 HEARTBEAT = 60.0  # a waiting job still updates itself this often
 MAX_RESTARTS = 5  # fresh starts after an unexpected error, before reporting it
@@ -120,6 +124,32 @@ RESTART_WAIT = 120.0  # seconds before a fresh start (times the number of restar
 
 # Library-only runs keep no ebook; this stands in for one in the bookkeeping.
 _IN_LIBRARY = Path("<library>")
+
+
+class NoRoomForNovel(Exception):
+    """The drive does not have the room this novel is expected to take."""
+
+    def __init__(self, title: str, need: int, free: int) -> None:
+        super().__init__(f"{title} needs about {need} bytes and {free} are free")
+        self.title = title
+        self.need = need
+        self.free = free
+
+
+def _room_needed(chapters: int, bytes_per_chapter: float) -> int:
+    """Room a novel with this many chapters still to get is expected to take, with a margin."""
+    return int(chapters * bytes_per_chapter * ROOM_MARGIN)
+
+
+def _folder_size(folder: Path) -> int:
+    total = 0
+    for parent, _, names in os.walk(folder):
+        for name in names:
+            try:
+                total += os.path.getsize(os.path.join(parent, name))
+            except OSError:
+                pass
+    return total
 
 
 class ExportStalledError(HandlerException):
@@ -459,6 +489,39 @@ def _restore_archived_books(domain: str, manifest: Dict[str, dict]) -> None:
             break
 
 
+def _aside(novel_url: str) -> Path:
+    """Where a zip-only export keeps a novel's e-book until the zip is made."""
+    name = hashlib.sha256(novel_url.encode()).hexdigest()
+    return ctx.files.resolve("exports") / "zip-only" / name
+
+
+def _set_aside(novel_url: str, file: Path) -> Path:
+    """Move a finished e-book out of its novel's folder, to outlive the novel there.
+
+    A zip-only export takes each novel out of the library once its e-book is
+    made; the book waits by its novel's address for the zip.
+    """
+    kept = _aside(novel_url)
+    kept.mkdir(parents=True, exist_ok=True)
+    target = kept / file.name
+    if file != target:
+        shutil.move(str(file), str(target))
+    return target
+
+
+def _take_out_of_library(novel_url: str) -> bool:
+    """Remove the novel at this address from the library; whether one was removed."""
+    try:
+        novel = ctx.novels.find_by_url(novel_url)
+        if novel is None:
+            return False
+        ctx.novels.delete(novel.id)
+        return True
+    except Exception as error:
+        ctx.logger.warn(f"Could not take {novel_url} out of the library: {error}")
+        return False
+
+
 def _free_space() -> Optional[int]:
     """Bytes free on the library's drive, or None when it cannot be told."""
     try:
@@ -650,15 +713,26 @@ class ExportSourceHandler(BaseHandler):
             self._set_extra(phase=phase, resume_at=resume_at)
         self._set_extra(phase="downloading", resume_at=None)
 
-    def _wait_for_room(self) -> None:
-        """Hold the export while the library's drive is (nearly) full, until there is room."""
+    def _wait_for_room(self, need: int = 0, title: str = "") -> None:
+        """Hold the export while the library's drive is (nearly) full, until there is room.
+
+        With ``need``, until there is that much: the room the novel called
+        ``title`` is expected to take, which is said while it waits.
+        """
         while True:
             free = _free_space()
-            if free is None or free >= MIN_FREE_SPACE:
+            if free is None or free >= MIN_FREE_SPACE + need:
                 return
             where = str(ctx.files.resolve("."))
             ctx.logger.warn(f"Only {free // (1024 * 1024)} MB free for {where}; waiting for room")
-            self._wait(DISK_FULL_WAIT, "disk-full", disk_free=free, disk_path=where)
+            self._wait(
+                DISK_FULL_WAIT,
+                "disk-full",
+                disk_free=free,
+                disk_path=where,
+                disk_need=(MIN_FREE_SPACE + need) if need else None,
+                disk_title=title or None,
+            )
 
     def process(self) -> bool:
         until_done = bool((self.job.extra or {}).get("until_done"))
@@ -745,6 +819,11 @@ class ExportSourceHandler(BaseHandler):
         resume = bool(self.job.extra.get("resume", True))
         until_done = bool(self.job.extra.get("until_done", False))
         library_only = bool(self.job.extra.get("library_only", False))
+        # Only the zip is wanted: a novel this export adds to the library is
+        # taken out again once its e-book is made. One that was there already
+        # is somebody's, and stays.
+        zip_only = bool(self.job.extra.get("zip_only", False)) and not library_only
+        added: Set[str] = set(self.job.extra.get("zip_only_added") or [])
         # Sitemap mining is what lifts discovery past the one page of results a
         # source's search returns; only turned off when a site's sitemap is junk.
         use_sitemap = bool(self.job.extra.get("use_sitemap", True))
@@ -946,6 +1025,13 @@ class ExportSourceHandler(BaseHandler):
             warmed: Set[int] = set()  # lanes that solved a Cloudflare check already
             stuck: Dict[str, int] = {}  # passes in a row a novel did not improve
             stalls = [0]  # times downloads stopped responding
+            # What a chapter has taken on the drive so far (text, page images and
+            # its share of the e-book), kept with the job so a run picked up
+            # later knows before its first novel; and what each lane's novel is
+            # still expected to take, so two starting together count each other.
+            per_chapter = [float(self.job.extra.get("bytes_per_chapter") or 0)]
+            measured = [0, 0]  # bytes, chapters
+            reserved: Dict[int, int] = {}
             queue: List[str] = []
             last_eta = [0.0]
 
@@ -973,6 +1059,7 @@ class ExportSourceHandler(BaseHandler):
                 # remember the title for live failure reporting (set once known)
                 cur_title: List[str] = [""]
                 cached_chapters: List[Optional[int]] = [None]
+                chapters_seen = [0]
 
                 # Shown from the start, by the name in its address, so a novel
                 # whose chapter list takes a minute to load is not invisible
@@ -985,10 +1072,24 @@ class ExportSourceHandler(BaseHandler):
 
                 # live status so a long run isn't a misleading 0%
                 def _on_novel(title: str, c_done: int, c_total: int) -> None:
+                    short: Optional[NoRoomForNovel] = None
                     with book:
                         if cached_chapters[0] is None:
                             cached_chapters[0] = c_done
                             needed.append(c_total - c_done)
+                            chapters_seen[0] = c_total
+                            # Its chapter list is known and nothing of it is
+                            # fetched yet: the moment to see whether it fits.
+                            need = _room_needed(c_total - c_done, per_chapter[0])
+                            free = _free_space()
+                            others = sum(v for k, v in reserved.items() if k != lane)
+                            if need and free is not None and free < MIN_FREE_SPACE + need + others:
+                                short = NoRoomForNovel(title, need + others, free)
+                            else:
+                                reserved[lane] = need
+                    if short is not None:
+                        raise short
+                    with book:
                         cur_title[0] = title
                         active[lane] = {"title": title, "done": c_done, "total": c_total}
                         self._set_extra(
@@ -1012,6 +1113,14 @@ class ExportSourceHandler(BaseHandler):
                 result: NovelResult
                 failure = ""
                 try:
+                    if zip_only:
+                        with book:
+                            if novel_url not in added and ctx.novels.find_by_url(novel_url) is None:
+                                # written down before it is fetched, and kept with
+                                # the job, so a run picked up later still knows
+                                # the novel is its own
+                                added.add(novel_url)
+                                self._set_extra(zip_only_added=sorted(added))
                     result = _download_novel(
                         lane_crawler,
                         self.user.id,
@@ -1059,9 +1168,37 @@ class ExportSourceHandler(BaseHandler):
                     self._set_extra(stall_recoveries=stalls[0])
                     self._wait(STALL_COOLDOWN, "cooling-down", cool_reason="stalled")
                     return
+                except NoRoomForNovel as short:
+                    with book:
+                        active.pop(lane, None)
+                        reserved.pop(lane, None)
+                        next_pending.append(novel_url)
+                    gb = 1024 * 1024 * 1024
+                    said = (
+                        f"{short.title} needs about {short.need / gb:.1f} GB and only "
+                        f"{short.free / gb:.1f} GB is free on the library's drive"
+                    )
+                    ctx.logger.warn(f"Not started: {said}")
+                    if not until_done:
+                        self.signal.set()  # stop the other lanes too; checkpoints are kept
+                        raise HandlerException(
+                            f"Stopped before the drive filled up: {said}. Move the library to "
+                            "a bigger drive or free up space, then resume."
+                        ) from short
+                    self._wait(
+                        DISK_FULL_WAIT,
+                        "disk-full",
+                        disk_free=short.free,
+                        disk_path=str(ctx.files.resolve(".")),
+                        disk_need=MIN_FREE_SPACE + short.need,
+                        disk_title=short.title,
+                    )
+                    self._wait_for_room(short.need, short.title)
+                    return
                 except AbortedException:
                     raise
                 except Exception as e:
+                    reserved.pop(lane, None)
                     if until_done and _disk_full(e):
                         # The disk is full. Nothing downloaded is lost; wait for
                         # space to be freed and try this novel again.
@@ -1085,12 +1222,39 @@ class ExportSourceHandler(BaseHandler):
                     ctx.logger.debug(f"Export attempt failed for {novel_url}: {e}")
                     result = {"file": None, "missing": 1, "duplicate": False}
 
+                reserved.pop(lane, None)
+                if chapters_seen[0] and (result["file"] is not None or result.get("stored")):
+                    # what this novel took, for judging whether the next one fits
+                    try:
+                        stored_novel = ctx.novels.find_by_url(novel_url)
+                        if stored_novel is not None:
+                            size = _folder_size(ctx.files.resolve(f"novels/{stored_novel.id}"))
+                            with book:
+                                measured[0] += size
+                                measured[1] += chapters_seen[0]
+                                per_chapter[0] = measured[0] / measured[1]
+                            self._set_extra(bytes_per_chapter=round(per_chapter[0]))
+                    except Exception as error:
+                        ctx.logger.debug(f"Could not measure {novel_url}: {error}")
+
                 warm_up = False
+                finished = False  # zip only: its e-book is made, so the novel can go
                 with book:
                     active.pop(lane, None)
                     if failure:
                         last_error[novel_url] = failure
                     file = result["file"]
+                    if (
+                        file is not None
+                        and result["missing"] == 0
+                        and not result["duplicate"]
+                        and novel_url in added
+                    ):
+                        try:
+                            file = _set_aside(novel_url, file)
+                            finished = True
+                        except OSError as error:
+                            ctx.logger.warn(f"Could not set aside {file}: {error}")
                     if file is None and result.get("stored"):
                         file = _IN_LIBRARY  # in the library; no ebook was asked for
                     if file is not None and file is not _IN_LIBRARY:
@@ -1174,6 +1338,9 @@ class ExportSourceHandler(BaseHandler):
                             warm_up = True
                     self._set_progress(len(complete) + len(partial) + len(skipped), total)
                     _publish_active(force=True)
+
+                if finished:
+                    _take_out_of_library(novel_url)
 
                 warm = getattr(lane_crawler, "warm_up_clearance", None)
                 if warm_up and callable(warm):
@@ -1422,6 +1589,15 @@ class ExportSourceHandler(BaseHandler):
             os.replace(writing, export_path)
             _save_manifest(domain, manifest)
 
+            if zip_only:
+                # The zip is made: what this export added and did not finish
+                # (partly downloaded, or failed) goes too, and the books set
+                # aside for the zip are in it now. A later run finds them there.
+                self._set_extra(phase="clearing-library")
+                for url in sorted(added):
+                    _take_out_of_library(url)
+                    shutil.rmtree(_aside(url), ignore_errors=True)
+
             # report counts from what actually made it into the zip, so a file
             # that couldn't be written isn't silently counted as complete
             zipped_complete = sum(1 for _, _, s in index_entries if s == "complete")
@@ -1451,6 +1627,7 @@ class ExportSourceHandler(BaseHandler):
                 left_out=left_out,
                 total_novels=total,
                 fail_reasons=fail_reasons,
+                **({"taken_out": len(added)} if zip_only else {}),
             )
 
             size_mb = export_path.stat().st_size / (1024 * 1024)
@@ -1461,8 +1638,12 @@ class ExportSourceHandler(BaseHandler):
             )
             if zip_skipped:
                 summary += f" {zip_skipped} could not be added to the zip."
-            if left_out:
+            if left_out and zip_only:
+                summary += f" {left_out} partly downloaded left out."
+            elif left_out:
                 summary += f" {left_out} partly downloaded left out (they are in your library)."
+            if zip_only:
+                summary += " Nothing it downloaded was kept in your library."
             if saved_to and save_to is not None:
                 summary += f" Saved to {saved_to}."
             elif saved_to:

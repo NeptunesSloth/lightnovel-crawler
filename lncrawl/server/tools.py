@@ -25,99 +25,267 @@ _TOOLS_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>LNCrawl · Tools</title>
 <style>
-  :root { color-scheme: dark; }
+  /* A reading room at night: ink walls, paper text, one lamp. The lamp colour
+     is kept for the thing to press next; nothing else on a screen uses it. */
+  :root {
+    color-scheme: dark;
+    --ink: #16141d; --shelf: #1d1a27; --panel: #221f2e; --raised: #2d2939;
+    --line: #373248; --paper: #efe9dc; --dim: #a59fb3; --faint: #7d778c;
+    --lamp: #f2b84b; --lamp-deep: #d99a26; --leaf: #7fd1a5; --rose: #ff8f84; --sky: #9cc8ff;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0; padding: 24px;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: #0f1115; color: #e6e6e6; line-height: 1.5;
+    margin: 0; font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    background: var(--ink); color: var(--paper);
   }
-  .wrap { max-width: 720px; margin: 0 auto; }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  .sub { color: #8b93a1; margin: 0 0 20px; font-size: 14px; }
-  .card {
-    background: #171a21; border: 1px solid #262b36; border-radius: 12px;
-    padding: 18px; margin-bottom: 16px;
+  .shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100%; }
+
+  /* the menu */
+  .menu {
+    background: var(--shelf); border-right: 1px solid var(--line);
+    padding: 22px 14px 16px; display: flex; flex-direction: column; gap: 2px;
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
   }
-  .card h2 { font-size: 16px; margin: 0 0 4px; }
-  .card p.hint { color: #8b93a1; font-size: 13px; margin: 0 0 14px; }
-  details { margin-top: 12px; border-top: 1px solid #20242d; padding-top: 8px; }
+  .brand { font-family: var(--serif); font-size: 21px; padding: 0 10px 2px; letter-spacing: .01em; }
+  .brand-sub { color: var(--faint); font-size: 12.5px; padding: 0 10px 16px; }
+  .menu button.go {
+    display: block; width: 100%; margin: 0; text-align: left; background: transparent;
+    color: var(--dim); font-weight: 500; font-size: 15px; padding: 10px 12px;
+    border-radius: 8px; border-left: 3px solid transparent;
+  }
+  .menu button.go small { display: block; font-weight: 400; font-size: 12.5px; color: var(--faint); }
+  .menu button.go:hover { background: var(--panel); color: var(--paper); }
+  .menu button.go[aria-current="page"] {
+    background: var(--raised); color: var(--paper); border-left-color: var(--lamp);
+  }
+  .menu button.go .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--lamp); margin-left: 6px; vertical-align: middle;
+  }
+  .menu .rule { height: 1px; background: var(--line); margin: 12px 8px; }
+  .menu a.out {
+    display: block; padding: 8px 12px; border-radius: 8px; color: var(--dim);
+    text-decoration: none; font-size: 14px;
+  }
+  .menu a.out:hover { background: var(--panel); color: var(--paper); }
+  .menu .account { margin-top: auto; padding: 12px 10px 0; font-size: 13px; color: var(--faint); }
+  .menu .account button { margin-top: 8px; padding: 6px 12px; font-size: 13px; }
+
+  /* the page */
+  .page { padding: 34px 40px 28px; max-width: 880px; width: 100%; }
+  .pane { display: none; }
+  .pane.shown { display: block; }
+  body.signed-out .pane { display: none; }
+  body.signed-out #auth-card { display: block; }
+  body.signed-out .menu button.go { opacity: .4; pointer-events: none; }
+  .pane > h2, .pane > details > summary.title {
+    font-family: var(--serif); font-weight: 500; font-size: 30px; line-height: 1.2;
+    margin: 0 0 8px; letter-spacing: .005em;
+  }
+  h3 { font-size: 16px; font-weight: 600; margin: 30px 0 4px; }
+  p.hint { color: var(--dim); font-size: 14px; margin: 0 0 16px; max-width: 68ch; }
+  .pane > p.hint:first-of-type { font-size: 15px; margin-bottom: 22px; }
+  details { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 10px; }
   details > summary {
-    cursor: pointer; color: #aab2c0; font-size: 13px; list-style: none;
+    cursor: pointer; color: var(--dim); font-size: 14px; list-style: none;
     user-select: none; padding: 4px 0;
   }
-  details > summary::before { content: "▸ "; color: #6b7280; }
-  details[open] > summary::before { content: "▾ "; }
-  details > summary:hover { color: #e6e6e6; }
-  details.card-fold { margin: 0; border: 0; padding: 0; }
-  details.card-fold > summary { font-size: 16px; color: #e6e6e6; font-weight: 500; }
-  label { display: block; font-size: 13px; color: #aab2c0; margin: 10px 0 4px; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before { content: "+ "; color: var(--faint); }
+  details[open] > summary::before { content: "\\2212  "; }
+  details > summary:hover { color: var(--paper); }
+  label { display: block; font-size: 14px; color: var(--dim); margin: 14px 0 6px; }
   input[type=text], input[type=email], input[type=password], select {
-    width: 100%; padding: 9px 11px; border-radius: 8px;
-    border: 1px solid #303644; background: #0f1115; color: #e6e6e6; font-size: 14px;
+    width: 100%; padding: 11px 13px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--ink); color: var(--paper);
+    font: inherit;
   }
-  code { background: #0b0d11; padding: 1px 5px; border-radius: 5px; font-size: 12px; }
-  .row { display: flex; gap: 10px; align-items: center; }
-  .row.checkbox { margin-top: 12px; font-size: 14px; color: #cbd2dd; }
+  input::placeholder { color: var(--faint); }
+  input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--lamp); flex: 0 0 auto; }
+  :focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
+  code { background: var(--ink); padding: 1px 5px; border-radius: 5px; font-size: 13px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row > div { min-width: 120px; }
+  .row.checkbox { margin-top: 12px; color: var(--paper); flex-wrap: nowrap; align-items: flex-start; }
+  .row.checkbox label { color: var(--paper); }
   button {
-    margin-top: 14px; padding: 9px 16px; border: 0; border-radius: 8px;
-    background: #3b82f6; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+    margin-top: 16px; padding: 11px 20px; border: 0; border-radius: 8px;
+    background: var(--lamp); color: #201803; font: inherit; font-weight: 650; cursor: pointer;
   }
-  button:hover { background: #2f6fe0; }
-  button.secondary { background: #2a2f3a; color: #cbd2dd; }
-  button.secondary:hover { background: #343a47; }
-  button:disabled { opacity: .55; cursor: not-allowed; }
+  button:hover { background: var(--lamp-deep); }
+  button.secondary { background: var(--raised); color: var(--paper); font-weight: 500; }
+  button.secondary:hover { background: var(--line); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
   button.preset { margin-top: 0; padding: 7px 12px; font-size: 13px; }
-  button.preset.active { background: #3b82f6; color: #fff; }
-  #library-list { font-size: 13px; }
+  button.preset.active { background: var(--lamp); color: #201803; }
+  .row > input[type=text] { flex: 1 1 220px; width: auto; }
+  .row > button { flex: 0 0 auto; }
+  #library-list { font-size: 14px; }
   #drop-zone {
-    border: 2px dashed #39404e; border-radius: 10px; padding: 26px 16px;
+    border: 2px dashed var(--line); border-radius: 12px; padding: 44px 16px;
     text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
   }
-  #drop-zone:hover { border-color: #4b5563; }
-  #drop-zone.dragging { border-color: #3b82f6; background: #1b2436; }
-  #drop-zone strong { display: block; margin-bottom: 4px; color: #e6e6e6; }
-  #import-status { margin-top: 10px; font-size: 13px; min-height: 18px; }
+  #drop-zone:hover { border-color: var(--faint); }
+  #drop-zone.dragging { border-color: var(--lamp); background: var(--panel); }
+  #drop-zone strong { display: block; margin-bottom: 4px; font-family: var(--serif); font-size: 20px; font-weight: 500; }
+  #import-status { margin-top: 10px; font-size: 14px; min-height: 18px; }
   .libitem {
     display: flex; justify-content: space-between; gap: 10px; align-items: center;
-    padding: 8px 2px; border-bottom: 1px solid #20242d;
+    padding: 10px 2px; border-bottom: 1px solid var(--line);
   }
-  .libitem a { color: #7aa2ff; text-decoration: none; cursor: pointer; }
+  .libitem a { color: var(--sky); text-decoration: none; cursor: pointer; }
   .libitem a:hover { text-decoration: underline; }
-  .muted { color: #8b93a1; font-size: 13px; }
+  .muted { color: var(--dim); font-size: 14px; }
+
+  /* where the library is, and where it could go */
+  .where {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; margin-bottom: 8px;
+  }
+  .where p.hint { margin: 0; color: var(--paper); font-size: 15px; }
+  .place {
+    display: flex; align-items: center; gap: 14px; padding: 13px 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .place:last-child { border-bottom: 0; }
+  .place .name { font-weight: 600; word-break: break-all; }
+  .place .about { color: var(--dim); font-size: 13.5px; }
+  .place .grow { flex: 1 1 auto; min-width: 0; }
+  .place button { margin: 0; flex: 0 0 auto; }
+  .place .bar { height: 5px; border-radius: 3px; background: var(--raised); margin-top: 7px; max-width: 320px; }
+  .place .bar i { display: block; height: 100%; border-radius: 3px; background: var(--faint); }
+  .notice {
+    border: 1px solid var(--lamp); border-radius: 12px; padding: 14px 18px; margin-bottom: 22px;
+    display: flex; gap: 14px; align-items: center; background: rgba(242, 184, 75, .07);
+  }
+  .notice .grow { flex: 1 1 auto; }
+  .notice button { margin: 0; flex: 0 0 auto; }
+
+  /* picking a folder */
+  .picker-row { flex-wrap: nowrap; }
+  .picker-row > input[type=text] { flex: 1 1 auto; min-width: 0; }
+  .picker-row > button { margin-top: 0; }
+  dialog#folder-picker {
+    border: 1px solid var(--line); border-radius: 14px; padding: 0; width: min(640px, calc(100vw - 32px));
+    background: var(--panel); color: var(--paper);
+  }
+  dialog#folder-picker::backdrop { background: rgba(10, 8, 16, .66); }
+  .picker { padding: 20px 22px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .picker h2 { font-family: var(--serif); font-weight: 500; font-size: 24px; margin: 0; }
+  .trail { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; font-size: 14px; }
+  .trail button {
+    margin: 0; padding: 4px 8px; background: transparent; color: var(--sky); font-weight: 500; border-radius: 6px;
+  }
+  .trail button:hover { background: var(--raised); }
+  .trail button[aria-current] { color: var(--paper); }
+  .trail .sep { color: var(--faint); }
+  .picker-note { min-height: 20px; margin: 0; }
+  .picker-list {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--ink);
+    height: min(52vh, 400px); overflow-y: auto;
+  }
+  .picker-list button {
+    display: flex; width: 100%; align-items: center; gap: 12px; margin: 0; text-align: left;
+    background: transparent; color: var(--paper); font-weight: 400; border-radius: 0;
+    padding: 10px 14px; border-bottom: 1px solid var(--shelf);
+  }
+  .picker-list button:hover, .picker-list button:focus-visible { background: var(--raised); outline-offset: -2px; }
+  .picker-list .glyph { width: 18px; color: var(--lamp); flex: 0 0 auto; text-align: center; }
+  .picker-list .label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .picker-list .meta { color: var(--faint); font-size: 13px; flex: 0 0 auto; }
+  .picker-list .tag {
+    color: var(--leaf); background: rgba(127, 209, 165, .14); border-radius: 999px;
+    padding: 1px 9px; font-size: 12.5px; flex: 0 0 auto;
+  }
+  .picker-list .empty { padding: 18px 14px; color: var(--faint); }
+  .picker-actions { flex-wrap: nowrap; }
+  .picker-actions .grow { flex: 1 1 auto; }
+  .picker-actions button { margin-top: 4px; }
+  @media (max-width: 520px) {
+    .picker-actions { flex-wrap: wrap; }
+    .picker-actions .grow { display: none; }
+  }
+
+  /* what has happened */
+  .activity { margin-top: 36px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .activity h2 { font-size: 14px; font-weight: 600; color: var(--dim); margin: 0 0 8px; font-family: var(--sans); }
   #log {
-    background: #0b0d11; border: 1px solid #262b36; border-radius: 10px;
-    padding: 12px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 12.5px; white-space: pre-wrap; word-break: break-word;
-    max-height: 320px; overflow: auto; margin-top: 6px;
+    background: var(--shelf); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+    font-size: 13px; white-space: pre-wrap; word-break: break-word;
+    max-height: 260px; overflow: auto;
   }
-  .log-ok { color: #5ad19a; }
-  .log-err { color: #ff7b72; }
-  .log-info { color: #79c0ff; }
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
-  .pill.on { background: #143524; color: #5ad19a; }
-  .pill.off { background: #3a1f23; color: #ff7b72; }
+  .log-ok { color: var(--leaf); }
+  .log-err { color: var(--rose); }
+  .log-info { color: var(--sky); }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12.5px; }
+  .pill.on { background: rgba(127, 209, 165, .14); color: var(--leaf); }
+  .pill.off { background: rgba(255, 143, 132, .14); color: var(--rose); }
   .hidden { display: none !important; }
-  a { color: #79c0ff; }
-  a.back {
-    display: inline-block; margin-bottom: 12px; text-decoration: none;
-    color: #cbd2dd; background: #2a2f3a; padding: 6px 12px; border-radius: 8px;
-    font-size: 13px; font-weight: 600;
+  a { color: var(--sky); }
+  .build { color: var(--faint); font-size: 12.5px; margin: 18px 0 0; }
+
+  @media (max-width: 820px) {
+    .shell { display: block; }
+    .menu {
+      position: sticky; top: 0; z-index: 5; height: auto; flex-direction: row; align-items: center;
+      overflow-x: auto; padding: 8px 10px; gap: 4px; border-right: 0; border-bottom: 1px solid var(--line);
+    }
+    .brand, .brand-sub, .menu .rule, .menu .account, .menu button.go small { display: none; }
+    .menu button.go {
+      width: auto; white-space: nowrap; border-left: 0; border-bottom: 3px solid transparent;
+      padding: 9px 12px; flex: 0 0 auto;
+    }
+    .menu button.go[aria-current="page"] { border-bottom-color: var(--lamp); }
+    .menu a.out { white-space: nowrap; flex: 0 0 auto; }
+    .page { padding: 22px 16px 24px; }
+    .pane > h2 { font-size: 25px; }
+    .place, .notice { flex-wrap: wrap; }
   }
-  a.back:hover { background: #343a47; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <a id="back-link" href="/" class="back">&larr; Back to app</a>
-  <a id="reader-link" href="/reader" target="_blank" class="back" style="margin-left:14px" title="Opens in its own window so this page keeps watching your export">📖 Open Reader</a>
-  <a href="/downloads" target="_blank" class="back" style="margin-left:14px" title="Every download in one place: progress, pause, resume, stop">⤓ Downloads</a>
-  <h1>LNCrawl Tools</h1>
-  <p class="sub">Lightweight power-user actions wired straight to the REST API.</p>
+<div class="shell">
+<nav class="menu" aria-label="Tools">
+  <div class="brand">Lightnovel Crawler</div>
+  <div class="brand-sub">Tools</div>
+  <button class="go secondary" data-go="download">Download a site<small>Every novel on it, unattended</small></button>
+  <button class="go secondary" data-go="browse">Browse a site<small>List its novels, pick later</small></button>
+  <button class="go secondary" data-go="import">Import books<small>From a ZIP or e-book files</small></button>
+  <button class="go secondary" data-go="zip">Make a ZIP<small>Of the books you already have</small></button>
+  <button class="go secondary" data-go="library">Library and drives<span id="library-dot" class="dot hidden"></span><small>Where it is, moving it, backups</small></button>
+  <button class="go secondary" data-go="repair">Repair a novel<small>Fill in missing chapters</small></button>
+  <button class="go secondary" data-go="alerts">Alerts<small>Tell me when a download ends</small></button>
+  <div class="rule"></div>
+  <a id="reader-link" href="/reader" target="_blank" class="out" title="Opens in its own window so this page keeps watching your download">Open the Reader</a>
+  <a href="/downloads" target="_blank" class="out" title="Every download in one place: progress, pause, resume, stop">All downloads</a>
+  <a id="back-link" href="/" class="out">Back to the app</a>
+  <div class="account">
+    <div id="logged-in" class="hidden">
+      Signed in as <span id="who" class="pill on"></span><br />
+      <button id="logout-btn" class="secondary">Sign out</button>
+    </div>
+  </div>
+</nav>
+<main class="page">
+  <div id="space-notice" class="notice hidden">
+    <div class="grow"><b id="space-title"></b>
+      <div class="muted">Downloads stop when it runs out, and at nothing free the app stops
+        answering. There is still room to move the library to a bigger drive.</div></div>
+    <button id="space-go">Move the library</button>
+  </div>
+  <div id="found-notice" class="notice hidden">
+    <div class="grow"><b id="found-title"></b><div class="muted" id="found-text"></div></div>
+    <button id="found-use">Use that library</button>
+  </div>
 
-  <div class="card" id="auth-card">
+  <section class="pane" id="auth-card">
     <h2>Sign in</h2>
-    <p class="hint">Uses your existing account. The token is kept in this browser only.</p>
+    <p class="hint">Use the same email and password as in the app.</p>
     <div id="logged-out">
       <label for="email">Email or username</label>
       <input id="email" type="text" autocomplete="username" />
@@ -125,25 +293,22 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <input id="password" type="password" autocomplete="current-password" />
       <button id="login-btn">Sign in</button>
     </div>
-    <div id="logged-in" class="hidden">
-      <p class="muted">Signed in as <span id="who" class="pill on"></span></p>
-      <button id="logout-btn" class="secondary">Sign out</button>
-    </div>
-  </div>
+  </section>
 
-  <div class="card">
+  <section class="pane" data-pane="download">
     <h2>Download a whole site</h2>
     <p class="hint">Paste a site's address and press Start. Every novel on it is found and
       downloaded — manga too. It tunes its speed to the site, waits out blocks and hiccups and
       tries again, carries on after the app or computer restarts, and keeps the computer awake
       while it works, so you can start it and leave it for days. You get a notification when
       it's done.</p>
-    <label for="exp-url">Site URL</label>
+    <label for="exp-url">Site address</label>
     <input id="exp-url" type="text" placeholder="https://novelsource.example/" />
     <label for="exp-make" style="margin-top:12px">What to make</label>
     <select id="exp-make">
       <option value="library" selected>Add to my library — read it in the Reader</option>
       <option value="zip">Also make e-books, bundled into one ZIP to keep or move</option>
+      <option value="ziponly">Only the ZIP of e-books — nothing is kept in my library</option>
     </select>
     <div class="row checkbox">
       <input id="exp-untildone" type="checkbox" checked />
@@ -164,13 +329,20 @@ _TOOLS_HTML = """<!DOCTYPE html>
       </div>
       <div style="flex:3">
         <label for="exp-savedir">Save the ZIP to folder</label>
-        <input id="exp-savedir" type="text" placeholder="blank = Desktop, e.g. D:\\Novels" />
+        <div class="row picker-row">
+          <input id="exp-savedir" type="text" placeholder="blank = Desktop, e.g. D:\\Novels" />
+          <button type="button" class="secondary browse" data-for="exp-savedir">Browse…</button>
+        </div>
       </div>
     </div>
     <div class="row checkbox">
       <input id="exp-completeonly" type="checkbox" />
-      <label for="exp-completeonly" style="margin:0">Only fully downloaded novels in the ZIP (partly downloaded ones stay in the library)</label>
+      <label for="exp-completeonly" id="exp-completeonly-label" style="margin:0">Only fully downloaded novels in the ZIP (partly downloaded ones stay in the library)</label>
     </div>
+    <p class="hint hidden" id="exp-ziponly-hint">Each novel is downloaded, made into an e-book for the
+      ZIP and then taken out of the library again, so it never shows in the Reader. Novels that
+      were in your library before stay there. The downloads still need room on the library's
+      drive while they run; if you stop part way, what is unfinished stays until you resume.</p>
     </div>
     <details>
       <summary>Advanced options — you don't need these</summary>
@@ -246,24 +418,24 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <button id="export-resume" class="secondary hidden" style="margin-top:14px">&#9654; Resume last</button>
       <button id="export-diagnostics" class="secondary hidden" style="margin-top:14px">Download stall diagnostics</button>
     </div>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2>List a site's novels without downloading them</h2>
+  <section class="pane" data-pane="browse">
+    <h2>Browse a site's novels</h2>
     <p class="hint">Adds every novel a site has to your library with just its details
       (title, cover, description, chapter list), so you can browse and pick. To download
       the chapters too, use <b>Download a whole site</b> above, or select novels in the
       Reader and press <b>Get chapters</b>.</p>
-    <label for="src-url">Source URL</label>
+    <label for="src-url">Site address</label>
     <input id="src-url" type="text" placeholder="https://novelsource.example/" />
     <div class="row">
       <button id="discover-btn">List novels</button>
       <button id="discover-stop" class="secondary hidden" style="margin-top:14px">&#9632; Stop</button>
     </div>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2>Import novels from a ZIP</h2>
+  <section class="pane" data-pane="import">
+    <h2>Import books</h2>
     <p class="hint">
       Carried this app and your downloads to a machine with no internet? Drop the
       export <code>.zip</code> here and every novel inside it goes back into your
@@ -279,13 +451,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
            accept=".zip,.epub,.cbz,.pdf,.docx,.mobi,.azw3,.fb2,.rtf,.txt"
            style="display:none" />
     <div id="import-status" class="muted"></div>
-  </div>
+  </section>
 
-  <div class="card">
-    <details class="card-fold" id="library-card">
-    <summary>My exports (library)</summary>
-    <p class="hint">Past source exports on this machine. Click to re-download the ZIP.</p>
-    <div id="library-list"><span class="muted">Sign in to see your exports.</span></div>
+  <section class="pane" data-pane="zip">
+    <h2>Make a ZIP of your books</h2>
+    <p class="hint">Packs the e-books you already have into one ZIP with a page to browse them.
+      Nothing is downloaded from any site.</p>
     <label for="library-nsfw">NSFW novels</label>
     <select id="library-nsfw">
       <option value="include" selected>Include them</option>
@@ -297,50 +468,79 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <label for="library-completeonly" style="margin:0">Only fully downloaded novels (every chapter downloaded)</label>
     </div>
     <label for="library-savedir">Save the ZIP to folder</label>
-    <input id="library-savedir" type="text" placeholder="blank = download in the browser, e.g. D:\\Novels" />
-    <button id="library-export">Export entire library as ZIP</button>
+    <div class="row picker-row">
+      <input id="library-savedir" type="text" placeholder="blank = download in the browser, e.g. D:\\Novels" />
+      <button type="button" class="secondary browse" data-for="library-savedir">Browse…</button>
+    </div>
+    <button id="library-export">Make the ZIP</button>
     <p class="hint">Includes saved EPUBs, CBZ manga and books inside past export ZIPs, one copy
       per novel (the most complete one). NSFW is judged by a novel's tags (Adult, Mature, Smut,
       Ecchi, R-18&hellip;), so an untagged novel always counts as safe. A folder on another
       drive keeps the ZIP off a full system drive: it is written there and nowhere else.
       Extract the ZIP and open index.html to browse.</p>
-    <button id="library-refresh" class="secondary">Refresh</button>
-    </details>
-  </div>
+    <h3>ZIPs from earlier site downloads</h3>
+    <p class="hint">Click one to save it again.</p>
+    <div id="library-list"><span class="muted">Sign in to see them.</span></div>
+    <button id="library-refresh" class="secondary">Refresh the list</button>
+  </section>
 
-  <div class="card">
-    <details class="card-fold">
-    <summary>Storage, backup &amp; phone</summary>
+  <section class="pane" data-pane="library">
+    <h2>Library and drives</h2>
+    <p class="hint">Your library is everything the app keeps: novels, manga pages, e-books,
+      ZIPs and its database. It all lives in one folder, which can be on any drive.</p>
+    <div class="where"><p class="hint" id="move-status">Sign in to see where the library is.</p>
+      <button id="move-cancel" class="secondary hidden">Cancel</button></div>
+
+    <div id="found-box" class="hidden">
+      <h3>Libraries found on your drives</h3>
+      <p class="hint">Open one of these and the app runs from it after you close and reopen it.
+        Nothing is copied, and the library in use now stays where it is.</p>
+      <div id="found-list"></div>
+    </div>
+
+    <h3>Move the library to another drive</h3>
+    <p class="hint">Everything is copied while you keep using the app (downloads pause), then it
+      switches over by itself and removes the old copy. Nothing to close or reopen. Nothing is
+      removed from the old place until the new one has it all.</p>
+    <div id="drive-list"><span class="muted">Looking at your drives…</span></div>
+    <details>
+      <summary>Choose a folder yourself</summary>
+      <label for="move-folder">Folder</label>
+      <div class="row">
+        <input id="move-folder" type="text" placeholder="e.g. D:\\LNCrawl" />
+        <button type="button" class="secondary browse" data-for="move-folder" style="margin-top:0">Browse…</button>
+        <button id="move-btn" class="secondary" style="margin-top:0">Move the library here</button>
+        <button id="move-use" class="secondary" style="margin-top:0"
+          title="For a library that is already in that folder. Nothing is copied.">Use the library in this folder</button>
+      </div>
+    </details>
+
+    <h3>Space</h3>
     <p class="hint" id="storage-line">Sign in to see disk usage.</p>
-    <div id="storage-largest" class="muted" style="font-size:13px"></div>
-    <div class="row" style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
-      <button id="storage-refresh" class="secondary">Check usage</button>
-      <button id="storage-clean" class="secondary" title="Deletes generated export ZIPs (your novels stay). Backups are kept.">🧹 Clean export zips</button>
-      <button id="backup-btn" class="secondary" title="Zips the database + every downloaded novel. Saved to the exports folder and your Desktop.">💾 Create backup</button>
-      <button id="phone-btn" class="secondary" title="Show a QR code to open the Reader on your phone (same Wi-Fi)">📱 Read on phone</button>
-    </div>
-    <label for="move-folder" style="margin-top:14px">Move the library to another drive</label>
+    <div id="storage-largest" class="muted"></div>
     <div class="row">
-      <input id="move-folder" type="text" placeholder="e.g. D:\\ or D:\\LNCrawl" />
-      <button id="move-btn" class="secondary" style="flex:0 0 auto">📦 Move library</button>
-      <button id="move-cancel" class="secondary hidden" style="flex:0 0 auto">Cancel move</button>
+      <button id="storage-refresh" class="secondary">Check what uses the space</button>
+      <button id="storage-clean" class="secondary" title="Deletes the ZIPs made by site downloads (your novels stay). Backups are kept.">Delete old ZIPs</button>
     </div>
-    <p class="hint" id="move-status">Everything goes together: novels, manga pages, e-books,
-      exports and the database. Downloads pause while it copies, and nothing is removed from
-      the old place until the new one has it all.</p>
-    <div id="phone-box" class="hidden" style="margin-top:12px;text-align:center">
+
+    <h3>Backup</h3>
+    <p class="hint">One ZIP of the database and every downloaded novel, saved to the library's
+      exports folder and your Desktop.</p>
+    <button id="backup-btn" class="secondary" style="margin-top:0">Create a backup</button>
+
+    <h3>Read on your phone</h3>
+    <p class="hint">Shows a code to scan. Your phone has to be on the same Wi-Fi as this computer.</p>
+    <button id="phone-btn" class="secondary" style="margin-top:0">Show the code</button>
+    <div id="phone-box" class="hidden" style="margin-top:14px">
       <div id="phone-qr" style="background:#fff;display:inline-block;padding:10px;border-radius:10px"></div>
       <p class="muted" id="phone-url" style="word-break:break-all"></p>
-      <p class="hint">Scan with your phone's camera (same Wi-Fi as this PC), then sign in with the
-        same email &amp; password. If it doesn't load, allow the app through Windows Firewall
-        and make sure both devices are on the same network.</p>
+      <p class="hint">Scan with your phone's camera, then sign in with the same email and
+        password. If it doesn't load, allow the app through Windows Firewall.</p>
     </div>
-    </details>
-  </div>
+  </section>
 
-  <div class="card">
-    <details class="card-fold">
-    <summary>Finish notifications</summary>
+  <section class="pane" data-pane="alerts">
+    <h2>Alerts</h2>
     <p class="hint">Get pinged when a long overnight export finishes so you don't have to keep
       checking. A desktop notification pops on this machine; a webhook can reach your phone
       (Discord or Slack incoming webhook). Both are optional.</p>
@@ -350,28 +550,44 @@ _TOOLS_HTML = """<!DOCTYPE html>
     </div>
     <label for="notify-webhook">Webhook URL (optional)</label>
     <input id="notify-webhook" type="text" placeholder="https://discord.com/api/webhooks/..." />
-    <button id="notify-save">Save notification settings</button>
-    </details>
-  </div>
+    <button id="notify-save">Save alerts</button>
+  </section>
 
-  <div class="card">
-    <details class="card-fold">
-    <summary>Check completeness and repair EPUB</summary>
+  <section class="pane" data-pane="repair">
+    <h2>Repair a novel</h2>
     <p class="hint">Check downloaded, missing, failed and empty chapters. Repair retries only
       chapter gaps and rebuilds the EPUB once all chapter text is available.</p>
     <label for="novel-id">Novel ID</label>
     <input id="novel-id" type="text" placeholder="e.g. 0c3b…" />
     <button id="completeness-btn">Check completeness</button>
-    <button id="retry-btn">Retry missing and rebuild EPUB</button>
-    </details>
-  </div>
+    <button id="retry-btn" class="secondary">Retry missing and rebuild EPUB</button>
+  </section>
 
-  <div class="card">
-    <h2>Activity</h2>
-    <div id="log"><span class="muted">Responses will appear here.</span></div>
+  <div class="activity">
+    <h2>What has happened</h2>
+    <div id="log"><span class="muted">Nothing yet. What you start shows up here.</span></div>
   </div>
+  <p class="build">__BUILD_INFO__</p>
 
-  <p class="sub" style="text-align:center;margin-top:8px">__BUILD_INFO__</p>
+  <dialog id="folder-picker" aria-labelledby="picker-title">
+    <form method="dialog" class="picker">
+      <h2 id="picker-title">Choose a folder</h2>
+      <nav id="picker-trail" class="trail" aria-label="Where you are"></nav>
+      <p id="picker-note" class="muted picker-note"></p>
+      <div id="picker-list" class="picker-list" role="list"></div>
+      <div id="picker-new" class="row hidden">
+        <input id="picker-name" type="text" placeholder="Name of the new folder" />
+        <button type="button" id="picker-make" class="secondary" style="margin-top:0">Make it</button>
+      </div>
+      <div class="row picker-actions">
+        <button type="button" id="picker-new-btn" class="secondary">New folder</button>
+        <span class="grow"></span>
+        <button type="submit" value="cancel" class="secondary">Cancel</button>
+        <button type="button" id="picker-use">Use this folder</button>
+      </div>
+    </form>
+  </dialog>
+</main>
 </div>
 
 <script>
@@ -460,7 +676,29 @@ _TOOLS_HTML = """<!DOCTYPE html>
     });
   }
 
+  // ---- the menu: one task on screen at a time ----
+  var PANES = ["download", "browse", "import", "zip", "library", "repair", "alerts"];
+  function showPane(name) {
+    if (PANES.indexOf(name) < 0) name = "download";
+    document.querySelectorAll(".pane[data-pane]").forEach(function (pane) {
+      pane.classList.toggle("shown", pane.getAttribute("data-pane") === name);
+    });
+    document.querySelectorAll(".menu button.go").forEach(function (button) {
+      if (button.getAttribute("data-go") === name) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    });
+    try { history.replaceState(null, "", "#" + name); } catch (e) {}
+    if (name === "library" && token()) { loadMove(); loadPlaces(); loadStorage(); }
+  }
+  document.querySelectorAll(".menu button.go").forEach(function (button) {
+    button.addEventListener("click", function () {
+      showPane(button.getAttribute("data-go"));
+      window.scrollTo(0, 0);
+    });
+  });
+
   function refreshAuthUI() {
+    document.body.classList.toggle("signed-out", !token());
     var inEl = document.getElementById("logged-in");
     var outEl = document.getElementById("logged-out");
     if (token()) {
@@ -475,6 +713,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
           loadLibrary(u && u.id);
           loadNotifyConfig();
           loadMove();
+          loadPlaces();
         })
         .catch(function () {
           // stale/invalid token
@@ -847,6 +1086,13 @@ _TOOLS_HTML = """<!DOCTYPE html>
         } else if (status === "RUNNING" && ex.phase === "disk-full") {
           var room = ex.disk_free != null ? " Only " + Math.floor(ex.disk_free / 1048576) + " MB is free" +
             (ex.disk_path ? " for " + ex.disk_path : "") + "." : "";
+          if (ex.disk_need) {
+            log("⚠ Paused before the drive fills up: " + (ex.disk_title || "the next novel") + " needs about " +
+              fmtSize(ex.disk_need) + " and only " + (fmtSize(ex.disk_free) || "0 MB") + " is free" +
+              (ex.disk_path ? " for " + ex.disk_path : "") + ". Nothing of it was downloaded. Move the " +
+              "library to a bigger drive (Library and drives) or free up space — it carries on by itself" +
+              untilNote(ex) + ".", "log-err");
+          } else
           log("⚠ The disk is full: downloads wait so nothing is fetched and thrown away." + room +
             " Free up some space, or move the data folder to a bigger drive — it carries on by itself" +
             untilNote(ex) + ".", "log-err");
@@ -863,10 +1109,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
           var parts = [(extra.complete != null ? extra.complete : extra.exported || 0) + " complete"];
           if (extra.incomplete) parts.push(extra.incomplete + " partial");
           if (extra.skipped) parts.push(extra.skipped + " skipped (already had)");
-          if (extra.left_out) parts.push(extra.left_out + " partly downloaded left out of the ZIP (in your library)");
+          if (extra.left_out) parts.push(extra.left_out + " partly downloaded left out of the ZIP" +
+            (extra.zip_only ? "" : " (in your library)"));
           if (extra.failed) parts.push(extra.failed + " failed");
           log((extra.library_only ? "Done — in your library: " : "Export done: ") + parts.join(", ") +
-            " of " + (extra.total_novels || 0) + "." + (extra.library_only ? " Open the Reader to read them." : ""),
+            " of " + (extra.total_novels || 0) + "." + (extra.library_only ? " Open the Reader to read them." : "") +
+            (extra.zip_only ? " Nothing it downloaded was kept in your library." : ""),
             extra.failed ? "log-info" : "log-ok");
           notifyEnd("Export finished", (extra.domain || "Export") + ": " + parts.join(", ") + " of " + (extra.total_novels || 0) + ".");
           if (extra.discovery_capped) {
@@ -966,6 +1214,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     if (!url) { log("Enter a source URL.", "log-err"); return null; }
     var body = { url: url, format: document.getElementById("exp-format").value };
     body.library_only = document.getElementById("exp-make").value === "library";
+    body.zip_only = document.getElementById("exp-make").value === "ziponly";
     body.until_done = document.getElementById("exp-untildone").checked;
     var limitRaw = document.getElementById("exp-limit").value.trim();
     if (limitRaw) {
@@ -1008,8 +1257,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
   // the e-book format only matters when e-books are being made
   function syncMake() {
-    document.getElementById("exp-zip-opts").classList.toggle("hidden",
-      document.getElementById("exp-make").value !== "zip");
+    var make = document.getElementById("exp-make").value;
+    document.getElementById("exp-zip-opts").classList.toggle("hidden", make === "library");
+    document.getElementById("exp-ziponly-hint").classList.toggle("hidden", make !== "ziponly");
+    document.getElementById("exp-completeonly-label").textContent = make === "ziponly"
+      ? "Only fully downloaded novels in the ZIP (partly downloaded ones are dropped)"
+      : "Only fully downloaded novels in the ZIP (partly downloaded ones stay in the library)";
   }
   document.getElementById("exp-make").addEventListener("change", syncMake);
   syncMake();
@@ -1314,10 +1567,22 @@ _TOOLS_HTML = """<!DOCTYPE html>
   // ---- Move the library to another drive ----
   var moveTimer = null;
   function count(n) { return (n || 0).toLocaleString(); }
+  var lastMoveState = null;
   function showMove(s) {
-    var line = document.getElementById("move-status");
-    var busyNow = s.state === "pausing" || s.state === "measuring" || s.state === "copying";
     var old = s.old_copy;
+    document.getElementById("space-notice").classList.toggle("hidden", !s.low);
+    if (s.low) {
+      document.getElementById("space-title").textContent = "Only " + (fmtSize(s.free) || "0 MB") +
+        " is free on the drive the library is on (" + s.folder + ").";
+    }
+    var line = document.getElementById("move-status");
+    var busyNow = ["pausing", "measuring", "copying", "finishing", "switching"].indexOf(s.state) >= 0;
+    var wasMoving = ["pausing", "measuring", "copying", "finishing", "switching"].indexOf(lastMoveState) >= 0;
+    if (wasMoving && s.state === "idle" && old && old.path) {
+      log("✓ The library is now in " + s.folder + ". Removing the old copy from " + old.path + ".", "log-ok");
+      loadPlaces();
+    }
+    lastMoveState = s.state;
     var text;
     if (s.state === "pausing") {
       text = "Pausing downloads before the copy starts…";
@@ -1332,9 +1597,18 @@ _TOOLS_HTML = """<!DOCTYPE html>
         text = "⏳ " + s.target + " is not answering (" + s.problem + "). Waiting and trying again by " +
           "itself for up to 15 minutes; check the drive is still connected. " + text;
       }
+    } else if (s.state === "finishing") {
+      text = "Almost done: " + (s.step || "finishing the copy") + "… The library is still in use from " +
+        s.folder + ".";
+    } else if (s.state === "switching") {
+      text = "Switching over to " + s.target + ". The app may stop answering for a few seconds.";
     } else if (s.state === "copied") {
-      text = "✓ Copied to " + s.target + ". Close the app and open it again to finish: it then runs " +
+      text = "✓ Copied to " + s.target + ", but the app could not switch over while it was running " +
+        "(something kept the database busy). Close the app and open it again to finish: it then runs " +
         "from there and removes the old copy from " + s.folder + ". Downloads stay paused until then.";
+    } else if (s.state === "chosen") {
+      text = "✓ Close the app and open it again: it then runs from the library in " + s.target +
+        ". Nothing was copied, and the library in " + s.folder + " stays where it is.";
     } else if (s.state === "failed") {
       text = "The move did not happen: " + (s.error || "unknown error") + ". The library is unchanged in " +
         s.folder + ". Click Move library again to carry on from what was already copied.";
@@ -1344,22 +1618,226 @@ _TOOLS_HTML = """<!DOCTYPE html>
     } else if (old && old.state === "done") {
       text = "The library is now in " + s.folder + ". The old copy is gone from " + old.path +
         " (" + (fmtSize(old.freed) || "0 MB") + " freed" +
-        (old.left ? "; " + count(old.left) + " file(s) the new folder does not have were left there" : "") + ").";
+        (old.left ? "; " + count(old.left) + " file(s) the new folder does not have were left there" : "") +
+        (old.in_use ? "; " + count(old.in_use) + " file(s) still in use are removed the next time the app starts" : "") +
+        ").";
     } else if (old && old.state === "failed") {
       text = "The library is now in " + s.folder + ". The old copy in " + old.path +
         " could not be removed (" + (old.error || "unknown error") + "); it is safe to delete by hand.";
     } else {
       text = "The library is in " + s.folder + (s.free != null ? " (" + (fmtSize(s.free) || "0 MB") +
-        " free on that drive)" : "") + ". Everything goes together: novels, manga pages, e-books, " +
-        "exports and the database. Downloads pause while it copies, and nothing is removed from " +
-        "the old place until the new one has it all.";
+        " free on that drive)" : "") + ".";
+    }
+    if (s.left_behind && s.state === "idle") {
+      text += " " + count(s.left_behind) + " file(s) another program was holding open (the app window's " +
+        "browser profile, logs) were not brought along; they are made again as needed.";
     }
     line.textContent = text;
-    document.getElementById("move-btn").disabled = busyNow || s.state === "copied";
-    document.getElementById("move-cancel").classList.toggle("hidden", !(busyNow || s.state === "copied"));
+    var waiting = s.state === "copied" || s.state === "chosen";
+    document.getElementById("move-btn").disabled = busyNow || waiting;
+    document.getElementById("move-use").disabled = busyNow || waiting;
+    document.getElementById("move-cancel").classList.toggle("hidden", !(busyNow || waiting));
+    document.querySelectorAll(".place button, #found-use").forEach(function (button) {
+      button.disabled = busyNow || waiting;
+    });
     var watching = busyNow || (old && old.state === "removing");
     if (watching && !moveTimer) moveTimer = setInterval(loadMove, 2000);
     if (!watching && moveTimer) { clearInterval(moveTimer); moveTimer = null; }
+  }
+  // ---- a folder picker for every folder box: walk the drives instead of typing ----
+  var picker = document.getElementById("folder-picker");
+  var pickerFor = null, pickerAt = null;
+  function pickerRow(glyph, label, meta, tag, open) {
+    var b = document.createElement("button");
+    b.type = "button"; b.setAttribute("role", "listitem");
+    var g = document.createElement("span"); g.className = "glyph"; g.textContent = glyph; g.setAttribute("aria-hidden", "true");
+    var l = document.createElement("span"); l.className = "label"; l.textContent = label;
+    b.appendChild(g); b.appendChild(l);
+    if (tag) { var t = document.createElement("span"); t.className = "tag"; t.textContent = tag; b.appendChild(t); }
+    if (meta) { var m = document.createElement("span"); m.className = "meta"; m.textContent = meta; b.appendChild(m); }
+    b.addEventListener("click", open);
+    return b;
+  }
+  var BS = String.fromCharCode(92);  // a backslash, without escaping it twice over
+  function pickerTrail(path) {
+    var trail = document.getElementById("picker-trail");
+    trail.innerHTML = "";
+    var top = document.createElement("button");
+    top.type = "button"; top.textContent = "This computer";
+    top.addEventListener("click", function () { pickerOpen(null); });
+    if (!path) top.setAttribute("aria-current", "location");
+    trail.appendChild(top);
+    if (!path) return;
+    var windows = /^[A-Za-z]:[\\\\/]/.test(path);
+    var sep = windows ? BS : "/";
+    var parts = path.split(/[\\\\/]+/).filter(function (x) { return x; });
+    var built = windows ? "" : "/";
+    parts.forEach(function (part, i) {
+      built = windows ? (i === 0 ? part + BS : built + (built.slice(-1) === BS ? "" : BS) + part)
+                      : built + (built.slice(-1) === "/" ? "" : "/") + part;
+      var s = document.createElement("span"); s.className = "sep"; s.textContent = "›"; trail.appendChild(s);
+      var b = document.createElement("button"); b.type = "button"; b.textContent = part;
+      var target = built;
+      b.addEventListener("click", function () { pickerOpen(target); });
+      if (i === parts.length - 1) b.setAttribute("aria-current", "location");
+      trail.appendChild(b);
+    });
+    if (!parts.length) {  // the root folder "/"
+      var s0 = document.createElement("span"); s0.className = "sep"; s0.textContent = "›"; trail.appendChild(s0);
+      var r = document.createElement("button"); r.type = "button"; r.textContent = sep; r.setAttribute("aria-current", "location");
+      trail.appendChild(r);
+    }
+  }
+  function pickerOpen(path) {
+    var list = document.getElementById("picker-list");
+    var note = document.getElementById("picker-note");
+    list.innerHTML = "<div class='empty'>Looking…</div>";
+    var query = path ? "?path=" + encodeURIComponent(path) : "";
+    api("/admin/folders" + query, { method: "GET" }).then(function (r) {
+      pickerAt = r.path;
+      pickerTrail(r.path);
+      list.innerHTML = "";
+      document.getElementById("picker-use").disabled = !r.path;
+      document.getElementById("picker-new-btn").disabled = !r.path;
+      if (!r.path) {
+        note.textContent = "Pick a drive or one of your folders to look in.";
+        (r.places || []).forEach(function (p) {
+          var meta = p.free != null ? (fmtSize(p.free) || "0 MB") + " free" : "";
+          list.appendChild(pickerRow(p.kind === "drive" ? "◼" : "▸", p.name, meta, "", function () { pickerOpen(p.path); }));
+        });
+        return;
+      }
+      note.textContent = (r.library ? "This folder holds a library. " : "") +
+        (r.free != null ? (fmtSize(r.free) || "0 MB") + " free on this drive." : "");
+      if (r.parent) list.appendChild(pickerRow("↰", "Up one level", "", "", function () { pickerOpen(r.parent); }));
+      r.folders.forEach(function (f) {
+        list.appendChild(pickerRow("▸", f.name, "", f.library ? "library" : "", function () { pickerOpen(f.path); }));
+      });
+      if (!r.folders.length) {
+        var e = document.createElement("div"); e.className = "empty";
+        e.textContent = "No folders in here. Use this one, or make a new folder.";
+        list.appendChild(e);
+      }
+      if (r.more) {
+        var m = document.createElement("div"); m.className = "empty";
+        m.textContent = count(r.more) + " more folders are not listed. Type the path in the box instead.";
+        list.appendChild(m);
+      }
+      var first = list.querySelector("button");
+      if (first) first.focus();
+    }).catch(function (e) {
+      note.textContent = e.message;
+      list.innerHTML = "";
+      if (pickerAt !== path) {
+        list.appendChild(pickerRow("↰", "Back", "", "", function () { pickerOpen(pickerAt); }));
+      }
+    });
+  }
+  document.querySelectorAll("button.browse").forEach(function (button) {
+    button.addEventListener("click", function () {
+      if (!requireAuth()) return;
+      pickerFor = document.getElementById(button.getAttribute("data-for"));
+      document.getElementById("picker-new").classList.add("hidden");
+      pickerAt = null;
+      if (typeof picker.showModal === "function") picker.showModal(); else picker.setAttribute("open", "");
+      pickerOpen(pickerFor.value.trim() || null);
+    });
+  });
+  document.getElementById("picker-use").addEventListener("click", function () {
+    if (pickerFor && pickerAt) {
+      pickerFor.value = pickerAt;
+      pickerFor.dispatchEvent(new Event("change"));
+    }
+    picker.close();
+  });
+  document.getElementById("picker-new-btn").addEventListener("click", function () {
+    var row = document.getElementById("picker-new");
+    row.classList.remove("hidden");
+    document.getElementById("picker-name").value = "";
+    document.getElementById("picker-name").focus();
+  });
+  function pickerMake() {
+    var name = document.getElementById("picker-name").value.trim();
+    if (!name || !pickerAt) return;
+    api("/admin/folders", { method: "POST", body: JSON.stringify({ path: pickerAt, name: name }) })
+      .then(function (r) {
+        document.getElementById("picker-new").classList.add("hidden");
+        pickerOpen(r.path);
+      })
+      .catch(function (e) { document.getElementById("picker-note").textContent = e.message; });
+  }
+  document.getElementById("picker-make").addEventListener("click", pickerMake);
+  document.getElementById("picker-name").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); pickerMake(); }
+  });
+
+  // ---- drives and libraries to pick from, so no folder has to be typed ----
+  function placeRow(name, about, label, act, share) {
+    var row = document.createElement("div"); row.className = "place";
+    var text = document.createElement("div"); text.className = "grow";
+    var title = document.createElement("div"); title.className = "name"; title.textContent = name;
+    var note = document.createElement("div"); note.className = "about"; note.textContent = about;
+    text.appendChild(title); text.appendChild(note);
+    if (share != null) {
+      var bar = document.createElement("div"); bar.className = "bar";
+      var fill = document.createElement("i"); fill.style.width = Math.round(100 * share) + "%";
+      bar.appendChild(fill); text.appendChild(bar);
+    }
+    row.appendChild(text);
+    if (label) {
+      var button = document.createElement("button");
+      button.textContent = label; button.className = "secondary";
+      button.addEventListener("click", act);
+      row.appendChild(button);
+    }
+    return row;
+  }
+  function useLibrary(folder) {
+    document.getElementById("move-folder").value = folder;
+    document.getElementById("move-use").click();
+  }
+  function moveTo(folder) {
+    document.getElementById("move-folder").value = folder;
+    document.getElementById("move-btn").click();
+  }
+  function loadPlaces() {
+    if (!token()) return;
+    api("/admin/library/places", { method: "GET" }).then(function (p) {
+      var libraries = p.libraries || [], drives = p.drives || [];
+      var found = document.getElementById("found-list");
+      found.innerHTML = "";
+      libraries.forEach(function (lib) {
+        var when = lib.last_used ? "Last used " + new Date(lib.last_used * 1000).toLocaleDateString() : "A library";
+        found.appendChild(placeRow(lib.path, when, "Open this library", function () { useLibrary(lib.path); }));
+      });
+      document.getElementById("found-box").classList.toggle("hidden", !libraries.length);
+      // a library with nothing in it, and a full one on another drive: say so everywhere
+      var offer = libraries.length && p.empty;
+      document.getElementById("library-dot").classList.toggle("hidden", !offer);
+      document.getElementById("found-notice").classList.toggle("hidden", !offer);
+      if (offer) {
+        document.getElementById("found-title").textContent = "The library here has no novels in it.";
+        document.getElementById("found-text").textContent = "There is a library in " + libraries[0].path + ".";
+        document.getElementById("found-use").onclick = function () { useLibrary(libraries[0].path); };
+      }
+      var list = document.getElementById("drive-list");
+      list.innerHTML = "";
+      drives.forEach(function (drive) {
+        var about = (fmtSize(drive.free) || "0 MB") + " free of " + fmtSize(drive.total);
+        var used = drive.total ? 1 - drive.free / drive.total : null;
+        if (drive.current) {
+          list.appendChild(placeRow(drive.path, about + ". The library is on this drive now.", "", null, used));
+        } else {
+          list.appendChild(placeRow(drive.path, about, "Move the library here", function () { moveTo(drive.path); }, used));
+        }
+      });
+      if (!drives.length) {
+        list.innerHTML = "<span class='muted'>No drives were found to pick from. Type a folder below.</span>";
+      }
+    }).catch(function () {
+      document.getElementById("drive-list").innerHTML =
+        "<span class='muted'>Couldn't look at your drives. Type a folder below.</span>";
+    });
   }
   function loadMove() {
     api("/admin/library/location", { method: "GET" }).then(showMove).catch(function () {});
@@ -1369,11 +1847,22 @@ _TOOLS_HTML = """<!DOCTYPE html>
     var folder = document.getElementById("move-folder").value.trim();
     if (!folder) { log("Type the folder to move the library to, for example D:\\\\LNCrawl.", "log-err"); return; }
     if (!confirm("Move the whole library to " + folder + "?\\n\\nDownloads pause while it copies (a big " +
-        "library can take hours). Then close the app and open it again: it runs from the new place " +
-        "and removes the old copy.")) return;
+        "library can take hours); you can keep reading meanwhile. When the copy is done the app " +
+        "switches over by itself and removes the old copy.")) return;
     api("/admin/library/move", { method: "POST", body: JSON.stringify({ folder: folder }) })
       .then(function (s) { log("Moving the library to " + s.target + "…", "log-info"); showMove(s); })
       .catch(function (e) { log("Could not start the move: " + e.message, "log-err"); });
+  });
+  document.getElementById("move-use").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var folder = document.getElementById("move-folder").value.trim();
+    if (!folder) { log("Type the folder the library is in, for example F:\\\\Novels.", "log-err"); return; }
+    if (!confirm("Use the library that is already in " + folder + "?\\n\\nNothing is copied. After you " +
+        "close the app and open it again it runs from there, and the library it uses now is left " +
+        "where it is.")) return;
+    api("/admin/library/use", { method: "POST", body: JSON.stringify({ folder: folder }) })
+      .then(function (s) { log("The next start uses the library in " + s.target + ".", "log-ok"); showMove(s); })
+      .catch(function (e) { log("Could not use that folder: " + e.message, "log-err"); });
   });
   document.getElementById("move-cancel").addEventListener("click", function () {
     if (!requireAuth()) return;
@@ -1477,6 +1966,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
   });
 
   refreshAuthUI();
+  document.getElementById("space-go").addEventListener("click", function () {
+    showPane("library"); window.scrollTo(0, 0);
+  });
+  // the free space is looked at again every minute, whichever screen is open
+  setInterval(function () { if (token() && !moveTimer) loadMove(); }, 60000);
+  showPane((location.hash || "").replace("#", ""));
 })();
 </script>
 </body>

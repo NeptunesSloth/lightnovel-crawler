@@ -827,6 +827,7 @@ class JobService:
         parallel_novels: int = 2,
         until_done: bool = False,
         library_only: bool = False,
+        zip_only: bool = False,
         save_dir: Optional[str] = None,
         complete_only: bool = False,
         **data: Any,
@@ -852,6 +853,8 @@ class JobService:
         data["parallel_novels"] = max(1, min(4, int(parallel_novels)))
         data["until_done"] = bool(until_done)
         data["library_only"] = bool(library_only)
+        if zip_only and not library_only:
+            data["zip_only"] = True
         if save_dir:
             data["save_dir"] = str(save_dir)
         if complete_only:

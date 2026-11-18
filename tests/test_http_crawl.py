@@ -221,7 +221,7 @@ class HttpCrawlTests(unittest.TestCase):
             patch(f"{module}.ExportSourceHandler._notify_finish"),
             patch(
                 "lncrawl.services.crawler.request_budget",
-                side_effect=lambda signal: request_budget(signal, seconds),
+                side_effect=lambda signal, **_: request_budget(signal, seconds),
             ),
             patch(f"{module}.ADAPTIVE_STEP", 0),
         ):
@@ -283,6 +283,55 @@ class HttpCrawlTests(unittest.TestCase):
         # still downloaded as far as it goes, in the library
         self.assertEqual(self.ctx.chapters.completeness("novel").downloaded, 3)
 
+    def not_in_library(self) -> None:
+        """The fixture's novel is in the library from the start; a site's novels mostly are not."""
+        self.ctx.recommendations = MagicMock()  # told when a novel goes; not under test
+        self.ctx.novels.delete("novel")
+        self.assertIsNone(self.ctx.novels.find_by_url(self.novel_url))
+
+    def test_zip_only_makes_the_zip_and_keeps_nothing_in_the_library(self) -> None:
+        self.not_in_library()
+        job = self.export(zip_only=True)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["complete"], 1)
+        with ZipFile(self.ctx.files.resolve(job.extra["export_file"])) as bundle:
+            self.assertTrue(any(name.endswith(".epub") for name in bundle.namelist()))
+        self.assertIsNone(self.ctx.novels.find_by_url(self.novel_url))
+        self.assertEqual(list(self.ctx.files.resolve("novels").glob("*/chapters")), [])
+        self.assertEqual(list(self.ctx.files.resolve("exports/zip-only").glob("*")), [])
+        # run again, the book is found in the zip: nothing is downloaded twice
+        previous_requests = self.counts.copy()
+        again = self.export(zip_only=True)
+        self.assertEqual(again.status, JobStatus.SUCCESS, again.error)
+        self.assertEqual(again.extra["resumed"], 1)
+        self.assertEqual(self.counts, previous_requests)
+        self.assertIsNone(self.ctx.novels.find_by_url(self.novel_url))
+
+    def test_zip_only_leaves_a_novel_that_was_in_the_library_before(self) -> None:
+        job = self.export(zip_only=True)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["complete"], 1)
+        self.assertIsNotNone(self.ctx.novels.find_by_url(self.novel_url))
+        self.assertEqual(self.ctx.chapters.completeness("novel").downloaded, 4)
+
+    def test_zip_only_takes_a_partly_downloaded_novel_out_once_the_zip_is_made(self) -> None:
+        self.not_in_library()
+        self.empty.add("/chapter-4")  # one chapter never comes
+        job = self.export(zip_only=True)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertEqual(job.extra["incomplete"], 1)
+        with ZipFile(self.ctx.files.resolve(job.extra["export_file"])) as bundle:
+            self.assertTrue(any(name.endswith(".epub") for name in bundle.namelist()))
+        self.assertIsNone(self.ctx.novels.find_by_url(self.novel_url))
+
+    def test_a_zip_only_export_that_is_stopped_keeps_what_it_has_for_the_resume(self) -> None:
+        self.not_in_library()
+        self.empty.add("/chapter-4")
+        job = self.export(zip_only=True, complete_only=True)  # nothing whole: no zip is made
+        self.assertNotIn("export_file", job.extra)
+        self.assertIsNotNone(self.ctx.novels.find_by_url(self.novel_url))
+        self.assertEqual(job.extra["zip_only_added"], [self.novel_url])
+
     def test_a_folder_that_cannot_be_written_stops_the_export_before_any_download(self) -> None:
         not_a_folder = self.root / "file.txt"
         not_a_folder.write_text("x")
@@ -313,6 +362,51 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(len(held), 2)
         self.assertEqual(held[0][1], 0)  # nothing asked of the site while there was no room
         self.assertEqual(held[0][2], 7 * MB)  # and how much room there was, to show
+
+    def test_a_novel_that_would_not_fit_is_not_started_until_there_is_room(self) -> None:
+        # Ask before it starts, not after the drive is at 0 MB: there is still
+        # room then to move the library somewhere bigger.
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        free = iter([10 * GB, 2 * GB, 2 * GB])  # room to start; not for this novel; then plenty
+        waits = []
+
+        def wait(handler, seconds, phase, **extra):
+            chapters = sum(n for path, n in self.counts.items() if path.startswith("/chapter"))
+            waits.append((phase, chapters, extra))
+
+        with (
+            patch(f"{module}._free_space", side_effect=lambda: next(free, 100 * GB)),
+            patch(f"{module}.ExportSourceHandler._wait", wait),
+        ):
+            # four chapters at a gigabyte each, going by the novels before it
+            job = self.export(
+                until_done=True, library_only=True, keep_awake=False, bytes_per_chapter=GB
+            )
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        self.assertTrue(self.ctx.chapters.completeness("novel").complete)
+        held = [w for w in waits if w[0] == "disk-full"]
+        self.assertTrue(held)
+        self.assertEqual(held[0][1], 0)  # none of its chapters was fetched first
+        self.assertEqual(held[0][2]["disk_title"], "Test Novel")
+        self.assertGreater(held[0][2]["disk_need"], 4 * GB)
+        self.assertEqual(held[0][2]["disk_free"], 2 * GB)
+        # and what this novel really took is what the next one is judged by
+        self.assertLess(job.extra["bytes_per_chapter"], MB)
+
+    def test_without_until_done_it_stops_and_says_what_is_needed(self) -> None:
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        with patch(f"{module}._free_space", return_value=2 * GB):
+            job = self.export(library_only=True, bytes_per_chapter=GB)
+        self.assertEqual(job.status, JobStatus.FAILED)
+        self.assertIn("Stopped before the drive filled up", job.error or "")
+        self.assertIn("Test Novel needs about 5.0 GB", job.error or "")
+        self.assertFalse(any(path.startswith("/chapter") for path in self.counts))
+
+    def test_a_novel_that_fits_is_not_held_up(self) -> None:
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        with patch(f"{module}._free_space", return_value=100 * GB):
+            job = self.export(library_only=True, bytes_per_chapter=GB)
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
 
     def test_a_disk_that_fills_up_part_way_stops_the_novel_and_waits(self) -> None:
         module = "lncrawl.services.scheduler.handlers.export_source"

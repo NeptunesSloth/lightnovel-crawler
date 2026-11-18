@@ -141,6 +141,12 @@ class ExportSourceRequest(BaseModel):
         description="Only download into the library (read in the Reader); skip making "
         "e-books and the zip",
     )
+    zip_only: bool = Field(
+        default=False,
+        description="Make the zip and keep nothing else: a novel this export adds to the "
+        "library is taken out again once its e-book is made. Novels already in the "
+        "library stay. Ignored with library_only",
+    )
     parallel_novels: int = Field(
         default=2,
         ge=1,

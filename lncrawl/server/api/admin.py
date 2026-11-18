@@ -24,7 +24,12 @@ from ..models.activity import (
     GlobalActivitySummary,
     TopUserActivity,
 )
-from ..models.library import LibraryExportRequest, LibraryMoveRequest
+from ..models.library import (
+    LibraryExportRequest,
+    LibraryMoveRequest,
+    LibraryUseRequest,
+    NewFolderRequest,
+)
 
 # The root router
 router = APIRouter()
@@ -144,6 +149,33 @@ def library_location() -> Dict[str, Any]:
     return ctx.library_move.status()
 
 
+@router.get("/folders", summary="The folders in a folder on this computer, to pick one")
+def list_folders(
+    path: Optional[str] = Query(default=None, description="Blank: the drives and own folders"),
+) -> Dict[str, Any]:
+    from ...utils.folders import list_folder
+
+    try:
+        return list_folder(path)
+    except ValueError as error:
+        raise ServerErrors.invalid_input.with_extra(str(error)) from error
+
+
+@router.post("/folders", summary="Make a folder on this computer")
+def make_folder(body: NewFolderRequest = Body()) -> Dict[str, Any]:
+    from ...utils.folders import new_folder
+
+    try:
+        return {"path": new_folder(body.path, body.name)}
+    except ValueError as error:
+        raise ServerErrors.invalid_input.with_extra(str(error)) from error
+
+
+@router.get("/library/places", summary="Drives the library could go to, and libraries on them")
+def library_places() -> Dict[str, Any]:
+    return ctx.library_move.places()
+
+
 @router.post("/library/move", summary="Move the whole library to a folder on another drive")
 def move_library(body: LibraryMoveRequest = Body()) -> Dict[str, Any]:
     """Copy the library to ``folder`` while downloads are paused.
@@ -156,6 +188,21 @@ def move_library(body: LibraryMoveRequest = Body()) -> Dict[str, Any]:
     except (OSError, ValueError) as error:
         raise ServerErrors.invalid_input.with_extra(
             f"Cannot move the library to {body.folder}: {error}"
+        ) from error
+
+
+@router.post("/library/use", summary="Run from a library that is already in another folder")
+def use_library(body: LibraryUseRequest = Body()) -> Dict[str, Any]:
+    """From the next start, use the library already in ``folder``.
+
+    For a library on a drive that outlived the computer it was made on. Nothing
+    is copied, and the library in use now is left where it is.
+    """
+    try:
+        return ctx.library_move.use_existing(body.folder.strip())
+    except (OSError, ValueError) as error:
+        raise ServerErrors.invalid_input.with_extra(
+            f"Cannot use the library in {body.folder}: {error}"
         ) from error
 
 

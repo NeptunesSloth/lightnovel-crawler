@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote, unquote
 
 from starlette.requests import Request
@@ -54,6 +55,23 @@ class StaticFilesGuard:
 class CustomStaticFiles(StaticFiles):
     def __init__(self) -> None:
         super().__init__(directory=ctx.config.app.app_dir)
+
+    # Served from wherever the library is now: it can move while the app runs.
+    @property  # type: ignore[override]
+    def directory(self) -> Any:
+        return ctx.config.app.app_dir
+
+    @directory.setter
+    def directory(self, _value: Any) -> None:
+        pass
+
+    @property  # type: ignore[override]
+    def all_directories(self) -> Any:
+        return [ctx.config.app.app_dir]
+
+    @all_directories.setter
+    def all_directories(self, _value: Any) -> None:
+        pass
 
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)

@@ -144,18 +144,27 @@ def _read_cbz(zf: zipfile.ZipFile, book: _Book) -> None:
     book.chapters = len(serials)
 
 
-def _inspect(source: IO[bytes], name: str, novel_tags: List[str]) -> Optional[_Book]:
-    """Hash a book and read what it says about itself, or None if unreadable."""
+def _inspect(
+    source: IO[bytes], name: str, novel_tags: List[str], spool_dir: Optional[Path] = None
+) -> Optional[_Book]:
+    """Hash a book and read what it says about itself, or None if unreadable.
+
+    A book in a file is read where it is. One inside a zip is given ``spool_dir``
+    and copied out there to be read: even very large books never need to fit in
+    memory. Never the system's temp folder, which is on the system drive: once
+    that was full, no export could be made to any drive.
+    """
     digest = hashlib.sha256()
     size = 0
-    with TemporaryFile() as spool:
-        # Spool to disk: even very large books never need to fit in memory.
+    with ExitStack() as stack:
+        spool = stack.enter_context(TemporaryFile(dir=spool_dir)) if spool_dir else source
         while True:
             chunk = source.read(1024 * 1024)
             if not chunk:
                 break
             digest.update(chunk)
-            spool.write(chunk)
+            if spool is not source:
+                spool.write(chunk)
             size += len(chunk)
         spool.seek(0)
         if not zipfile.is_zipfile(spool):
@@ -217,7 +226,7 @@ def _scan(
                     continue
                 name = member.filename.replace("\\", "/").rsplit("/", 1)[-1]
                 with archive.open(member) as source:
-                    book = _inspect(source, name, [])
+                    book = _inspect(source, name, [], output.parent)
                 if book:
                     book.archive = file
                     book.member = member.filename
