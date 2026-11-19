@@ -1631,8 +1631,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
   // ---- Move the library to another drive ----
   var moveTimer = null;
   function count(n) { return (n || 0).toLocaleString(); }
-  var lastMoveState = null;
+  var lastMoveState = null, rescueShown = false;
   function showMove(s) {
+    if (s.rescued && !rescueShown) {
+      rescueShown = true;
+      log("⚠ " + s.rescued, "log-err");
+    }
     var old = s.old_copy;
     document.getElementById("space-notice").classList.toggle("hidden", !s.low);
     if (s.low) {

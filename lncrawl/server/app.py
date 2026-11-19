@@ -79,6 +79,7 @@ async def lifespan(_app: FastAPI):
         ctx.logger.progress_bar = False
         ctx.mail.start()
         ctx.scheduler.start()
+        ctx.db.start_snapshots()
         ctx.recommendations.warmup()
         # running from the folder a move put the library in: remove the old copy
         ctx.library_move.on_startup()
