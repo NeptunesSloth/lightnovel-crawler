@@ -163,6 +163,8 @@ class LibraryMoveService:
                 "step": self._step,
                 "old_copy": dict(self._old) or None,
                 "left_behind": self._left_behind,
+                # what was done at the start to get an unreadable database back
+                "rescued": getattr(ctx.db, "rescued", None) if "db" in ctx.__dict__ else None,
             }
 
     def start(self, folder: str) -> Dict[str, Any]:

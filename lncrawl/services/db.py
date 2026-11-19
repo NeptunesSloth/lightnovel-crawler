@@ -1,7 +1,7 @@
 from functools import cached_property
 import logging
 from pathlib import Path
-from threading import Condition, Lock
+from threading import Condition, Event, Lock, Thread
 import time
 from typing import Any, Callable, Mapping, Optional, Sequence, Set
 
@@ -12,6 +12,12 @@ from ..context import ctx
 from ..dao import SQLModel
 
 logger = logging.getLogger(__name__)
+
+# Automatic copies of the database: the first one this long after a start (and
+# only if the newest is older than SNAPSHOT_EVERY), then looked at this often.
+SNAPSHOT_FIRST = 600.0
+SNAPSHOT_EVERY = 12 * 3600.0
+SNAPSHOT_CHECK = 3600.0
 
 
 class _Gate:
@@ -58,6 +64,9 @@ class _Gate:
 
 class DB:
     def __init__(self) -> None:
+        self.rescued: Optional[str] = None  # what was done to get an unreadable database back
+        self._snapshotting = Event()
+        self._closing = Event()
         self._gate = _Gate()
         self._held: Set[int] = set()  # connections handed out, by their pool record
         self._held_lock = Lock()
@@ -130,6 +139,7 @@ class DB:
         return True
 
     def close(self):
+        self._closing.set()
         if "engine" in self.__dict__:
             self.engine.dispose()
             self.__dict__.pop("engine")
@@ -184,6 +194,7 @@ class DB:
     # ------------------------------------------------------------------ #
 
     def bootstrap(self, reset_on_failure: bool = False):
+        self._rescue_if_unreadable()
         self._ensure_database()
         try:
             from alembic import command
@@ -195,10 +206,87 @@ class DB:
             logger.info("Database bootstrap successful.")
             self._verify_schema()
         except Exception:
-            if not reset_on_failure:
+            # Starting over empty is for a database with nothing in it. One that
+            # holds a library, or cannot be read to tell, is never wiped: the
+            # desktop app asked for this on every start, and an unreadable
+            # library was only spared because it could not even be opened.
+            if not reset_on_failure or self._holds_library():
                 raise
             self._reset_database()
             self.bootstrap()
+
+    def _database_file(self) -> Optional[Path]:
+        url = make_url(ctx.config.db.url)
+        if url.get_backend_name() != "sqlite" or not url.database or url.database == ":memory:":
+            return None
+        return Path(url.database)
+
+    def _holds_library(self) -> bool:
+        """Whether the database has novels in it, or cannot be read to tell (then: assume so)."""
+        try:
+            with self.engine.connect() as conn:
+                if "novels" not in sa.inspect(conn).get_table_names():
+                    return False
+                return bool(conn.exec_driver_sql("SELECT 1 FROM novels LIMIT 1").first())
+        except Exception:
+            return True
+
+    def _rescue_if_unreadable(self) -> None:
+        """Get a database that cannot be read back before anything opens it (see db_rescue)."""
+        from ..utils.db_rescue import rescue, unreadable
+
+        database = self._database_file()
+        if database is None:
+            return
+        error = unreadable(database)
+        if error is None:
+            return
+        logger.error(f"The database {database} cannot be read: {error}; trying to get it back")
+        self.rescued = rescue(database, ctx.config.app.app_dir, error)
+        logger.warning(self.rescued)
+
+    # ------------------------------------------------------------------ #
+    #                         Automatic copies                           #
+    # ------------------------------------------------------------------ #
+
+    def start_snapshots(self) -> None:
+        """Keep a copy of the database from the last 12 hours, and the one before, in the library.
+
+        So that a database file damaged by a drive that lost power is never the
+        only copy of a library's list of novels.
+        """
+        if self._database_file() is None or self._snapshotting.is_set():
+            return
+        self._snapshotting.set()
+        Thread(target=self._snapshot_loop, daemon=True, name="db-snapshots").start()
+
+    def snapshot(self) -> Optional[Path]:
+        from ..utils.db_rescue import take_snapshot
+
+        database = self._database_file()
+        if database is None or not database.is_file():
+            return None
+        made = take_snapshot(database, ctx.config.app.app_dir)
+        if made is not None:
+            logger.info(f"Copied the database to {made}")
+        else:
+            logger.warning("Not enough room on the library's drive for a copy of the database")
+        return made
+
+    def _snapshot_loop(self) -> None:
+        from ..utils.db_rescue import snapshots
+
+        # not straight away: the first minutes of a start are busy enough
+        while not self._closing.wait(SNAPSHOT_FIRST):
+            try:
+                newest = snapshots(ctx.config.app.app_dir)
+                age = time.time() - newest[0].stat().st_mtime if newest else None
+                if age is None or age >= SNAPSHOT_EVERY:
+                    self.snapshot()
+            except Exception as error:
+                logger.warning(f"Could not copy the database: {error}")
+            if self._closing.wait(SNAPSHOT_CHECK):
+                return
 
     @cached_property
     def alembic_config(self):
