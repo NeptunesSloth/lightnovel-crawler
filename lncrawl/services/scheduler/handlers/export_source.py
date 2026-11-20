@@ -1021,6 +1021,7 @@ class ExportSourceHandler(BaseHandler):
             parallel = max(1, min(MAX_PARALLEL_NOVELS, parallel))
             book = threading.Lock()  # guards the bookkeeping shared by the lanes
             active: Dict[int, Dict] = {}  # lane -> what it is downloading now
+            idle: Dict[int, bool] = {}  # lanes whose novel needed nothing from the site
             needed: List[int] = []  # chapters each started novel still needed
             warmed: Set[int] = set()  # lanes that solved a Cloudflare check already
             stuck: Dict[str, int] = {}  # passes in a row a novel did not improve
@@ -1097,6 +1098,7 @@ class ExportSourceHandler(BaseHandler):
                 cur_title: List[str] = [""]
                 cached_chapters: List[Optional[int]] = [None]
                 chapters_seen = [0]
+                idle.pop(lane, None)
 
                 # Shown from the start, by the name in its address, so a novel
                 # whose chapter list takes a minute to load is not invisible
@@ -1113,6 +1115,8 @@ class ExportSourceHandler(BaseHandler):
                     with book:
                         if cached_chapters[0] is None:
                             cached_chapters[0] = c_done
+                            if c_done >= c_total:
+                                idle[lane] = True  # every chapter here: nothing to ask for
                             needed.append(c_total - c_done)
                             chapters_seen[0] = c_total
                             # Its chapter list is known and nothing of it is
@@ -1142,6 +1146,8 @@ class ExportSourceHandler(BaseHandler):
                         _publish_active()
 
                 def _on_images(i_done: int, i_total: int) -> None:
+                    if i_done < i_total:
+                        idle.pop(lane, None)  # page images still to get
                     self._set_extra(
                         phase="downloading-images",
                         current_images=i_done,
@@ -1405,6 +1411,11 @@ class ExportSourceHandler(BaseHandler):
                     # on success, so a run eases off when a site pushes back. With
                     # polite mode off and no failures this is 0 (no wait).
                     delay = pacing["delay"]
+                    if idle.pop(lane, False):
+                        # A novel with everything already here asked the site
+                        # for nothing: a resume going past hundreds of finished
+                        # novels spent 3 seconds on each in polite mode.
+                        delay = 0.0
                     if queue and delay > 0:
                         # polite mode's own pause, or a longer one after errors
                         reason = "errors" if delay > floor_delay else "polite"
@@ -1413,8 +1424,19 @@ class ExportSourceHandler(BaseHandler):
                             adaptive_delay=round(delay, 1),
                             pause_reason=reason,
                         )
+                        # listed while it waits, so the card does not look like
+                        # one novel at a time when the others are pausing
+                        with book:
+                            active[lane] = {
+                                "title": f"(waiting {round(delay)}s before the next novel)",
+                                "done": 0,
+                                "total": 0,
+                            }
+                            _publish_active(force=True)
                         if self.signal.wait(delay):
                             raise AbortedException()
+                        with book:
+                            active.pop(lane, None)
 
             def _score() -> Tuple[int, int, int]:
                 # what a round can improve: novels finished, chapters still

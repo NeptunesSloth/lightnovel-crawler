@@ -293,7 +293,7 @@ def _scan(
 
     # Bulk exports can outlive their temporary ebook files. Include those too.
     for index, file in enumerate(archives, start=len(files)):
-        progress("reading", index + 1, total)
+        progress("reading", index, total, inner_total=0)
         if stop is not None and stop.is_set():
             raise ZipStopped()
         # this library's own zips hold copies of the books found here already
@@ -305,12 +305,25 @@ def _scan(
         except zipfile.BadZipFile:
             continue
         with archive:
-            for member in archive.infolist():
+            # A site download's ZIP holds hundreds of books, each copied out to
+            # be read: counted as one, the count sat at "271 of 277" for as
+            # long as six of them took. How far into each is said as well.
+            members = [
+                member
+                for member in archive.infolist()
+                if not member.is_dir() and member.filename.lower().endswith(_BOOK_SUFFIXES)
+            ]
+            for inner, member in enumerate(members):
                 if stop is not None and stop.is_set():
                     raise ZipStopped()
-                low = member.filename.lower()
-                if member.is_dir() or not low.endswith(_BOOK_SUFFIXES):
-                    continue
+                progress(
+                    "reading",
+                    index,
+                    total,
+                    inner_done=inner,
+                    inner_total=len(members),
+                    inner_name=file.name,
+                )
                 name = member.filename.replace("\\", "/").rsplit("/", 1)[-1]
                 with archive.open(member) as source:
                     book = _inspect(source, name, [], output.parent)
@@ -318,6 +331,8 @@ def _scan(
                     book.archive = file
                     book.member = member.filename
                     yield book
+    if archives:
+        progress("reading", total, total, inner_total=0)
 
 
 def _pick(books: List[_Book]) -> List[_Book]:
@@ -499,7 +514,7 @@ class LibraryZipJob:
     def close(self) -> None:
         self._stop.set()
 
-    def _progress(self, phase: str, done: int, total: int, **sizes: int) -> None:
+    def _progress(self, phase: str, done: int, total: int, **sizes: Any) -> None:
         with self._lock:
             self._status.update(phase=phase, done=done, total=total, **sizes)
 

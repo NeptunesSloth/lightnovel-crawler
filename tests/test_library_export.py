@@ -274,6 +274,24 @@ class FasterLibraryZipTests(LibraryExportByNovelTests):
         self.assertIn(("reading", 3, 3), heard)
         self.assertEqual(heard[-1], ("writing", 3, 3))
 
+    def test_how_far_into_a_past_downloads_zip_it_is_told_too(self):
+        (self.root / "exports").mkdir()
+        with zipfile.ZipFile(self.root / "exports" / "site.zip", "w") as archive:
+            for name in ("A", "B", "C"):
+                archive.writestr(f"{name}.epub", novel_epub(name, f"https://s.com/{name}", 1))
+        heard = []
+        build_library_zip(
+            self.root,
+            self.root / "library.zip",
+            progress=lambda phase, done, total, **more: heard.append((phase, done, total, more)),
+        )
+        inside = [
+            more for phase, _, _, more in heard if phase == "reading" and more.get("inner_total")
+        ]
+        self.assertEqual([more["inner_done"] for more in inside], [0, 1, 2])
+        self.assertTrue(all(more["inner_name"] == "site.zip" for more in inside))
+        self.assertIn(("reading", 1, 1, {"inner_total": 0}), heard)  # and then done
+
     def test_asked_to_stop_it_stops(self):
         self.save("novels/a/artifacts/A.epub", novel_epub("A", "https://s.com/a", 1))
         stop = Event()

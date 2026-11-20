@@ -1581,7 +1581,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
   var zipTimer = null, zipSeen = null;
   function zipLine(z) {
     if (z.phase === "finding") return "Finding the books in your library…";
-    if (z.phase === "reading") return "Checking the books for duplicates: " + count(z.done) + " of " + count(z.total) + "…";
+    if (z.phase === "reading") {
+      // a past download's ZIP is one of the count, and holds hundreds of books
+      var inside = z.inner_total ? " Now inside " + z.inner_name + ": book " + count(z.inner_done + 1) +
+        " of " + count(z.inner_total) + "." : "";
+      return "Checking the books for duplicates: " + count(z.done) + " of " + count(z.total) + "…" + inside;
+    }
     var pct = z.size_total ? Math.floor(100 * z.size_done / z.size_total) : 0;
     return "Writing the ZIP: " + count(z.done) + " of " + count(z.total) + " books, " +
       (fmtSize(z.size_done) || "0 MB") + " of " + (fmtSize(z.size_total) || "0 MB") + " (" + pct + "%)…";
