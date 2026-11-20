@@ -511,6 +511,38 @@ class HttpCrawlTests(unittest.TestCase):
         self.assertEqual(after["phase"], "downloading")
         self.assertIn("Example Gone", after["current_title"])  # named before its details load
 
+    def test_no_polite_pause_after_a_novel_that_needed_nothing(self) -> None:
+        # A resume went past 221 finished novels with a 3 second pause after
+        # each, the card showing one novel and "polite mode's pause".
+        module = "lncrawl.services.scheduler.handlers.export_source"
+        from lncrawl.services.scheduler.handlers.export_source import ExportSourceHandler
+
+        # a library-only run keeps no record of finished novels: a resume goes
+        # through each of them again
+        first = self.export(library_only=True)
+        self.assertEqual(first.status, JobStatus.SUCCESS, first.error)
+        updates: list = []
+        original = ExportSourceHandler._set_extra
+
+        def record(handler, **values):
+            updates.append(values)
+            return original(handler, **values)
+
+        with (
+            patch(f"{module}.POLITE_DELAY", 0.01),
+            patch.object(ExportSourceHandler, "_set_extra", record),
+        ):
+            job = self.export(
+                urls=[self.novel_url, self.novel_url + "-gone"],
+                polite=True,
+                parallel_novels=1,
+                library_only=True,
+            )
+        self.assertEqual(job.status, JobStatus.SUCCESS, job.error)
+        walked = [u.get("current_title") for u in updates if u.get("phase") == "downloading"]
+        self.assertTrue(any("Example" in str(t) and "Gone" not in str(t) for t in walked), walked)
+        self.assertFalse([u for u in updates if u.get("phase") == "waiting-between-novels"])
+
     def test_the_rate_asked_for_survives_the_run_and_a_stale_one_is_let_go(self) -> None:
         asked = self.export(auto_tune=True, requests_per_sec=50)
         self.assertEqual(asked.status, JobStatus.SUCCESS, asked.error)
