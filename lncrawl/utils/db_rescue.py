@@ -255,6 +255,284 @@ def _page_one_from_journal(database: Path, work: Path, say: Say) -> Optional[Pat
     return None
 
 
+# ---------------------------------------------------------------------------- #
+# reading the tables page by page, when the first page is gone
+# ---------------------------------------------------------------------------- #
+
+# Set while a rescue runs: it can take minutes on a big library, and the
+# desktop app waits for it instead of taking the wait for a failed start.
+busy = False
+
+_SCHEMA_KINDS = ("table", "index", "view", "trigger")
+
+
+def _varint(data: bytes, at: int) -> Tuple[int, int]:
+    """SQLite's variable-length integer at ``at``: (value, where the next thing starts)."""
+    value = 0
+    for i in range(8):
+        byte = data[at + i]
+        value = (value << 7) | (byte & 0x7F)
+        if not byte & 0x80:
+            return value, at + i + 1
+    return (value << 8) | data[at + 8], at + 9
+
+
+def _record(payload: bytes) -> List[object]:
+    """The values of one row, as the file holds them."""
+    header_size, at = _varint(payload, 0)
+    kinds: List[int] = []
+    while at < header_size:
+        kind, at = _varint(payload, at)
+        kinds.append(kind)
+    values: List[object] = []
+    at = header_size
+    for kind in kinds:
+        if kind == 0:
+            values.append(None)
+        elif 1 <= kind <= 6:
+            width = (1, 2, 3, 4, 6, 8)[kind - 1]
+            values.append(int.from_bytes(payload[at : at + width], "big", signed=True))
+            at += width
+        elif kind == 7:
+            values.append(struct.unpack(">d", payload[at : at + 8])[0])
+            at += 8
+        elif kind in (8, 9):
+            values.append(kind - 8)
+        elif kind >= 12:
+            width = (kind - 12) // 2
+            raw = payload[at : at + width]
+            values.append(raw.decode("utf-8", "replace") if kind % 2 else bytes(raw))
+            at += width
+        else:
+            raise ValueError(f"no such kind of value: {kind}")
+    if at > len(payload):
+        raise ValueError("the row runs past its end")
+    return values
+
+
+class _Pages:
+    """A database file read as pages, whatever its first page says."""
+
+    def __init__(self, path: Path, page_size: int) -> None:
+        self.file = open(path, "rb")
+        self.size = page_size
+        self.count = path.stat().st_size // page_size
+
+    def close(self) -> None:
+        self.file.close()
+
+    def page(self, number: int) -> bytes:
+        if not 1 <= number <= self.count:
+            raise ValueError(f"page {number} is outside the file")
+        self.file.seek((number - 1) * self.size)
+        return self.file.read(self.size)
+
+    def _payload(self, data: bytes, at: int, total: int) -> bytes:
+        """A cell's payload, with what spilled to overflow pages."""
+        usable = self.size
+        most = usable - 35
+        if total <= most:
+            return data[at : at + total]
+        least = ((usable - 12) * 32 // 255) - 23
+        local = least + (total - least) % (usable - 4)
+        if local > most:
+            local = least
+        parts = [data[at : at + local]]
+        left = total - local
+        following = struct.unpack(">I", data[at + local : at + local + 4])[0]
+        seen = set()
+        while left > 0 and following and following not in seen:
+            seen.add(following)
+            page = self.page(following)
+            following = struct.unpack(">I", page[:4])[0]
+            take = min(left, usable - 4)
+            parts.append(page[4 : 4 + take])
+            left -= take
+        if left > 0:
+            raise ValueError("an overflow chain ends early")
+        return b"".join(parts)
+
+    def cells(self, number: int) -> Tuple[int, List[int], List[Tuple[int, bytes]]]:
+        """A table page: (kind, its children, its rows as (rowid, payload))."""
+        data = self.page(number)
+        kind = data[0]
+        count = struct.unpack(">H", data[3:5])[0]
+        children: List[int] = []
+        rows: List[Tuple[int, bytes]] = []
+        start = 12 if kind == 0x05 else 8
+        if kind == 0x05:
+            children.append(struct.unpack(">I", data[8:12])[0])
+        for i in range(count):
+            at = struct.unpack(">H", data[start + 2 * i : start + 2 * i + 2])[0]
+            if kind == 0x05:
+                children.append(struct.unpack(">I", data[at : at + 4])[0])
+            elif kind == 0x0D:
+                total, at = _varint(data, at)
+                rowid, at = _varint(data, at)
+                rows.append((rowid, self._payload(data, at, total)))
+        return kind, children, rows
+
+    def rows(self, root: int) -> Iterator[Tuple[int, List[object]]]:
+        """Every row of the table whose tree starts at ``root``."""
+        pending, seen = [root], set()
+        while pending:
+            number = pending.pop()
+            if number in seen:
+                continue
+            seen.add(number)
+            kind, children, rows = self.cells(number)
+            if kind not in (0x05, 0x0D):
+                raise ValueError(f"page {number} is not part of a table")
+            pending.extend(reversed(children))
+            for rowid, payload in rows:
+                yield rowid, _record(payload)
+
+
+def _guess_page_size(database: Path) -> Optional[int]:
+    """The page size most pages of the file make sense at."""
+    size = database.stat().st_size
+    best, best_score = None, 0
+    with open(database, "rb") as file:
+        for page_size in PAGE_SIZES:
+            if size % page_size:
+                continue
+            pages = size // page_size
+            score = 0
+            for number in range(2, min(pages, 400) + 1):
+                file.seek((number - 1) * page_size)
+                head = file.read(8)
+                if head[:1] in (b"\x0d", b"\x05", b"\x0a", b"\x02"):
+                    start = struct.unpack(">H", head[5:7])[0] or 65536
+                    if start <= page_size:
+                        score += 1
+            if score > best_score:
+                best, best_score = page_size, score
+    return best
+
+
+def _salvage(database: Path, work: Path, say: Say) -> Optional[Path]:
+    """A new database with every table read straight from the pages of ``database``.
+
+    For a first page that is gone: in a database the app made, it holds only
+    pointers to the pages listing the tables, and those are still in the file.
+    They are found by what their rows look like, and give each table's layout
+    and where it starts; every row is then read and written to a new file.
+    """
+    page_size = _journal_page_size(database) or _guess_page_size(database)
+    if page_size is None:
+        say("No page size makes sense of the file: it cannot be read page by page.")
+        return None
+    pages = _Pages(database, page_size)
+    try:
+        say(f"Reading it page by page ({pages.count:,} pages of {page_size} bytes)...")
+        schema: dict = {}
+        for number in range(2, pages.count + 1):
+            try:
+                kind, _, rows = pages.cells(number)
+            except Exception:
+                continue
+            if kind != 0x0D or not rows:
+                continue
+            entries = []
+            for _, payload in rows:
+                try:
+                    values = _record(payload)
+                except Exception:
+                    entries = []
+                    break
+                if (
+                    len(values) != 5
+                    or values[0] not in _SCHEMA_KINDS
+                    or not isinstance(values[3], int)
+                ):
+                    entries = []
+                    break
+                entries.append(values)
+            for entry in entries:
+                schema.setdefault(entry[1], []).append(entry)
+        tables = {
+            name: e
+            for name, e in schema.items()
+            if e[0][0] == "table" and not name.startswith("sqlite_")
+        }
+        say(
+            f"Found the layout of {len(tables)} table(s) and {len(schema) - len(tables)} other thing(s)."
+        )
+        if "novels" not in tables:
+            say("The novels table's layout was not found: nothing to rebuild from.")
+            return None
+        salvaged = work / "salvaged.db"
+        salvaged.unlink(missing_ok=True)
+        out = sqlite3.connect(str(salvaged))
+        try:
+            later = []
+            for name, entries in schema.items():
+                kind, _, _, _, sql = entries[-1]
+                if not sql or name.startswith("sqlite_"):
+                    continue
+                if kind == "table":
+                    out.execute(sql)
+                else:
+                    later.append((name, sql))
+            for name, sql in later:  # indexes too, before the rows: duplicates are dropped
+                try:
+                    out.execute(sql)
+                except sqlite3.Error as error:
+                    say(f"  could not make {name}: {error}")
+            lost = 0
+            for name, entries in sorted(tables.items()):
+                columns = [row[1] for row in out.execute(f'PRAGMA table_info("{name}")')]
+                roots = []
+                for entry in entries:  # stale copies of the list can name old pages
+                    root = entry[3]
+                    try:
+                        roots.append((sum(1 for _ in pages.rows(root)), root))
+                    except Exception as error:
+                        say(f"  {name}: the copy starting at page {root} cannot be read ({error})")
+                if not roots:
+                    continue
+                total, root = max(roots)
+                added = 0
+                batch: List[Tuple[str, List[object]]] = []
+
+                def flush() -> int:
+                    done = 0
+                    for statement, values in batch:
+                        try:
+                            done += out.execute(statement, values).rowcount
+                        except sqlite3.Error:
+                            pass
+                    batch.clear()
+                    return done
+
+                for rowid, values in pages.rows(root):
+                    values = values[: len(columns)]
+                    names = ", ".join(['"rowid"'] + [f'"{c}"' for c in columns[: len(values)]])
+                    marks = ", ".join("?" * (len(values) + 1))
+                    batch.append(
+                        (
+                            f'INSERT OR IGNORE INTO "{name}" ({names}) VALUES ({marks})',
+                            [rowid, *values],
+                        )
+                    )
+                    if len(batch) >= 5000:
+                        added += flush()
+                added += flush()
+                lost += total - added
+                say(f"  {name}: {added:,} row(s)" + (f" of {total:,}" if added != total else ""))
+            out.commit()
+            if lost:
+                say(
+                    f"{lost:,} row(s) could not be written back (unreadable, or the same row twice)."
+                )
+        finally:
+            out.close()
+        clean = work / "clean.db"
+        return clean if _clean_copy(salvaged, clean, say) else None
+    finally:
+        pages.close()
+
+
 def snapshots(library: Path) -> List[Path]:
     """The automatic copies of the database, newest first."""
     folder = library / SNAPSHOTS
@@ -294,6 +572,23 @@ def rescue(database: Path, library: Path, error: str) -> str:
         except OSError:
             pass
 
+    global busy
+    busy = True
+    try:
+        return _rescue(database, library, error, lines, say, write_report, report)
+    finally:
+        busy = False
+
+
+def _rescue(
+    database: Path,
+    library: Path,
+    error: str,
+    lines: List[str],
+    say: Say,
+    write_report: Callable[[], None],
+    report: Path,
+) -> str:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     say(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')}: {database} cannot be read: {error}")
     size = database.stat().st_size
@@ -322,6 +617,10 @@ def rescue(database: Path, library: Path, error: str) -> str:
         if found is None:
             found = _page_one_from_journal(database, work, say)
         if found is None:
+            found = _salvage(database, work, say)
+            if found is not None:
+                source = "a copy rebuilt from what was left in it"
+        if found is None:
             from_snapshot = _from_snapshot(library, work, say)
             if from_snapshot is not None:
                 found, snapshot = from_snapshot
@@ -347,7 +646,7 @@ def rescue(database: Path, library: Path, error: str) -> str:
             f"The library's database could not be read ({error}), so it was replaced by "
             f"{source}. The unreadable file was kept as {', '.join(kept)} in {library}."
         )
-        if not source.startswith("a repaired"):
+        if source.startswith("the automatic copy"):
             said += " Anything added since that copy was made is not in it."
         say(said)
         write_report()

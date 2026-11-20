@@ -149,8 +149,14 @@ def _wait_to_connect(host: str, port: int, timeout: float) -> bool:
 
 
 def _wait_for_server(host: str, port: int) -> None:
+    from ..utils import db_rescue
+
     if _wait_to_connect(host, port, SERVER_TIMEOUT):
         return
+    # getting an unreadable database back can take longer than a start may
+    while db_rescue.busy and _server_error is None:
+        if _wait_to_connect(host, port, 30.0):
+            return
     if _server_error is not None:
         raise RuntimeError(f"The server failed to start: {_server_error!r}")
     raise RuntimeError(f"The server did not start within {SERVER_TIMEOUT:.0f}s")
