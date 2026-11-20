@@ -67,6 +67,13 @@ def _build_library(
         report = ctx.chapters.completeness(novel_id)
         return report.total if report.complete else None
 
+    from ...services.library_books import make_missing_books
+
+    # a library-only download makes no e-books: without this the ZIP held only
+    # the novels that happened to have one (189 of 571)
+    made, failed = make_missing_books(complete_only, progress, stop)
+    if made or failed:
+        ctx.logger.info(f"Library ZIP: made {made} e-book(s), {failed} could not be made")
     drive = ctx.books.folder() if ctx.books.plugged() else None
     return build_library_zip(
         ctx.files.resolve("."),

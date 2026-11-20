@@ -189,7 +189,7 @@ class _Notice:
 
         self._user32 = user32 = ctypes.windll.user32  # type: ignore[attr-defined]
         user32.CreateWindowExW.restype = ctypes.c_void_p
-        width, height = 560, 150
+        width, height = 560, 200
         left = max(0, (int(user32.GetSystemMetrics(0)) - width) // 2)
         top = max(0, (int(user32.GetSystemMetrics(1)) - height) // 2)
         # topmost | a text box, centred, with a border, shown at once
@@ -967,6 +967,16 @@ BOOK_STAMP = ".lncrawl-books"
 _LEFT_ON_DRIVE = ("novels", "exports", "imports", "backups", "tmp")
 
 
+def _bar(done: float, total: float, width: int = 30) -> str:
+    """A progress bar in text, for the start's notice window: "[####------]  40%".
+
+    Plain characters: the window's system font has no block shapes to draw with.
+    """
+    part = min(1.0, done / total) if total > 0 else 1.0
+    filled = int(round(part * width))
+    return f"[{'#' * filled}{'-' * (width - filled)}]  {int(part * 100)}%"
+
+
 def begin_split(base: Path, drive: Path, here: Path) -> None:
     """At the next start, keep the library in ``here`` and its books where they are.
 
@@ -1008,15 +1018,48 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
             if (here / name).exists():
                 os.replace(here / name, here / f"{name}.before-split-{stamp}")
     if (drive / DATABASE).is_file():
-        say("Copying the database")
-        _snapshot_database(drive / DATABASE, here / DATABASE, say)
+        say(f"Step 1 of 3: copying the database\n{_bar(0, 1)}")
 
-    say("Copying the settings")
+        def database(text: str) -> None:
+            percent = int(text.rsplit(" ", 1)[-1].rstrip("%")) if text.endswith("%") else 0
+            say(f"Step 1 of 3: copying the database\n{_bar(percent, 100)}")
+
+        _snapshot_database(drive / DATABASE, here / DATABASE, database)
+
+    say("Step 2 of 3: copying the settings (counting them)")
+    # "webdriver" is a browser profile made again when needed; the browsers'
+    # caches are thousands of small files, slow to read off an external drive
     skip = [*_LEFT_ON_DRIVE, *_DATABASE_FILES, MARKER, STAMP, BOOKS, BOOK_STAMP, MOVE_LOG]
+    skip.append("webdriver")
     for entry in os.scandir(drive):
         if entry.is_file() and (entry.name.endswith(".zip") or entry.name.startswith(DATABASE)):
             skip.append(entry.name)
-    copy_tree(drive, here, tuple(skip), lambda files, size: None)
+    # counted first (one listing per folder, no file read), for the bar
+    whole = [0, 0]
+    for relative, entry in walk(drive, tuple(skip)):
+        if _CACHES.intersection(relative.split("/")[:-1]):
+            continue
+        whole[0] += 1
+        try:
+            whole[1] += entry.stat(follow_symlinks=False).st_size
+        except OSError:
+            pass
+    copied = [0, 0, 0.0]
+
+    def counted(files: int, size: int) -> None:
+        copied[0] += files
+        copied[1] += size
+        now = time.monotonic()
+        if now - copied[2] >= 0.5 or copied[0] >= whole[0]:
+            copied[2] = now
+            mb = 1024 * 1024
+            say(
+                f"Step 2 of 3: copying the settings\n{_bar(copied[1], whole[1])}\n"
+                f"{copied[0]:,} of {whole[0]:,} files, "
+                f"{copied[1] // mb:,} of {whole[1] // mb:,} MB"
+            )
+
+    copy_tree(drive, here, tuple(skip), counted, skip_folders=_CACHES)
     manifest = drive / "exports" / "manifest"
     if manifest.is_dir():
         copy_tree(manifest, here / "exports" / "manifest", (), lambda files, size: None)
@@ -1036,8 +1079,11 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
             copy.parent.mkdir(parents=True, exist_ok=True)
             if not _same(cover.stat(), copy):
                 shutil.copy2(cover, copy)
-        if index % 200 == 0:
-            say(f"Copying the covers: {index:,} of {len(entries):,}")
+        if index % 50 == 0 or index + 1 == len(entries):
+            say(
+                f"Step 3 of 3: copying the covers\n{_bar(index + 1, len(entries))}\n"
+                f"{index + 1:,} of {len(entries):,} novels"
+            )
 
     import uuid
 

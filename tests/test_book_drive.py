@@ -32,6 +32,12 @@ def make_library(folder: Path) -> None:
     (folder / "exports" / "manifest" / "site.json").write_text("{}")
     (folder / "exports" / "big.zip").write_bytes(b"zip")
     (folder / "library.zip").write_bytes(b"zip")
+    cache = folder / "app-browser" / "Default" / "Cache"
+    cache.mkdir(parents=True)
+    (cache / "data_1").write_bytes(b"cache")
+    (folder / "app-browser" / "Default" / "Preferences").write_text("{}")
+    (folder / "webdriver").mkdir()
+    (folder / "webdriver" / "profile").write_text("x")
 
 
 class SplitTests(unittest.TestCase):
@@ -55,6 +61,10 @@ class SplitTests(unittest.TestCase):
         self.assertTrue((self.here / "exports" / "manifest" / "site.json").is_file())
         self.assertFalse((self.here / "exports" / "big.zip").exists())
         self.assertFalse((self.here / "library.zip").exists())
+        # a browser's profile comes, not its cache; the crawler's is made again
+        self.assertTrue((self.here / "app-browser" / "Default" / "Preferences").is_file())
+        self.assertFalse((self.here / "app-browser" / "Default" / "Cache").exists())
+        self.assertFalse((self.here / "webdriver").exists())
         # nothing of the books was removed; the drive is no longer a library
         self.assertTrue((self.drive / "novels" / "a" / "chapters" / "000001.zst").is_file())
         self.assertFalse((self.drive / "sqlite.db").exists())
@@ -67,6 +77,14 @@ class SplitTests(unittest.TestCase):
         database = sqlite3.connect(str(self.here / "sqlite.db"))
         self.assertEqual(database.execute("SELECT id FROM novels").fetchall(), [("a",)])
         database.close()
+
+    def test_each_step_shows_a_bar(self) -> None:
+        heard: list = []
+        relocation.split(self.base, self.drive, self.here, heard.append)
+        for step in ("Step 1 of 3", "Step 2 of 3", "Step 3 of 3"):
+            self.assertTrue(any(step in text and "100%" in text for text in heard), (step, heard))
+        settings = [text for text in heard if "Step 2 of 3" in text and "files" in text]
+        self.assertIn("[" + "#" * 30 + "]", settings[-1])
 
     def test_a_split_into_the_drive_itself_is_refused(self) -> None:
         with self.assertRaises(ValueError):
@@ -157,21 +175,46 @@ class BookDriveTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail("still moving")
 
-    def test_novels_move_here_and_back(self) -> None:
+    def test_kept_here_the_drive_keeps_its_copy_and_gets_what_is_new_back(self) -> None:
         self.books.move(["a"], to_drive=False)
         status = self.wait_moved()
         self.assertEqual(status["on_drive"], ["b"])
+        self.assertEqual(status["copies"], ["a"])
         self.assertTrue((self.here / "novels" / "a" / "chapters" / "000001.zst").is_file())
-        self.assertFalse((self.drive / "novels" / "a").exists())
+        # the drive still holds the whole library
+        self.assertTrue((self.drive / "novels" / "a" / "chapters" / "000001.zst").is_file())
+        self.assertEqual(
+            self.route("novels/a/chapters/000001.zst"),
+            self.here / "novels" / "a" / "chapters" / "000001.zst",
+        )
         self.unplug()
         self.assertFalse(self.books.unavailable("a"))  # readable without the drive
+        (self.here / "novels" / "a" / "chapters" / "000002.zst").write_bytes(b"new")
         (self.drive.parent / "stamp").rename(self.drive / relocation.BOOK_STAMP)
         self.books._checked = -books_module.PLUGGED_CHECK
         self.books.move(["a"], to_drive=True)
         status = self.wait_moved()
         self.assertEqual(status["on_drive"], ["a", "b"])
-        self.assertTrue((self.drive / "novels" / "a" / "chapters" / "000001.zst").is_file())
+        self.assertEqual(status["copies"], [])
+        self.assertTrue((self.drive / "novels" / "a" / "chapters" / "000002.zst").is_file())
         self.assertEqual([p.name for p in (self.here / "novels" / "a").iterdir()], ["cover.jpg"])
+
+    def test_brought_here_without_a_copy_it_leaves_the_drive(self) -> None:
+        self.books.move(["a"], to_drive=False, keep_copy=False)
+        status = self.wait_moved()
+        self.assertEqual(status["copies"], [])
+        self.assertTrue((self.here / "novels" / "a" / "chapters" / "000001.zst").is_file())
+        self.assertFalse((self.drive / "novels" / "a").exists())
+
+    def test_a_novel_with_a_copy_on_the_drive_is_deleted_from_both(self) -> None:
+        self.books.move(["a"], to_drive=False)
+        self.wait_moved()
+        self.assertEqual(
+            self.books.folders("a"),
+            [self.here / "novels" / "a", self.drive / "novels" / "a"],
+        )
+        self.books.forget("a")
+        self.assertEqual(self.books.status()["copies"], [])
 
     def test_moving_needs_the_drive(self) -> None:
         self.unplug()

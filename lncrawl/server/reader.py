@@ -443,7 +443,7 @@ _READER_HTML = """<!DOCTYPE html>
       </details>
       <button id="lib-getsel" class="hidden">⬇ Get chapters (0)</button>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
-      <button id="lib-here" class="hidden" title="Copy their books to this computer, to read them without the drive">💻 Keep on this computer (0)</button>
+      <button id="lib-here" class="hidden" title="Copy their books to this computer, to read them without the drive; the drive keeps its copy too">💻 Keep on this computer (0)</button>
       <button id="lib-todrive" class="hidden" title="Move their books to the drive, to free room on this computer">💾 Send to the drive (0)</button>
       <div id="lib-cats" class="tags"></div>
     </div>
@@ -1696,8 +1696,9 @@ _READER_HTML = """<!DOCTYPE html>
     btn.disabled = true;
     api("/books/move", { method: "POST", body: JSON.stringify({ ids: ids, to: to }) }).then(function (b) {
       var m = (b && b.moving) || {};
-      alert("Moving the books of " + m.total + " novel(s) to " + (to === "drive" ? "the drive" : "this computer") +
-        ". It carries on in the background; they can be read meanwhile.");
+      alert(to === "drive"
+        ? "Moving the books of " + m.total + " novel(s) to the drive (with anything new read or downloaded here). It carries on in the background; they can be read meanwhile."
+        : "Copying the books of " + m.total + " novel(s) to this computer. The drive keeps its copy too, so it still holds your whole library. It carries on in the background; they can be read meanwhile.");
       lib.manage = false; lib.sel = {};
       els["lib-select"].textContent = "☑ Select";
       renderLibrary(); updateDelBtn();
