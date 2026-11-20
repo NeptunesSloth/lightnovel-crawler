@@ -117,6 +117,32 @@ class RescueTests(unittest.TestCase):
         self.assertTrue(Path(f"{self.database}-wal").is_file())
         self.assertIn("first table page is damaged", (self.library / db_rescue.REPORT).read_text())
 
+    def test_a_damaged_first_page_is_taken_from_the_journal_of_a_growing_library(self) -> None:
+        # The manga machine's case: a library downloading all day, whose first
+        # page (the list of tables) was damaged. The database grew after the
+        # journal last started over, so the journal holds copies of that page.
+        source = Path(self.temp.name) / "growing"
+        live = make_library(source)
+        with live:
+            for n in range(400):  # downloads: new chapters, the file grows
+                live.execute("INSERT INTO novels VALUES (?, ?, ?)", (f"g{n}", "More", "x" * 400))
+        library = Path(self.temp.name) / "Manga"
+        library.mkdir()
+        database = library / "sqlite.db"
+        for suffix in ("", "-wal"):
+            Path(f"{database}{suffix}").write_bytes(
+                Path(f"{source / 'sqlite.db'}{suffix}").read_bytes()
+            )
+        live.close()
+        expected = self.expected + [f"g{n}" for n in range(400)]
+        damage(database, 4096)  # all of the first page
+        said = rescue(database, library, "file is not a database")
+        self.assertIn("repaired copy", said)
+        self.assertEqual(titles(database), expected)  # nothing lost, the newest included
+        report = (library / db_rescue.REPORT).read_text()
+        self.assertIn("first table page is damaged", report)
+        self.assertRegex(report, r"Its journal holds [1-9]\d* cop")
+
     def test_a_damaged_first_page_is_replaced_by_the_newest_automatic_copy(self) -> None:
         older = take_snapshot(self.database, self.library)
         self.assertIsNotNone(older)
