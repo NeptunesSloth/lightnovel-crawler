@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 # Time allowed for a novel's details page and its whole chapter list.
 NOVEL_DETAILS_SECONDS: float = 600
+# However much of it was spent waiting for turns behind other downloads, a
+# novel's details and chapter list are given up on after this long (and tried
+# again in a later pass), so one cannot hold a download slot for hours.
+NOVEL_DETAILS_WALL: float = 30 * 60
 
 # How long an idle pooled crawler is kept for the next chapter or image job.
 POOL_IDLE_SECONDS: float = 300
@@ -197,7 +201,10 @@ class CrawlerService:
         # minutes was not enough for some, and the timeout then read as the site
         # throttling the export, which slowed it right down for nothing.
         with request_budget(
-            cancellation, seconds=NOVEL_DETAILS_SECONDS, label="Novel details request"
+            cancellation,
+            seconds=NOVEL_DETAILS_SECONDS,
+            label="Novel details request",
+            wall=NOVEL_DETAILS_WALL,
         ):
             return self._fetch_novel(user_id, url, signal, custom)
 

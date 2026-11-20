@@ -1,7 +1,7 @@
 import logging
 import re
 import threading
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlsplit
 
 from lncrawl.core import Chapter, LegacyCrawler, Volume
@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 _PAGE_PARAM = re.compile(r"page=(\d+)")
 _HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+# No novel has this many pages of chapters; a list still going past it is a
+# "next" link that never ends, not a novel.
+_MOST_PAGES = 1000
 
 # A chapter's address mapped onto the mirror: (prefix it starts with, prefix on
 # the mirror, query the mirror adds).
@@ -38,6 +41,11 @@ def _mapping(url: str, final_url: str) -> Optional[_Mapping]:
     if (source_prefix, final.query) == (final_prefix, ""):
         return None  # served from where it was asked: nothing to skip
     return source_prefix, final_prefix, final.query
+
+
+def _chapter_links(page: Any, absolute_url: Callable[[str], str]) -> List[str]:
+    """The addresses of the chapters a page of the chapter list holds."""
+    return [absolute_url(a["href"]) for a in page.select("ul.chapter-list li a") if a.get("href")]
 
 
 class _MirrorMap:
@@ -126,10 +134,14 @@ class NovelFireCrawler(LegacyCrawler):
         # pagination names later pages, so those are fetched side by side; the
         # "next" link from the last one fetched then carries on, in case the
         # pagination left pages out.
+        # A page past the end that still links "next", or pages that repeat
+        # ones already read, would be followed for hours: the list stops at the
+        # first round of pages that adds no chapter not seen already.
         first_url = self.novel_url + "/chapters"
         pages: Dict[int, Any] = {1: self.get_soup(first_url)}
         fetched = {self.absolute_url(first_url)}
-        while True:
+        seen: Set[str] = set(_chapter_links(pages[1], self.absolute_url))
+        while len(pages) < _MOST_PAGES:
             last = max(pages)
             next_a = pages[last].select_one("a.page-link[rel='next']")
             if not next_a:
@@ -150,18 +162,31 @@ class NovelFireCrawler(LegacyCrawler):
             futures = {
                 number: self.submit_task(self.get_soup, url) for number, url in wanted.items()
             }
+            fresh = False
             for number, future in futures.items():
-                pages[number] = future.result()
+                page = future.result()
+                links = set(_chapter_links(page, self.absolute_url)) - seen
+                if links:
+                    fresh = True
+                    seen.update(links)
+                    pages[number] = page
             fetched.update(wanted.values())
+            if not fresh:
+                break
 
+        listed: Set[str] = set()
         for vol_id, number in enumerate(sorted(pages), start=1):
             for a in pages[number].select("ul.chapter-list li a"):
+                url = self.absolute_url(a["href"])
+                if url in listed:
+                    continue  # a page that repeats part of another
+                listed.add(url)
                 self.chapters.append(
                     Chapter(
                         id=len(self.chapters) + 1,
                         volume=vol_id,
                         title=a["title"],
-                        url=self.absolute_url(a["href"]),
+                        url=url,
                     )
                 )
             self.volumes.append(Volume(id=vol_id))
