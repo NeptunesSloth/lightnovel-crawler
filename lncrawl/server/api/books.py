@@ -76,7 +76,12 @@ def cancel_split_library() -> Dict[str, Any]:
     dependencies=[Security(ensure_admin)],
 )
 def move_books(
-    ids: List[str] = Body(default=[]), to: str = Body(), all: bool = Body(default=False)
+    ids: List[str] = Body(default=[]),
+    to: str = Body(),
+    all: bool = Body(default=False),
+    keep_copy: bool = Body(
+        default=True, description="Brought here, the drive keeps its copy as well"
+    ),
 ) -> Dict[str, Any]:
     if to not in ("drive", "here"):
         raise ServerError(400, 'Books go to "drive" or "here"')
@@ -84,7 +89,7 @@ def move_books(
         with ctx.db.session() as sess:
             ids = list(sess.exec(sq.select(Novel.id)).all())
     try:
-        return ctx.books.move(ids, to == "drive")
+        return ctx.books.move(ids, to == "drive", keep_copy=keep_copy)
     except (OSError, ValueError) as error:
         raise _refuse(error) from error
 

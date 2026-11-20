@@ -52,6 +52,9 @@ class BookDrive:
         self._loaded_from: Optional[Path] = None
         self._config: Dict[str, Any] = {}
         self._on_drive: Set[str] = set()
+        # read here, with a copy left on the drive too: the drive keeps the
+        # whole library (to hand on, say), this computer what is read on the go
+        self._copies: Set[str] = set()
         self._here: Set[str] = set()  # novels found to be on this computer
         self._plugged = False
         self._checked = -PLUGGED_CHECK
@@ -78,10 +81,12 @@ class BookDrive:
             config = {}
         self._config = config
         self._on_drive = {str(item) for item in config.get("novels") or []}
+        self._copies = {str(item) for item in config.get("copies") or []}
 
     def _save(self) -> None:
         """Write ``book-drive.json`` back (lock held)."""
         self._config["novels"] = sorted(self._on_drive)
+        self._config["copies"] = sorted(self._copies)
         target = self._home() / BOOKS
         writing = target.with_name(f"{BOOKS}.part")
         writing.write_text(json.dumps(self._config, indent=2), encoding="utf-8")
@@ -191,7 +196,10 @@ class BookDrive:
         """Every folder this novel has: here, and on the drive."""
         found = [self._home() / "novels" / novel_id]
         folder = self.folder()
-        if folder is not None and self.on_drive(novel_id):
+        with self._lock:
+            self._load()
+            there = novel_id in self._on_drive or novel_id in self._copies
+        if folder is not None and there:
             found.append(folder / "novels" / novel_id)
         return found
 
@@ -199,9 +207,10 @@ class BookDrive:
         """The novel was deleted: its folder on the drive goes now, or once it is back."""
         with self._lock:
             self._load()
-            if novel_id not in self._on_drive:
+            if novel_id not in self._on_drive and novel_id not in self._copies:
                 return
             self._on_drive.discard(novel_id)
+            self._copies.discard(novel_id)
             if not self.plugged():
                 later = set(self._config.get("remove_later") or [])
                 later.add(novel_id)
@@ -278,11 +287,18 @@ class BookDrive:
                 "free": free,
                 "new": self._config.get("new") or "drive",
                 "on_drive": sorted(self._on_drive),
+                "copies": sorted(self._copies),
                 "moving": dict(self._moving),
             }
 
-    def move(self, novel_ids: Iterable[str], to_drive: bool) -> Dict[str, Any]:
-        """Move these novels' books to the drive (``to_drive``) or here, in the background."""
+    def move(
+        self, novel_ids: Iterable[str], to_drive: bool, keep_copy: bool = True
+    ) -> Dict[str, Any]:
+        """Move these novels' books to the drive (``to_drive``) or here, in the background.
+
+        Brought here with ``keep_copy``, the drive keeps its copy as well, so it
+        still holds the whole library; sent back, the copy here is what is new.
+        """
         with self._lock:
             self._load()
             if not self._config:
@@ -291,6 +307,8 @@ class BookDrive:
                 raise ValueError(f"The book drive ({self._config['folder']}) is not plugged in")
             if self._moving["running"]:
                 raise ValueError("Novels are being moved already")
+            # to the drive: whatever is read here (a copy there or not);
+            # here: whatever is read from the drive
             todo = [
                 novel_id
                 for novel_id in dict.fromkeys(novel_ids)
@@ -305,15 +323,15 @@ class BookDrive:
                 "error": "",
             }
         threading.Thread(
-            target=self._move, args=(todo, to_drive), daemon=True, name="book-move"
+            target=self._move, args=(todo, to_drive, keep_copy), daemon=True, name="book-move"
         ).start()
         return self.status()
 
-    def _move(self, todo: List[str], to_drive: bool) -> None:
+    def _move(self, todo: List[str], to_drive: bool, keep_copy: bool) -> None:
         try:
             for novel_id in todo:
                 try:
-                    self._move_one(novel_id, to_drive)
+                    self._move_one(novel_id, to_drive, keep_copy)
                 except Exception as error:
                     logger.warning(f"Could not move novel {novel_id}: {error}")
                     with self._lock:
@@ -325,7 +343,7 @@ class BookDrive:
             with self._lock:
                 self._moving["running"] = False
 
-    def _move_one(self, novel_id: str, to_drive: bool) -> None:
+    def _move_one(self, novel_id: str, to_drive: bool, keep_copy: bool = True) -> None:
         home = self._home() / "novels" / novel_id
         with self._lock:
             drive = Path(self._config["folder"]) / "novels" / novel_id
@@ -335,10 +353,15 @@ class BookDrive:
         with self._lock:
             if to_drive:
                 self._on_drive.add(novel_id)
+                self._copies.discard(novel_id)
             else:
                 self._on_drive.discard(novel_id)
+                if keep_copy:
+                    self._copies.add(novel_id)
             self._here.discard(novel_id)
             self._save()
+        if not to_drive and keep_copy:
+            return  # the drive keeps its copy
         # the copy is in use from here; the old one goes (a cover stays here)
         if not source.is_dir():
             return
