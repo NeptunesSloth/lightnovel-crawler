@@ -191,6 +191,11 @@ _READER_HTML = """<!DOCTYPE html>
   .badge.new, .badge.fresh { color: var(--good); border-color: var(--good); }
   .badge.nochap { color: var(--warn); border-color: var(--warn); }
   .badge.part { color: var(--link); border-color: var(--link); }
+  .badge.away { color: var(--dim); border-color: var(--dim); }
+  .bar { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; margin: 10px 0 6px; }
+  .bar > div { height: 100%; width: 0; background: var(--lamp); transition: width .3s; }
+  #unf-kinds label { display: block; margin: 6px 0; }
+  .libcard.away { opacity: .55; }
   .progress { height: 3px; background: var(--raised); border-radius: 999px; margin-top: 6px; overflow: hidden; }
   .progress > span { display: block; height: 100%; background: var(--lamp); }
 
@@ -438,6 +443,8 @@ _READER_HTML = """<!DOCTYPE html>
       </details>
       <button id="lib-getsel" class="hidden">⬇ Get chapters (0)</button>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
+      <button id="lib-here" class="hidden" title="Copy their books to this computer, to read them without the drive">💻 Keep on this computer (0)</button>
+      <button id="lib-todrive" class="hidden" title="Move their books to the drive, to free room on this computer">💾 Send to the drive (0)</button>
       <div id="lib-cats" class="tags"></div>
     </div>
     <div class="toolbar filters hidden" id="lib-filters">
@@ -485,6 +492,25 @@ _READER_HTML = """<!DOCTYPE html>
       <select id="lib-views" title="Apply a saved view"><option value="">Saved views</option></select>
       <button id="lib-view-save" title="Save the current sort and filters under a name">💾 Save view</button>
       <button id="lib-view-del" class="hidden" title="Delete the selected saved view">✕</button>
+    </div>
+    <div id="lib-unf" class="card hidden">
+      <div class="shelf-title">🗑 Delete unfinished novels</div>
+      <div id="unf-pick">
+        <div id="unf-kinds">
+          <label><input type="radio" name="unf-kind" value="details" /> <span id="unf-details">Only their details</span></label>
+          <label><input type="radio" name="unf-kind" value="partial" /> <span id="unf-partial">Partly downloaded</span></label>
+          <label><input type="radio" name="unf-kind" value="all" checked /> <span id="unf-all">Both</span></label>
+        </div>
+        <p class="muted" id="unf-note"></p>
+        <div class="toolbar" style="margin:8px 0 0">
+          <button id="unf-go">🗑 Delete</button>
+          <button id="unf-close" class="secondary">Close</button>
+        </div>
+      </div>
+      <div id="unf-progress" class="hidden">
+        <div class="bar"><div id="unf-bar"></div></div>
+        <div id="unf-text" class="muted"></div>
+      </div>
     </div>
     <div id="lib-stats" class="card hidden">
       <div class="shelf-title">📊 Reading stats <span class="muted" id="lib-stats-note"></span></div>
@@ -926,7 +952,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-getsel","getch-btn","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -1016,6 +1042,7 @@ _READER_HTML = """<!DOCTYPE html>
       if (lib.all.length) { renderLibrary(); notifyNew(); }
     }).catch(function () { lib.latest = {}; });
     loadDownloadedCounts();
+    loadBooks();
     loadShelves();
     fetchAllNovels("").then(function (items) {
       lib.all = items;
@@ -1524,7 +1551,7 @@ _READER_HTML = """<!DOCTYPE html>
   function buildCard(n) {
     {
       var c = document.createElement("div");
-      c.className = "card libcard";
+      c.className = "card libcard" + (unreachable(n) ? " away" : "");
 
       var img = document.createElement("img"); img.className = "cover"; img.alt = "";
       if (n.cover_available) loadCover(img, n.id);
@@ -1556,6 +1583,12 @@ _READER_HTML = """<!DOCTYPE html>
         var xb = document.createElement("span"); xb.className = "badge nochap";
         xb.textContent = "details only"; xb.title = "No chapters downloaded yet — open it, or use ⋯ More, to get them";
         h.appendChild(xb);
+      }
+      if (unreachable(n)) {
+        var ab = document.createElement("span"); ab.className = "badge away";
+        ab.textContent = "💾 on the drive";
+        ab.title = "Its books are on " + lib.books.folder + ", which is not plugged in";
+        h.appendChild(ab);
       }
       if (lib.got && downloadState(n) === "partial") {
         var pb = document.createElement("span"); pb.className = "badge part";
@@ -1634,7 +1667,51 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-del"].classList.toggle("hidden", !lib.manage);
     els["lib-getsel"].textContent = "⬇ Get chapters (" + n + ")";
     els["lib-getsel"].classList.toggle("hidden", !lib.manage);
+    var drive = lib.books && lib.books.configured;
+    els["lib-here"].textContent = "💻 Keep on this computer (" + n + ")";
+    els["lib-here"].classList.toggle("hidden", !lib.manage || !drive);
+    els["lib-todrive"].textContent = "💾 Send to the drive (" + n + ")";
+    els["lib-todrive"].classList.toggle("hidden", !lib.manage || !drive);
   }
+
+  // ---- Books kept on a drive that is not always plugged in ----
+  // lib.books: where they are ({configured, plugged, folder, on_drive: [ids]}).
+  function loadBooks() {
+    return api("/books").then(function (b) {
+      b = b || {};
+      b.away = {};
+      (b.on_drive || []).forEach(function (id) { b.away[id] = true; });
+      lib.books = b;
+      if (lib.all.length) renderLibrary();
+      updateDelBtn();
+    }).catch(function () { lib.books = null; });
+  }
+  function unreachable(n) {
+    return !!(lib.books && lib.books.configured && !lib.books.plugged && lib.books.away[n.id]);
+  }
+  function moveBooks(to, btn) {
+    var ids = Object.keys(lib.sel);
+    if (!ids.length) return;
+    if (!lib.books.plugged) { alert("Plug in the drive with the books (" + lib.books.folder + ") first."); return; }
+    btn.disabled = true;
+    api("/books/move", { method: "POST", body: JSON.stringify({ ids: ids, to: to }) }).then(function (b) {
+      var m = (b && b.moving) || {};
+      alert("Moving the books of " + m.total + " novel(s) to " + (to === "drive" ? "the drive" : "this computer") +
+        ". It carries on in the background; they can be read meanwhile.");
+      lib.manage = false; lib.sel = {};
+      els["lib-select"].textContent = "☑ Select";
+      renderLibrary(); updateDelBtn();
+      (function watch() {
+        api("/books").then(function (s) {
+          if (s && s.moving && s.moving.running) { setTimeout(watch, 3000); return; }
+          loadBooks();
+        }).catch(function () {});
+      })();
+    }).catch(function (e) { alert("Couldn't move them: " + e.message); })
+      .then(function () { btn.disabled = false; });
+  }
+  els["lib-here"].addEventListener("click", function () { moveBooks("here", this); });
+  els["lib-todrive"].addEventListener("click", function () { moveBooks("drive", this); });
 
   // ---- Novels with only their details (a discovery adds those) ----
   // lib.got is {novel_id: chapters downloaded}; until it loads nothing is marked.
@@ -1690,40 +1767,76 @@ _READER_HTML = """<!DOCTYPE html>
     if (!confirm("Download every chapter of " + todo.length + " novel(s) that have only their details?")) return;
     getChapters(todo);
   });
-  // Everything not fully downloaded goes, except what a download still running,
-  // queued or paused is working on: the server says which and how many.
+  // Everything not fully downloaded goes, or only one kind of it, except what a
+  // download still running, queued or paused is working on: the server says
+  // which and how many. A bar shows how far the deleting has got.
+  var unf = null;  // what the server last said
+  function unfKind() {
+    var on = document.querySelector('input[name="unf-kind"]:checked');
+    return on ? on.value : "all";
+  }
+  function unfCount(kind) {
+    if (!unf) return 0;
+    return kind === "details" ? unf.details_only : kind === "partial" ? unf.partial : unf.count;
+  }
+  function renderUnf() {
+    if (!unf) return;
+    els["unf-details"].textContent = "Only their details: " + unf.details_only + " novel(s), nothing downloaded";
+    els["unf-partial"].textContent = "Partly downloaded: " + unf.partial + " novel(s), " + unf.chapters + " chapter(s) go with them";
+    els["unf-all"].textContent = "Both: " + unf.count + " novel(s)";
+    var note = "Their reading positions go with them. This cannot be undone.";
+    if (unf.kept) note += " " + unf.kept + " unfinished novel(s) are kept: a download still running, queued or paused is working on them (or on their site). Stop it to delete those too.";
+    els["unf-note"].textContent = note;
+    var n = unfCount(unfKind());
+    els["unf-go"].disabled = !n;
+    els["unf-go"].textContent = "🗑 Delete " + n + " novel(s)";
+  }
+  document.querySelectorAll('input[name="unf-kind"]').forEach(function (r) { r.addEventListener("change", renderUnf); });
   els["lib-unfinished"].addEventListener("click", function () {
-    var btn = this;
-    btn.disabled = true;
+    els["lib-more"].open = false;
+    els["lib-unf"].classList.remove("hidden");
+    els["unf-pick"].classList.add("hidden");
+    els["unf-progress"].classList.add("hidden");
     api("/novels/unfinished").then(function (found) {
-      if (found.removing && found.removing.running) { btn.disabled = false; watchUnfinished(btn); return; }
-      var kept = found.kept ? "\\n\\n" + found.kept + " unfinished novel(s) are kept: a download still running, queued or paused is working on them (or on their site). Stop it to remove those too." : "";
-      if (!found.count) { btn.disabled = false; alert("No unfinished novels to delete." + kept); return; }
-      var what = [];
-      if (found.details_only) what.push(found.details_only + " with only their details");
-      if (found.partial) what.push(found.partial + " partly downloaded (" + found.chapters + " chapters)");
-      if (!confirm("Delete " + found.count + " unfinished novel(s): " + what.join(", ") +
-          "?\\n\\nTheir downloaded chapters and reading positions go with them. This cannot be undone." + kept)) {
-        btn.disabled = false; return;
-      }
-      return api("/novels/unfinished/remove", { method: "POST" }).then(function () { watchUnfinished(btn); });
-    }).catch(function (e) { btn.disabled = false; alert("Couldn't delete the unfinished novels: " + e.message); });
+      unf = found;
+      if (found.removing && found.removing.running) { watchUnfinished(); return; }
+      els["unf-pick"].classList.remove("hidden");
+      renderUnf();
+    }).catch(function (e) {
+      els["lib-unf"].classList.add("hidden");
+      alert("Couldn't look for unfinished novels: " + e.message);
+    });
   });
-  function watchUnfinished(btn) {
-    btn.disabled = true;
+  els["unf-close"].addEventListener("click", function () { els["lib-unf"].classList.add("hidden"); });
+  els["unf-go"].addEventListener("click", function () {
+    var kind = unfKind(), n = unfCount(kind);
+    if (!n || !confirm("Delete " + n + " unfinished novel(s)? This cannot be undone.")) return;
+    els["unf-go"].disabled = true;
+    api("/novels/unfinished/remove?kind=" + kind, { method: "POST" })
+      .then(function () { watchUnfinished(); })
+      .catch(function (e) { els["unf-go"].disabled = false; alert("Couldn't delete them: " + e.message); });
+  });
+  function showUnfProgress(r) {
+    els["unf-pick"].classList.add("hidden");
+    els["unf-progress"].classList.remove("hidden");
+    var pct = r.total ? Math.round(100 * r.done / r.total) : 100;
+    els["unf-bar"].style.width = pct + "%";
+    els["unf-text"].textContent = r.running
+      ? "Deleting " + r.done + " of " + r.total + " (" + pct + "%)" + (r.current ? ": " + r.current : "")
+      : "Deleted " + (r.done - r.failed) + " of " + r.total + " novel(s)." + (r.failed ? " " + r.failed + " could not be deleted: " + r.error : "");
+  }
+  function watchUnfinished() {
+    els["lib-unf"].classList.remove("hidden");
     api("/novels/unfinished").then(function (found) {
       var r = found.removing || {};
-      if (r.running) {
-        btn.textContent = "🗑 Deleting " + r.done + " of " + r.total + "…";
-        setTimeout(function () { watchUnfinished(btn); }, 1500);
-        return;
-      }
-      btn.disabled = false;
-      btn.textContent = "🗑 Delete unfinished novels";
+      showUnfProgress(r);
+      if (r.running) { setTimeout(watchUnfinished, 1000); return; }
+      unf = found;
       loadLibrary(els["search"].value.trim());
-      alert("Deleted " + (r.done - r.failed) + " unfinished novel(s)." +
-        (r.failed ? " " + r.failed + " could not be deleted: " + r.error : ""));
-    }).catch(function () { setTimeout(function () { watchUnfinished(btn); }, 3000); });
+      // the choice comes back with the new counts, under what was done
+      els["unf-pick"].classList.remove("hidden");
+      renderUnf();
+    }).catch(function () { setTimeout(watchUnfinished, 3000); });
   }
   els["lib-getsel"].addEventListener("click", function () {
     var ids = lib.sel;

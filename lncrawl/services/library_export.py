@@ -264,15 +264,21 @@ def _scan(
     tags_for: Callable[[str], List[str]],
     progress: Progress,
     stop: Optional[Event] = None,
+    more_novels: Tuple[Path, ...] = (),
 ) -> Iterator[_Book]:
-    novels = data_dir / "novels"
     progress("finding", 0, 0)
-    files = _book_files(novels)
+    # (file, the novels folder it is in): the library's own, and a book drive's
+    located = [
+        (file, novels)
+        for novels in (data_dir / "novels", *more_novels)
+        for file in _book_files(novels)
+    ]
+    files = [file for file, _ in located]
     exports = data_dir / "exports"
     archives = sorted(exports.glob("*.zip")) if exports.is_dir() else []
     total = len(files) + len(archives)
     progress("reading", 0, total)
-    for index, file in enumerate(files):
+    for index, (file, novels) in enumerate(located):
         if stop is not None and stop.is_set():
             raise ZipStopped()
         # novels/<novel id>/artifacts/<file>: the library knows its tags
@@ -350,8 +356,11 @@ def build_library_zip(
     left_out: Optional[List[str]] = None,
     progress: Optional[Progress] = None,
     stop: Optional[Event] = None,
+    more_novels: Tuple[Path, ...] = (),
 ) -> int:
     """Write every book in the library to `output`, with an offline index.
+
+    ``more_novels``: other ``novels`` folders to look in (a book drive's).
 
     `tags_for` looks up a novel's tags by its id, for books whose own metadata
     carries none (CBZ never does). With `full_length`, only books holding a
@@ -360,7 +369,7 @@ def build_library_zip(
     it is; ``stop`` set, it stops (`ZipStopped`), leaving `output` half written.
     """
     say: Progress = progress or (lambda *args, **kwargs: None)
-    found = list(_scan(data_dir, output, tags_for or (lambda _: []), say, stop))
+    found = list(_scan(data_dir, output, tags_for or (lambda _: []), say, stop, more_novels))
     chosen = _pick(found)
     if nsfw == "exclude":
         chosen = [b for b in chosen if not is_nsfw(b.tags)]

@@ -7,7 +7,7 @@ import sqlmodel as sq
 
 from ...context import ctx
 from ...dao import ActivityType, Artifact, Chapter, Job, LanguageCode, Novel, User, Volume
-from ...exceptions import ServerErrors
+from ...exceptions import ServerError, ServerErrors
 from ...utils.file_tools import dir_size
 from ..caching import cached_file_response
 from ..models import Paginated
@@ -135,10 +135,15 @@ def unfinished_novels() -> Dict[str, Any]:
     summary="Remove every novel not fully downloaded, except those a download still uses",
     dependencies=[Security(ensure_admin)],
 )
-def remove_unfinished_novels() -> Dict[str, Any]:
+def remove_unfinished_novels(
+    kind: str = Query(default="all", description="details, partial or all"),
+) -> Dict[str, Any]:
     from ...services import unfinished
 
-    return unfinished.start()
+    try:
+        return unfinished.start(kind)
+    except ValueError as error:
+        raise ServerError(400, str(error)) from error
 
 
 @router.get("s/storage", summary="Disk usage of the downloaded library and exports")

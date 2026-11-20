@@ -183,8 +183,12 @@ class NovelService:
             return read is None
 
     def delete(self, novel_id: str) -> bool:
-        novel_dir = ctx.files.resolve(f"novels/{novel_id}")
-        shutil.rmtree(novel_dir, True)
+        books = getattr(ctx, "books", None)  # a novel's books may be on a drive too
+        folders = books.folders(novel_id) if books is not None else []
+        for novel_dir in folders or [ctx.files.resolve(f"novels/{novel_id}")]:
+            shutil.rmtree(novel_dir, True)
+        if books is not None:
+            books.forget(novel_id)
         with ctx.db.session() as sess:
             novel = sess.get(Novel, novel_id)
             if not novel:

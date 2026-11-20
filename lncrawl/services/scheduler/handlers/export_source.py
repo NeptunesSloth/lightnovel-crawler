@@ -1766,6 +1766,14 @@ def _download_novel(
     norm = _norm_title(novel.title)
     if dedupe and seen_titles is not None and norm in seen_titles:
         return {"file": None, "missing": 0, "duplicate": True}
+    books = getattr(ctx, "books", None)
+    if books is not None and books.unavailable(novel.id):
+        # every chapter would look missing, be fetched and fail to save
+        from ....services.books import BookDriveUnplugged
+
+        raise BookDriveUnplugged(
+            f"{novel.title} is on the book drive ({books.folder()}), which is not plugged in"
+        )
 
     # first N chapters when capped, so a giant series doesn't eat the whole run
     chapter_ids = ctx.chapters.list_ids(novel_id=novel.id, limit=max_chapters or None)

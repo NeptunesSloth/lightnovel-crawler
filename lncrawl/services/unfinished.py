@@ -21,7 +21,15 @@ from ..enums import JobStatus, JobType
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-_state: Dict[str, Any] = {"running": False, "done": 0, "total": 0, "failed": 0, "error": ""}
+_state: Dict[str, Any] = {
+    "running": False,
+    "kind": "all",
+    "done": 0,
+    "total": 0,
+    "failed": 0,
+    "error": "",
+    "current": "",
+}
 
 
 def _domain(url: str) -> str:
@@ -62,8 +70,23 @@ def _kept_by_downloads() -> Tuple[Set[str], Set[str], Set[str]]:
     return ids, urls, domains
 
 
-def find() -> Dict[str, Any]:
-    """The novels not fully downloaded: those to remove, and those kept for now."""
+# Which unfinished novels to remove: with only their details, partly downloaded, or both.
+KINDS = ("details", "partial", "all")
+
+
+def _wanted(item: Dict[str, Any], kind: str) -> bool:
+    if kind == "details":
+        return not item["done"]
+    if kind == "partial":
+        return bool(item["done"])
+    return True
+
+
+def find(kind: str = "all") -> Dict[str, Any]:
+    """The novels not fully downloaded: those to remove, and those kept for now.
+
+    The counts of each kind are always given; ``novels`` holds only ``kind``.
+    """
     with ctx.db.session() as sess:
         counted = sess.exec(
             sq.select(
@@ -88,7 +111,7 @@ def find() -> Dict[str, Any]:
             continue
         remove.append({"id": novel_id, "title": title, "done": done, "total": total})
     return {
-        "novels": remove,
+        "novels": [item for item in remove if _wanted(item, kind)],
         "details_only": sum(1 for item in remove if not item["done"]),
         "partial": sum(1 for item in remove if item["done"]),
         "chapters": sum(item["done"] for item in remove),
@@ -101,20 +124,27 @@ def status() -> Dict[str, Any]:
         return dict(_state)
 
 
-def start() -> Dict[str, Any]:
+def start(kind: str = "all") -> Dict[str, Any]:
     """Remove them in the background (a novel's folder can take a while on a drive)."""
+    if kind not in KINDS:
+        raise ValueError(f"Remove {', '.join(KINDS)} unfinished novels, not {kind}")
     with _lock:
         if _state["running"]:
             return dict(_state)
-        found = find()["novels"]
-        _state.update(running=True, done=0, total=len(found), failed=0, error="")
-    threading.Thread(target=_remove, args=([item["id"] for item in found],), daemon=True).start()
+        found = find(kind)["novels"]
+        _state.update(
+            running=True, kind=kind, done=0, total=len(found), failed=0, error="", current=""
+        )
+    todo = [(item["id"], item["title"]) for item in found]
+    threading.Thread(target=_remove, args=(todo,), daemon=True).start()
     return status()
 
 
-def _remove(ids: List[str]) -> None:
+def _remove(todo: List[Tuple[str, str]]) -> None:
     try:
-        for novel_id in ids:
+        for novel_id, title in todo:
+            with _lock:
+                _state["current"] = title or ""
             try:
                 ctx.novels.delete(novel_id)
             except Exception as error:
@@ -127,3 +157,4 @@ def _remove(ids: List[str]) -> None:
     finally:
         with _lock:
             _state["running"] = False
+            _state["current"] = ""

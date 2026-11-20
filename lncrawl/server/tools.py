@@ -523,6 +523,44 @@ _TOOLS_HTML = """<!DOCTYPE html>
       </div>
     </details>
 
+    <h3>Books on a drive that is not always plugged in</h3>
+    <div id="books-box"><p class="hint">Sign in to see where the books are.</p></div>
+    <div id="books-split" class="hidden">
+      <p class="hint">For a library too big for this computer: the database, settings and every
+        novel's cover are copied to a folder here, and the books (chapters, pages, e-books) stay
+        on the drive. The app then opens without the drive, shows the whole library, and reads
+        what is on this computer; the rest says to plug the drive in. Nothing is removed from
+        the drive.</p>
+      <label for="books-here">Folder on this computer</label>
+      <div class="row">
+        <input id="books-here" type="text" />
+        <button type="button" class="secondary browse" data-for="books-here" style="margin-top:0">Browse…</button>
+        <button id="books-split-btn" class="secondary" style="margin-top:0">Keep the library here</button>
+      </div>
+    </div>
+    <div id="books-make" class="hidden">
+      <p class="hint">The library is on this computer. To make room, choose a folder on another
+        drive for the books, then send novels there; the app keeps working when it is unplugged.</p>
+      <label for="books-folder">Folder on the drive</label>
+      <div class="row">
+        <input id="books-folder" type="text" placeholder="e.g. F:\\Books" />
+        <button type="button" class="secondary browse" data-for="books-folder" style="margin-top:0">Browse…</button>
+        <button id="books-make-btn" class="secondary" style="margin-top:0">Keep books there</button>
+      </div>
+    </div>
+    <div id="books-on" class="hidden">
+      <label for="books-new">New novels go to</label>
+      <select id="books-new">
+        <option value="drive">the drive, when it is plugged in</option>
+        <option value="here">this computer</option>
+      </select>
+      <div class="row">
+        <button id="books-all-drive" class="secondary">Send every book to the drive</button>
+        <button id="books-all-here" class="secondary" title="Only if this computer has room for all of them">Bring every book here</button>
+      </div>
+      <p class="hint">To keep just a few here, pick them in the Reader: Select, then "Keep on this computer".</p>
+    </div>
+
     <h3>Space</h3>
     <p class="hint" id="storage-line">Sign in to see disk usage.</p>
     <div id="storage-largest" class="muted"></div>
@@ -696,7 +734,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
       else button.removeAttribute("aria-current");
     });
     try { history.replaceState(null, "", "#" + name); } catch (e) {}
-    if (name === "library" && token()) { loadMove(); loadPlaces(); loadStorage(); }
+    if (name === "library" && token()) { loadMove(); loadPlaces(); loadStorage(); loadBooks(); }
   }
   document.querySelectorAll(".menu button.go").forEach(function (button) {
     button.addEventListener("click", function () {
@@ -1946,6 +1984,77 @@ _TOOLS_HTML = """<!DOCTYPE html>
         "<span class='muted'>Couldn't look at your drives. Type a folder below.</span>";
     });
   }
+  // ---- books on a drive of their own ----
+  function showBooks(b) {
+    var box = document.getElementById("books-box");
+    var split = document.getElementById("books-split"), make = document.getElementById("books-make");
+    var on = document.getElementById("books-on");
+    var away = b.library !== b.base;  // the library itself is on another drive
+    split.classList.toggle("hidden", b.configured || !away || !!b.split_to);
+    make.classList.toggle("hidden", b.configured || away || !!b.split_to);
+    on.classList.toggle("hidden", !b.configured);
+    var here = document.getElementById("books-here");
+    if (!here.value) here.value = b.base;
+    var m = b.moving || {};
+    box.innerHTML = "";
+    var p = document.createElement("p"); p.className = "hint"; box.appendChild(p);
+    if (b.split_to) {
+      p.textContent = "Close the app and open it again: it then copies the database, settings and covers to " +
+        b.split_to + " (a few minutes), leaves the books in " + b.library + ", and runs from there.";
+      var undo = document.createElement("button"); undo.className = "secondary"; undo.textContent = "Don't split";
+      undo.addEventListener("click", function () {
+        api("/books/split", { method: "DELETE" }).then(showBooks).catch(function (e) { log(e.message, "log-err"); });
+      });
+      box.appendChild(undo);
+      return;
+    }
+    if (!b.configured) { p.textContent = "All of the library is in " + b.library + "."; return; }
+    var line = (b.plugged ? "The books are in " + b.folder + (b.free != null ? " (" + fmtSize(b.free) + " free)" : "")
+      : "The drive with the books (" + b.folder + ") is not plugged in: what is on it can't be read until it is.") +
+      " " + b.on_drive.length + " novel(s) there; the rest are on this computer.";
+    if (m.running) line += " Moving " + m.done + " of " + m.total + " to " + (m.to === "drive" ? "the drive" : "this computer") + "…";
+    else if (m.total) line += " Last move: " + (m.done - m.failed) + " of " + m.total + " moved" + (m.failed ? " (" + m.failed + " failed: " + m.error + ")" : "") + ".";
+    p.textContent = line;
+    document.getElementById("books-new").value = b.new || "drive";
+    document.getElementById("books-all-drive").disabled = !b.plugged || !!m.running;
+    document.getElementById("books-all-here").disabled = !b.plugged || !!m.running;
+    if (m.running) setTimeout(loadBooks, 2000);
+  }
+  function loadBooks() {
+    api("/books", { method: "GET" }).then(showBooks).catch(function () {});
+  }
+  document.getElementById("books-split-btn").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var folder = document.getElementById("books-here").value.trim();
+    if (!folder) { log("Choose a folder on this computer for the library.", "log-err"); return; }
+    if (!confirm("Keep the library in " + folder + " and the books where they are?\\n\\nIt is done when you next " +
+        "open the app: the database, settings and covers are copied (a few minutes), nothing is removed from the drive.")) return;
+    api("/books/split", { method: "POST", body: JSON.stringify({ folder: folder }) })
+      .then(function (b) { log("Close the app and open it again to finish.", "log-ok"); showBooks(b); })
+      .catch(function (e) { log("Could not split the library: " + e.message, "log-err"); });
+  });
+  document.getElementById("books-make-btn").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var folder = document.getElementById("books-folder").value.trim();
+    if (!folder) { log("Choose a folder on the drive for the books.", "log-err"); return; }
+    api("/books/drive", { method: "POST", body: JSON.stringify({ folder: folder }) })
+      .then(function (b) { log("Books can go to " + b.folder + " now.", "log-ok"); showBooks(b); })
+      .catch(function (e) { log("Could not use that folder: " + e.message, "log-err"); });
+  });
+  document.getElementById("books-new").addEventListener("change", function () {
+    api("/books/new", { method: "POST", body: JSON.stringify({ to: this.value }) })
+      .then(showBooks).catch(function (e) { log(e.message, "log-err"); });
+  });
+  function moveAll(to) {
+    if (!requireAuth()) return;
+    if (!confirm("Move every novel's books to " + (to === "drive" ? "the drive" : "this computer") +
+        "? It runs in the background and can take hours for a big library; novels can be read the whole time.")) return;
+    api("/books/move", { method: "POST", body: JSON.stringify({ ids: [], all: true, to: to }) })
+      .then(showBooks).catch(function (e) { log("Could not move the books: " + e.message, "log-err"); });
+  }
+  document.getElementById("books-all-drive").addEventListener("click", function () { moveAll("drive"); });
+  document.getElementById("books-all-here").addEventListener("click", function () { moveAll("here"); });
+
   function loadMove() {
     api("/admin/library/location", { method: "GET" }).then(showMove).catch(function () {});
   }
