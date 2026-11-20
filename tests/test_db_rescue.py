@@ -241,6 +241,37 @@ print("RESCUED", ctx.db.rescued)
 ctx.destroy()
 """
 
+BIG = """
+from lncrawl.context import ctx
+ctx.setup(sync_remote_index=False)
+from lncrawl.dao import Chapter, Novel
+with ctx.db.session() as session:
+    session.add(Novel(id="kept", url="https://example.com/kept", domain="example.com",
+                      title="Kept Novel", synopsis="x" * 20000))
+    for n in range(300):
+        session.add(Novel(id=f"n{n}", url=f"https://example.com/{n}", domain="example.com",
+                          title=f"Novel {n}", synopsis="A story. " * 30))
+    session.commit()
+    for n in range(3000):
+        session.add(Chapter(novel_id=f"n{n % 300}", serial=n // 300 + 1, title=f"Chapter {n}",
+                            url=f"https://example.com/c/{n}", is_done=True))
+    session.commit()
+ctx.destroy()
+"""
+
+COUNT = """
+from lncrawl.context import ctx
+ctx.setup(sync_remote_index=False, reset_db_on_failure=True)
+from lncrawl.dao import Chapter, Novel
+import sqlmodel as sq
+with ctx.db.session() as session:
+    print("NOVELS", len(session.exec(sq.select(Novel)).all()))
+    print("CHAPTERS", len(session.exec(sq.select(Chapter)).all()))
+    print("LONG", len(session.get(Novel, "kept").synopsis))
+print("RESCUED", ctx.db.rescued)
+ctx.destroy()
+"""
+
 FIRST = """
 from lncrawl.context import ctx
 ctx.setup(sync_remote_index=False)
@@ -276,11 +307,39 @@ class RealAppTests(unittest.TestCase):
             self.assertIn("NOVEL Kept Novel", result.stdout)
             self.assertIn("RESCUED The library's database could not be read", result.stdout)
 
+    def test_a_first_page_overwritten_by_another_page_is_rebuilt_from_the_rest(self) -> None:
+        # The manga machine: its first 4096 bytes were a whole leaf page from
+        # elsewhere in the file (0d 00 00 00 13 ...), no journal, no copy.
+        with TemporaryDirectory() as temp:
+            data = Path(temp) / "Novels"
+            result = self.run_app(BIG, data)
+            self.assertEqual(result.returncode, 0, result.stderr[-3000:])
+            database = data / "sqlite.db"
+            self.assertFalse(Path(f"{database}-wal").exists())
+            raw = bytearray(database.read_bytes())
+            page = 4096
+            leaves = [n for n in range(2, len(raw) // page) if raw[n * page] == 0x0D]
+            victim = leaves[len(leaves) // 2]
+            raw[:page] = raw[victim * page : (victim + 1) * page]
+            database.write_bytes(bytes(raw))
+            self.assertIn("not a database", unreadable(database) or "")
+            result = self.run_app(COUNT, data)
+            self.assertEqual(result.returncode, 0, (result.stdout + result.stderr)[-3000:])
+            self.assertIn("NOVELS 301", result.stdout)  # 300 and the one kept
+            self.assertIn("CHAPTERS 3000", result.stdout)
+            self.assertIn("LONG 20000", result.stdout)  # a row spread over several pages
+            self.assertIn("rebuilt from what was left in it", result.stdout)
+            self.assertNotIn("Anything added since", result.stdout)
+            report = (data / db_rescue.REPORT).read_text()
+            self.assertIn("page by page", report)
+            self.assertTrue(list(data.glob("sqlite.db.unreadable-*")))
+
     def test_an_app_that_cannot_get_it_back_stops_with_the_reason_and_wipes_nothing(self) -> None:
         with TemporaryDirectory() as temp:
             data = Path(temp) / "Novels"
             self.assertEqual(self.run_app(FIRST, data).returncode, 0)
-            damage(data / "sqlite.db", 4096)
+            size = (data / "sqlite.db").stat().st_size
+            damage(data / "sqlite.db", size, b"\x5a")  # every page of it gone
             before = (data / "sqlite.db").read_bytes()
             result = self.run_app(START, data)
             self.assertNotEqual(result.returncode, 0)
