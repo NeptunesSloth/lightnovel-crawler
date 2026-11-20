@@ -67,9 +67,11 @@ def _build_library(
         report = ctx.chapters.completeness(novel_id)
         return report.total if report.complete else None
 
+    drive = ctx.books.folder() if ctx.books.plugged() else None
     return build_library_zip(
         ctx.files.resolve("."),
         output,
+        more_novels=(drive / "novels",) if drive is not None else (),
         nsfw=nsfw,
         tags_for=tags_for,
         full_length=full_length if complete_only else None,

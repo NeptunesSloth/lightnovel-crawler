@@ -55,6 +55,7 @@ _DATABASE_FILES = (DATABASE, f"{DATABASE}-wal", f"{DATABASE}-shm")
 LATE = (
     *_DATABASE_FILES,
     "config.json",
+    "book-drive.json",  # BOOKS: which novels' books are on a drive, changed as they move
     "app-browser",
     "webdriver",  # the browser some sites are read with: a profile, made again
     "scraper",
@@ -248,20 +249,20 @@ def _open_notice(text: str) -> Optional[_Notice]:
         return None
 
 
-def finish_in_view(work: Callable[[Report], None]) -> None:
+def finish_in_view(work: Callable[[Report], None], heading: Optional[str] = None) -> None:
     """Run ``work``, showing what it reports: in a small window, or on the console.
 
     The start that finishes a move snapshots a database of a gigabyte or more
     before the app has a window. With nothing on screen that looked like an app
     that would not open, and was closed or started a second time.
     """
-    heading = "Lightnovel Crawler is finishing the library move.\nPlease leave it open."
+    heading = heading or "Lightnovel Crawler is finishing the library move.\nPlease leave it open."
     state: Dict[str, Any] = {"text": "Starting…", "error": None}
 
     def report(text: str) -> None:
         state["text"] = text
         if not _desktop_app():
-            print(f"Finishing the library move: {text}", file=sys.stderr)
+            print(f"Lightnovel Crawler: {text}", file=sys.stderr)
 
     def run() -> None:
         try:
@@ -298,6 +299,22 @@ def resolve(base: Path) -> Path:
     """
     marker = read_marker(base)
     current = library_folder(base)
+    split_to = marker.get("split_to")
+    if isinstance(split_to, str) and split_to and multiprocessing.parent_process() is None:
+        try:
+            finish_in_view(
+                lambda report: split(base, current, Path(split_to), report),
+                "Lightnovel Crawler is keeping the library on this computer\n"
+                "and the books on the drive. Please leave it open.",
+            )
+            return Path(split_to)
+        except Exception as error:  # the library is whole where it was: use it, and say why
+            try:
+                _update_marker(base, drop=("split_to",), failed=f"{error}", failed_target=split_to)
+            except OSError:
+                pass
+            print(f"Could not split the library: {error}; still using {current}.", file=sys.stderr)
+        marker = read_marker(base)
     target = marker.get("moving_to")
     # a worker process is started by an app that already knows its folder
     if (
@@ -934,3 +951,124 @@ def remove_old_copy(
             except OSError:
                 pass
     return freed, left
+
+
+# --------------------------------------------------------------------------- #
+# A library split in two: the app's own files on this computer, the books on a
+# drive that is not always plugged in.
+# --------------------------------------------------------------------------- #
+
+# In the library on this computer: where its books are (see services/books.py).
+BOOKS = "book-drive.json"
+# On the drive, in the folder its books are in: which library they belong to.
+BOOK_STAMP = ".lncrawl-books"
+# Left on the drive by the split: big, and no use to the app on this computer.
+# exports/manifest (where each site download got to) is brought along apart.
+_LEFT_ON_DRIVE = ("novels", "exports", "imports", "backups", "tmp")
+
+
+def begin_split(base: Path, drive: Path, here: Path) -> None:
+    """At the next start, keep the library in ``here`` and its books where they are.
+
+    ``drive`` is the library in use now. Nothing is copied until the start,
+    when nothing holds the database open.
+    """
+    if not drive.is_dir():
+        raise ValueError(f"{drive} cannot be found")
+    if not here.is_absolute():
+        raise ValueError(f"{here} is not a full path to a folder")
+    for one, other in ((here, drive), (drive, here)):
+        if _key(one) == _key(other) or _key(one).startswith(_key(other) + os.sep):
+            raise ValueError(f"{here} cannot be in {drive}, or {drive} in it")
+    if here.exists() and not here.is_dir():
+        raise ValueError(f"{here} is a file, not a folder")
+    _update_marker(base, split_to=str(here))
+
+
+def cancel_split(base: Path) -> None:
+    _update_marker(base, drop=("split_to",))
+
+
+def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) -> None:
+    """Make ``here`` the library, leaving the books (``novels``) in ``drive``.
+
+    The database is copied whole and consistent, then the settings and the
+    small folders, then each novel's cover so the library shows with the drive
+    unplugged. Nothing is removed from ``drive``: its database is only renamed,
+    once the copy is made, so that the folder is not taken for a library.
+    """
+    say: Report = report or (lambda text: None)
+    if not drive.is_dir():
+        raise OSError(f"{drive} cannot be found: connect that drive and start again")
+    here.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    _note(drive, f"Keeping the library in {here} and the books here")
+    if (here / DATABASE).exists():  # whatever was here before is kept, out of the way
+        for name in _DATABASE_FILES:
+            if (here / name).exists():
+                os.replace(here / name, here / f"{name}.before-split-{stamp}")
+    if (drive / DATABASE).is_file():
+        say("Copying the database")
+        _snapshot_database(drive / DATABASE, here / DATABASE, say)
+
+    say("Copying the settings")
+    skip = [*_LEFT_ON_DRIVE, *_DATABASE_FILES, MARKER, STAMP, BOOKS, BOOK_STAMP, MOVE_LOG]
+    for entry in os.scandir(drive):
+        if entry.is_file() and (entry.name.endswith(".zip") or entry.name.startswith(DATABASE)):
+            skip.append(entry.name)
+    copy_tree(drive, here, tuple(skip), lambda files, size: None)
+    manifest = drive / "exports" / "manifest"
+    if manifest.is_dir():
+        copy_tree(manifest, here / "exports" / "manifest", (), lambda files, size: None)
+
+    novels: List[str] = []
+    try:
+        entries = sorted(os.scandir(drive / "novels"), key=lambda entry: entry.name)
+    except FileNotFoundError:
+        entries = []
+    for index, entry in enumerate(entries):
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+        novels.append(entry.name)
+        cover = Path(entry.path) / "cover.jpg"
+        if cover.is_file():
+            copy = here / "novels" / entry.name / "cover.jpg"
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            if not _same(cover.stat(), copy):
+                shutil.copy2(cover, copy)
+        if index % 200 == 0:
+            say(f"Copying the covers: {index:,} of {len(entries):,}")
+
+    import uuid
+
+    ident = uuid.uuid4().hex
+    (drive / BOOK_STAMP).write_text(
+        json.dumps({"id": ident, "library": str(here)}, indent=2), encoding="utf-8"
+    )
+    writing = here / f"{BOOKS}.part"
+    writing.write_text(
+        json.dumps({"folder": str(drive), "id": ident, "novels": novels}, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(writing, here / BOOKS)
+    (here / STAMP).write_text(f"{IN_USE} since the split from {drive}\n", encoding="utf-8")
+    for name in _DATABASE_FILES:  # the copy in ``here`` is the library's database now
+        if (drive / name).exists():
+            os.replace(drive / name, drive / f"{name}.before-split-{stamp}")
+    try:
+        (drive / STAMP).unlink()
+    except FileNotFoundError:
+        pass
+    marker = {
+        key: value
+        for key, value in read_marker(base).items()
+        # an earlier move's old copy may be ``here`` itself: never removed now
+        if key
+        not in ("split_to", "path", "state", "failed", "failed_target")
+        + ("cleanup", "old", "refresh", "left_behind")
+    }
+    if _key(here) != _key(base):
+        marker.update(path=str(here), state="moved")
+    write_marker(base, **marker)
+    _note(drive, f"Split done: the library is in {here}, {len(novels):,} novels' books are here")
+    say("Done")

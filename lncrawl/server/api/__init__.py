@@ -5,6 +5,7 @@ from .admin import router as admin
 from .announcements import router as announcement
 from .artifacts import router as artifact
 from .auth import router as auth
+from .books import router as books
 from .chapters import router as chapter
 from .feedback import router as feedback
 from .history import router as history
@@ -57,6 +58,13 @@ router.include_router(
     imports,
     prefix="/import",
     tags=["Import"],
+    dependencies=[Security(ensure_user)],
+)
+
+router.include_router(
+    books,
+    prefix="/books",
+    tags=["Books"],
     dependencies=[Security(ensure_user)],
 )
 

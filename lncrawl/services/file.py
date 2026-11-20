@@ -10,7 +10,7 @@ from typing import Dict, Iterable, List, Set, Tuple, Union
 from zstd import Error as ZstdError
 
 from ..context import ctx
-from ..exceptions import ServerErrors
+from ..exceptions import ServerError, ServerErrors
 from ..utils.chapter_content import has_chapter_content
 from ..utils.file_tools import atomic_write
 from ..utils.text_tools import is_compressed, text_compress, text_decompress
@@ -51,7 +51,24 @@ class FileService:
             file = Path(file.lstrip("/"))
         if file.is_absolute():
             return file
-        return self.root / file
+        books = getattr(ctx, "books", None)  # a novel's books kept on a drive
+        on_drive = books.route(file) if books is not None else None
+        return on_drive if on_drive is not None else self.root / file
+
+    def _check_drive(self, file: Path) -> None:
+        """Raise BookDriveUnplugged when ``file`` is on the book drive and it is not there."""
+        books = getattr(ctx, "books", None)
+        folder = books.folder() if books is not None else None
+        if books is None or folder is None:
+            return
+        try:
+            file.relative_to(folder)
+        except ValueError:
+            return
+        if not books.plugged():
+            from .books import BookDriveUnplugged
+
+            raise BookDriveUnplugged(f"The drive with these books ({folder}) is not plugged in")
 
     def exists(self, file_path: StrPath):
         return self.resolve(file_path).is_file()
@@ -128,11 +145,16 @@ class FileService:
     def load(self, file_path: StrPath) -> bytes:
         file = self.resolve(file_path)
         if not file.is_file():
+            try:
+                self._check_drive(file)
+            except OSError as error:  # said as it is to whoever was reading
+                raise ServerError(503, str(error)) from error
             raise ServerErrors.no_such_file
         return file.read_bytes()
 
     def save(self, file_path: StrPath, content: bytes) -> Path:
         file = self.resolve(file_path)
+        self._check_drive(file)
         file.parent.mkdir(parents=True, exist_ok=True)
         with atomic_write(file) as temporary:
             temporary.write(content)

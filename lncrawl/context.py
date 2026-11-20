@@ -97,6 +97,12 @@ class __AppContext__:
         return FileService()
 
     @cached_property
+    def books(self):
+        from .services.books import BookDrive
+
+        return BookDrive()
+
+    @cached_property
     def sources(self):
         from .services.sources import Sources
 

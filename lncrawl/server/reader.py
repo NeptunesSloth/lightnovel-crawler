@@ -191,6 +191,8 @@ _READER_HTML = """<!DOCTYPE html>
   .badge.new, .badge.fresh { color: var(--good); border-color: var(--good); }
   .badge.nochap { color: var(--warn); border-color: var(--warn); }
   .badge.part { color: var(--link); border-color: var(--link); }
+  .badge.away { color: var(--muted); border-color: var(--muted); }
+  .libcard.away { opacity: .55; }
   .progress { height: 3px; background: var(--raised); border-radius: 999px; margin-top: 6px; overflow: hidden; }
   .progress > span { display: block; height: 100%; background: var(--lamp); }
 
@@ -438,6 +440,8 @@ _READER_HTML = """<!DOCTYPE html>
       </details>
       <button id="lib-getsel" class="hidden">⬇ Get chapters (0)</button>
       <button id="lib-del" class="hidden">🗑 Delete (0)</button>
+      <button id="lib-here" class="hidden" title="Copy their books to this computer, to read them without the drive">💻 Keep on this computer (0)</button>
+      <button id="lib-todrive" class="hidden" title="Move their books to the drive, to free room on this computer">💾 Send to the drive (0)</button>
       <div id="lib-cats" class="tags"></div>
     </div>
     <div class="toolbar filters hidden" id="lib-filters">
@@ -926,7 +930,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-getsel","getch-btn","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -1016,6 +1020,7 @@ _READER_HTML = """<!DOCTYPE html>
       if (lib.all.length) { renderLibrary(); notifyNew(); }
     }).catch(function () { lib.latest = {}; });
     loadDownloadedCounts();
+    loadBooks();
     loadShelves();
     fetchAllNovels("").then(function (items) {
       lib.all = items;
@@ -1524,7 +1529,7 @@ _READER_HTML = """<!DOCTYPE html>
   function buildCard(n) {
     {
       var c = document.createElement("div");
-      c.className = "card libcard";
+      c.className = "card libcard" + (unreachable(n) ? " away" : "");
 
       var img = document.createElement("img"); img.className = "cover"; img.alt = "";
       if (n.cover_available) loadCover(img, n.id);
@@ -1556,6 +1561,12 @@ _READER_HTML = """<!DOCTYPE html>
         var xb = document.createElement("span"); xb.className = "badge nochap";
         xb.textContent = "details only"; xb.title = "No chapters downloaded yet — open it, or use ⋯ More, to get them";
         h.appendChild(xb);
+      }
+      if (unreachable(n)) {
+        var ab = document.createElement("span"); ab.className = "badge away";
+        ab.textContent = "💾 on the drive";
+        ab.title = "Its books are on " + lib.books.folder + ", which is not plugged in";
+        h.appendChild(ab);
       }
       if (lib.got && downloadState(n) === "partial") {
         var pb = document.createElement("span"); pb.className = "badge part";
@@ -1634,7 +1645,51 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-del"].classList.toggle("hidden", !lib.manage);
     els["lib-getsel"].textContent = "⬇ Get chapters (" + n + ")";
     els["lib-getsel"].classList.toggle("hidden", !lib.manage);
+    var drive = lib.books && lib.books.configured;
+    els["lib-here"].textContent = "💻 Keep on this computer (" + n + ")";
+    els["lib-here"].classList.toggle("hidden", !lib.manage || !drive);
+    els["lib-todrive"].textContent = "💾 Send to the drive (" + n + ")";
+    els["lib-todrive"].classList.toggle("hidden", !lib.manage || !drive);
   }
+
+  // ---- Books kept on a drive that is not always plugged in ----
+  // lib.books: where they are ({configured, plugged, folder, on_drive: [ids]}).
+  function loadBooks() {
+    return api("/books").then(function (b) {
+      b = b || {};
+      b.away = {};
+      (b.on_drive || []).forEach(function (id) { b.away[id] = true; });
+      lib.books = b;
+      if (lib.all.length) renderLibrary();
+      updateDelBtn();
+    }).catch(function () { lib.books = null; });
+  }
+  function unreachable(n) {
+    return !!(lib.books && lib.books.configured && !lib.books.plugged && lib.books.away[n.id]);
+  }
+  function moveBooks(to, btn) {
+    var ids = Object.keys(lib.sel);
+    if (!ids.length) return;
+    if (!lib.books.plugged) { alert("Plug in the drive with the books (" + lib.books.folder + ") first."); return; }
+    btn.disabled = true;
+    api("/books/move", { method: "POST", body: JSON.stringify({ ids: ids, to: to }) }).then(function (b) {
+      var m = (b && b.moving) || {};
+      alert("Moving the books of " + m.total + " novel(s) to " + (to === "drive" ? "the drive" : "this computer") +
+        ". It carries on in the background; they can be read meanwhile.");
+      lib.manage = false; lib.sel = {};
+      els["lib-select"].textContent = "☑ Select";
+      renderLibrary(); updateDelBtn();
+      (function watch() {
+        api("/books").then(function (s) {
+          if (s && s.moving && s.moving.running) { setTimeout(watch, 3000); return; }
+          loadBooks();
+        }).catch(function () {});
+      })();
+    }).catch(function (e) { alert("Couldn't move them: " + e.message); })
+      .then(function () { btn.disabled = false; });
+  }
+  els["lib-here"].addEventListener("click", function () { moveBooks("here", this); });
+  els["lib-todrive"].addEventListener("click", function () { moveBooks("drive", this); });
 
   // ---- Novels with only their details (a discovery adds those) ----
   // lib.got is {novel_id: chapters downloaded}; until it loads nothing is marked.

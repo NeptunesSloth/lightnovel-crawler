@@ -285,6 +285,37 @@ async function clearFilters(page) {
   check("no errors on the Downloads page", D.errors.length === 0, D.errors);
   await D.close();
 
+  console.log("Books on a drive");
+  const K = await open(browser);
+  let moved = null;
+  await K.route("**/api/books", (r) => r.fulfill({ json: {
+    configured: true, plugged: false, folder: "F:\\Novels", on_drive: [IDS["Omniscient Reader"]], moving: {} } }));
+  await K.reload();
+  await K.waitForFunction(() => /novel\(s\)/.test(document.getElementById("lib-status").textContent));
+  await K.waitForTimeout(600);
+  await search(K, "omniscient");
+  const away = await K.$eval("#lib-list .libcard", (c) => [c.classList.contains("away"), c.innerText]);
+  check("a novel on an unplugged drive is marked", away[0] && /on the drive/.test(away[1]), away);
+  await search(K, "reading now");
+  check("one on this computer is not", !(await K.$eval("#lib-list .libcard", (c) => c.classList.contains("away"))));
+  await K.unroute("**/api/books");
+  await K.route("**/api/books", (r) => r.fulfill({ json: {
+    configured: true, plugged: true, folder: "F:\\Novels", on_drive: [IDS["Omniscient Reader"]], moving: {} } }));
+  await K.route("**/api/books/move", (r) => { moved = JSON.parse(r.request().postData());
+    r.fulfill({ json: { configured: true, plugged: true, on_drive: [], moving: { running: false, total: 1 } } }); });
+  await K.reload();
+  await K.waitForFunction(() => /novel\(s\)/.test(document.getElementById("lib-status").textContent));
+  await K.waitForTimeout(600);
+  await search(K, "omniscient");
+  await K.evaluate(() => document.getElementById("lib-select").click());
+  check("selecting offers to keep books on this computer", await K.isVisible("#lib-here"));
+  await K.click("#lib-list .libcard");
+  K.once("dialog", (d) => d.accept());
+  await K.click("#lib-here"); await K.waitForTimeout(400);
+  check("keeping one here asks for its books", moved && moved.to === "here" && moved.ids[0] === IDS["Omniscient Reader"], moved);
+  check("no errors with books on a drive", K.errors.length === 0, K.errors);
+  await K.close();
+
   console.log("Phone");
   await A.setViewportSize({ width: 390, height: 800 }); await A.waitForTimeout(300);
   const overflow = await A.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

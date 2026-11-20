@@ -142,6 +142,13 @@ class LibraryExportByNovelTests(unittest.TestCase):
         with zipfile.ZipFile(self.root / "library.zip") as archive:
             self.assertEqual(archive.read("books/A.epub"), newer)
 
+    def test_books_on_a_book_drive_go_in_too(self):
+        self.save("novels/1/artifacts/A.epub", novel_epub("A", "https://site.com/novel/a", 3))
+        self.save("drive/novels/2/artifacts/B.epub", novel_epub("B", "https://site.com/novel/b", 2))
+        count, names, _ = self.books(more_novels=(self.root / "drive" / "novels",))
+        self.assertEqual(count, 2)
+        self.assertEqual(names, ["books/A.epub", "books/B.epub"])
+
     def test_includes_cbz_manga(self):
         output = BytesIO()
         with zipfile.ZipFile(output, "w") as archive:
@@ -346,6 +353,7 @@ class LibraryExportApiTests(unittest.TestCase):
             novels=SimpleNamespace(find_by_url=lambda url: None),
             chapters=SimpleNamespace(completeness=completeness),
             db=SimpleNamespace(session=lambda: nullcontext(session)),
+            books=SimpleNamespace(folder=lambda: None, plugged=lambda: False),
         )
         # the package re-exports the admin router under the module's own name
         admin = importlib.import_module("lncrawl.server.api.admin")
