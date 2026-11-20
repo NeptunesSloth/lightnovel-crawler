@@ -12,7 +12,7 @@ from ...utils.file_tools import dir_size
 from ..caching import cached_file_response
 from ..models import Paginated
 from ..models.novel import NovelCompleteness
-from ..security import ensure_user
+from ..security import ensure_admin, ensure_user
 
 # The root router
 router = APIRouter()
@@ -109,6 +109,36 @@ def downloaded_counts() -> Dict[str, int]:
             .group_by(sq.col(Chapter.novel_id))
         ).all()
     return {novel_id: int(count or 0) for novel_id, count in rows}
+
+
+@router.get(
+    "s/unfinished",
+    summary="Novels not fully downloaded, and how a removal of them is going",
+    dependencies=[Security(ensure_admin)],
+)
+def unfinished_novels() -> Dict[str, Any]:
+    from ...services import unfinished
+
+    found = unfinished.find()
+    return {
+        "count": len(found["novels"]),
+        "details_only": found["details_only"],
+        "partial": found["partial"],
+        "chapters": found["chapters"],
+        "kept": found["kept"],
+        "removing": unfinished.status(),
+    }
+
+
+@router.post(
+    "s/unfinished/remove",
+    summary="Remove every novel not fully downloaded, except those a download still uses",
+    dependencies=[Security(ensure_admin)],
+)
+def remove_unfinished_novels() -> Dict[str, Any]:
+    from ...services import unfinished
+
+    return unfinished.start()
 
 
 @router.get("s/storage", summary="Disk usage of the downloaded library and exports")

@@ -21,6 +21,14 @@ class NovelFireTests(unittest.TestCase):
     def test_chapter_list_pages_are_all_read_once_and_in_order(self) -> None:
         # Nine pages, each paginated with a window of the next three only, so the
         # crawler must keep following "next" past what the first page names.
+        self._read_chapter_list(endless=False)
+
+    def test_a_next_link_that_never_ends_stops_at_the_last_chapters(self) -> None:
+        # Past its last page the list keeps linking "next" to empty pages (or to
+        # the last one again): read for hours, the novel was "loading" all night.
+        self._read_chapter_list(endless=True)
+
+    def _read_chapter_list(self, endless: bool) -> None:
         novel_url = "https://novelfire.net/book/example"
         last_page = 9
         fetched: Counter = Counter()
@@ -30,12 +38,14 @@ class NovelFireTests(unittest.TestCase):
                 f'<a class="page-link" href="/book/example/chapters?page={n}"'
                 + (' rel="next"' if n == number + 1 else "")
                 + f">{n}</a>"
-                for n in range(max(1, number - 1), min(last_page, number + 3) + 1)
-                if n != number
+                for n in range(max(1, number - 1), (number + 3 if endless else last_page) + 1)
+                if n != number and (endless or n <= number + 3)
             )
+            shown = min(number, last_page)
             items = "".join(
-                f'<li><a title="Chapter {number}.{i}" href="/book/example/c-{number}-{i}">x</a></li>'
+                f'<li><a title="Chapter {shown}.{i}" href="/book/example/c-{shown}-{i}">x</a></li>'
                 for i in (1, 2)
+                if number <= last_page or number % 2  # past the end: empty, or the last again
             )
             return f'<ul class="chapter-list">{items}</ul><div class="pagination">{links}</div>'
 
@@ -77,7 +87,11 @@ class NovelFireTests(unittest.TestCase):
             [n for n in range(1, last_page + 1) for _ in (1, 2)],
         )
         self.assertTrue(all(count == 1 for count in fetched.values()), fetched)
-        self.assertEqual(len(fetched), last_page + 1)  # the novel page and each list page
+        if endless:
+            # one round of pages past the end is read before it is known to be
+            self.assertLess(len(fetched), last_page + 6, fetched)
+        else:
+            self.assertEqual(len(fetched), last_page + 1)  # the novel page and each list page
 
     @classmethod
     def setUpClass(cls) -> None:

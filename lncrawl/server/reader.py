@@ -432,6 +432,7 @@ _READER_HTML = """<!DOCTYPE html>
           <button id="lib-restore" title="Load a backup made here, adding it to what you have">⤒ Restore a backup</button>
           <input id="lib-restore-file" type="file" accept="application/json,.json" class="hidden" />
           <button id="lib-getch" class="hidden" title="Download the chapters of every novel that has only its details (added by a discovery)">⬇ Get chapters for details-only novels</button>
+          <button id="lib-unfinished" title="Delete every novel that has only its details or only some of its chapters downloaded (admins)">🗑 Delete unfinished novels</button>
           <button id="lib-select" title="Select novels to delete or download">☑ Select</button>
         </div>
       </details>
@@ -925,7 +926,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-getsel","getch-btn","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-getsel","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -1689,6 +1690,41 @@ _READER_HTML = """<!DOCTYPE html>
     if (!confirm("Download every chapter of " + todo.length + " novel(s) that have only their details?")) return;
     getChapters(todo);
   });
+  // Everything not fully downloaded goes, except what a download still running,
+  // queued or paused is working on: the server says which and how many.
+  els["lib-unfinished"].addEventListener("click", function () {
+    var btn = this;
+    btn.disabled = true;
+    api("/novels/unfinished").then(function (found) {
+      if (found.removing && found.removing.running) { btn.disabled = false; watchUnfinished(btn); return; }
+      var kept = found.kept ? "\\n\\n" + found.kept + " unfinished novel(s) are kept: a download still running, queued or paused is working on them (or on their site). Stop it to remove those too." : "";
+      if (!found.count) { btn.disabled = false; alert("No unfinished novels to delete." + kept); return; }
+      var what = [];
+      if (found.details_only) what.push(found.details_only + " with only their details");
+      if (found.partial) what.push(found.partial + " partly downloaded (" + found.chapters + " chapters)");
+      if (!confirm("Delete " + found.count + " unfinished novel(s): " + what.join(", ") +
+          "?\\n\\nTheir downloaded chapters and reading positions go with them. This cannot be undone." + kept)) {
+        btn.disabled = false; return;
+      }
+      return api("/novels/unfinished/remove", { method: "POST" }).then(function () { watchUnfinished(btn); });
+    }).catch(function (e) { btn.disabled = false; alert("Couldn't delete the unfinished novels: " + e.message); });
+  });
+  function watchUnfinished(btn) {
+    btn.disabled = true;
+    api("/novels/unfinished").then(function (found) {
+      var r = found.removing || {};
+      if (r.running) {
+        btn.textContent = "🗑 Deleting " + r.done + " of " + r.total + "…";
+        setTimeout(function () { watchUnfinished(btn); }, 1500);
+        return;
+      }
+      btn.disabled = false;
+      btn.textContent = "🗑 Delete unfinished novels";
+      loadLibrary(els["search"].value.trim());
+      alert("Deleted " + (r.done - r.failed) + " unfinished novel(s)." +
+        (r.failed ? " " + r.failed + " could not be deleted: " + r.error : ""));
+    }).catch(function () { setTimeout(function () { watchUnfinished(btn); }, 3000); });
+  }
   els["lib-getsel"].addEventListener("click", function () {
     var ids = lib.sel;
     var todo = (lib.everything || []).filter(function (n) { return ids[n.id]; });

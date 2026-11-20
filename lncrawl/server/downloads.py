@@ -274,7 +274,9 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
       }
       var pace = [];
       var rps = ex.current_rps || ex.requests_per_sec;  // reached, or as asked on older jobs
-      if (rps) pace.push(rps + " requests/s");
+      // the app's own cap; a site counting requests (NovelFire: about 1 a second)
+      // can hold it lower, which chapters/min shows
+      if (rps) pace.push("up to " + rps + " requests/s");
       if (ex.chapters_per_min) pace.push(ex.chapters_per_min + " chapters/min");
       if (ex.eta_seconds != null && ex.eta_seconds >= 0) pace.push("about " + span(ex.eta_seconds) + " left at this pace");
       if (pace.length) c.appendChild(el("div", "line", pace.join(" · ")));

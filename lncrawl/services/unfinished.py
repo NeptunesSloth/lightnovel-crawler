@@ -1,0 +1,129 @@
+"""Removing the novels that are not fully downloaded, all at once.
+
+A discovery adds every novel it finds with only its details, and a download
+stopped part way leaves a novel with some of its chapters; on a drive that is
+filling up, those are what people want gone. Novels an unfinished download is
+still working on are kept: removed under it, the download would add them again
+or fail on files that went away.
+"""
+
+import logging
+import threading
+from typing import Any, Dict, List, Set, Tuple
+from urllib.parse import urlsplit
+
+import sqlmodel as sq
+
+from ..context import ctx
+from ..dao import Chapter, Job, Novel
+from ..enums import JobStatus, JobType
+
+logger = logging.getLogger(__name__)
+
+_lock = threading.Lock()
+_state: Dict[str, Any] = {"running": False, "done": 0, "total": 0, "failed": 0, "error": ""}
+
+
+def _domain(url: str) -> str:
+    host = urlsplit(url).netloc.lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _kept_by_downloads() -> Tuple[Set[str], Set[str], Set[str]]:
+    """(novel ids, novel addresses, site domains) unfinished downloads still use."""
+    ids: Set[str] = set()
+    urls: Set[str] = set()
+    domains: Set[str] = set()
+    with ctx.db.session() as sess:
+        jobs = sess.exec(
+            sq.select(Job.type, Job.extra).where(
+                sq.col(Job.is_done).is_(False),
+                sq.col(Job.status).in_([JobStatus.PENDING, JobStatus.RUNNING, JobStatus.PAUSED]),
+            )
+        ).all()
+    for kind, extra in jobs:
+        extra = extra or {}
+        url = extra.get("url")
+        if isinstance(url, str) and url:
+            if kind in (JobType.EXPORT_SOURCE, JobType.DISCOVER_SOURCE, JobType.LIST_SOURCE):
+                domains.add(_domain(url))  # a whole site: any of its novels
+            else:
+                urls.add(url)
+        for key in ("urls", "novel_urls"):
+            value = extra.get(key)
+            if isinstance(value, list):
+                urls.update(str(item) for item in value)
+        novel_id = extra.get("novel_id")
+        if isinstance(novel_id, str):
+            ids.add(novel_id)
+        novel_ids = extra.get("novel_ids")
+        if isinstance(novel_ids, list):
+            ids.update(str(item) for item in novel_ids)
+    return ids, urls, domains
+
+
+def find() -> Dict[str, Any]:
+    """The novels not fully downloaded: those to remove, and those kept for now."""
+    with ctx.db.session() as sess:
+        counted = sess.exec(
+            sq.select(
+                Chapter.novel_id,
+                sq.func.count(),
+                sq.func.sum(sq.case((sq.col(Chapter.is_done).is_(True), 1), else_=0)),
+            ).group_by(sq.col(Chapter.novel_id))
+        ).all()
+        novels = sess.exec(sq.select(Novel.id, Novel.title, Novel.url)).all()
+    chapters: Dict[str, Tuple[int, int]] = {
+        novel_id: (int(total or 0), int(done or 0)) for novel_id, total, done in counted
+    }
+    kept_ids, kept_urls, kept_domains = _kept_by_downloads()
+    remove: List[Dict[str, Any]] = []
+    kept = 0
+    for novel_id, title, url in novels:
+        total, done = chapters.get(novel_id, (0, 0))
+        if total and done >= total:
+            continue  # every chapter is here
+        if novel_id in kept_ids or url in kept_urls or _domain(url or "") in kept_domains:
+            kept += 1
+            continue
+        remove.append({"id": novel_id, "title": title, "done": done, "total": total})
+    return {
+        "novels": remove,
+        "details_only": sum(1 for item in remove if not item["done"]),
+        "partial": sum(1 for item in remove if item["done"]),
+        "chapters": sum(item["done"] for item in remove),
+        "kept": kept,
+    }
+
+
+def status() -> Dict[str, Any]:
+    with _lock:
+        return dict(_state)
+
+
+def start() -> Dict[str, Any]:
+    """Remove them in the background (a novel's folder can take a while on a drive)."""
+    with _lock:
+        if _state["running"]:
+            return dict(_state)
+        found = find()["novels"]
+        _state.update(running=True, done=0, total=len(found), failed=0, error="")
+    threading.Thread(target=_remove, args=([item["id"] for item in found],), daemon=True).start()
+    return status()
+
+
+def _remove(ids: List[str]) -> None:
+    try:
+        for novel_id in ids:
+            try:
+                ctx.novels.delete(novel_id)
+            except Exception as error:
+                logger.warning(f"Could not remove novel {novel_id}: {error}")
+                with _lock:
+                    _state["failed"] += 1
+                    _state["error"] = _state["error"] or str(error)
+            with _lock:
+                _state["done"] += 1
+    finally:
+        with _lock:
+            _state["running"] = False

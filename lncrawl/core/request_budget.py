@@ -24,24 +24,35 @@ class RequestBudget:
     out after ten minutes without the site having been slow at all. The clock
     stays stopped while any of its requests is waiting, even if another one is
     being answered meanwhile; each request still has its own network timeouts.
+
+    ``wall`` is a limit the waiting does not stop: a novel's chapter list that
+    kept going behind other novels' chapters was "loading" for hours, its clock
+    hardly running, with one of the export's few download slots held all along.
     """
 
     seconds: float
     signal: Optional[Event] = None
     label: str = "Chapter request"
+    wall: Optional[float] = None
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _waiting: int = field(default=0, init=False, repr=False)
     _paused_at: float = field(default=0.0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.deadline = monotonic() + self.seconds
+        self.wall_deadline: Optional[float] = monotonic() + self.wall if self.wall else None
+
+    def _past_wall(self) -> bool:
+        return self.wall_deadline is not None and monotonic() >= self.wall_deadline
 
     def _now(self) -> float:
         with self._lock:
             return self._paused_at if self._waiting else monotonic()
 
     def is_set(self) -> bool:
-        return bool(self.signal and self.signal.is_set()) or self._now() >= self.deadline
+        if self.signal and self.signal.is_set():
+            return True
+        return self._now() >= self.deadline or self._past_wall()
 
     def remaining(self) -> float:
         if self.signal and self.signal.is_set():
@@ -49,6 +60,13 @@ class RequestBudget:
         remaining = self.deadline - self._now()
         if remaining <= 0:
             raise CrawlTimeoutError(f"{self.label} timed out after {self.seconds:g} seconds")
+        if self.wall_deadline is not None:
+            left = self.wall_deadline - monotonic()
+            if left <= 0:
+                raise CrawlTimeoutError(
+                    f"{self.label} was still going after {(self.wall or 0) / 60:g} minutes"
+                )
+            remaining = min(remaining, left)
         return remaining
 
     @contextmanager
@@ -87,10 +105,13 @@ def waiting_turn() -> Iterator[None]:
 
 @contextmanager
 def request_budget(
-    signal: Optional[Event], seconds: float = 60, label: str = "Chapter request"
+    signal: Optional[Event],
+    seconds: float = 60,
+    label: str = "Chapter request",
+    wall: Optional[float] = None,
 ) -> Iterator[RequestBudget]:
     existing = current_budget()
-    budget = existing or RequestBudget(seconds, signal, label)
+    budget = existing or RequestBudget(seconds, signal, label, wall)
     token = _budget.set(budget)
     try:
         budget.remaining()
