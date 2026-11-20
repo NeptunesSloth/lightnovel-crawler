@@ -98,6 +98,28 @@ class UnfinishedNovelTests(unittest.TestCase):
         self.assertEqual(found["chapters"], 1)
         self.assertEqual(found["kept"], 2)
 
+    def test_one_kind_can_be_chosen(self) -> None:
+        self.assertEqual(
+            sorted(item["id"] for item in unfinished.find("details")["novels"]),
+            ["details", "listed"],
+        )
+        self.assertEqual([item["id"] for item in unfinished.find("partial")["novels"]], ["partial"])
+        with self.assertRaises(ValueError):
+            unfinished.start("everything")
+
+    def wait(self) -> dict:
+        for _ in range(200):
+            if not unfinished.status()["running"]:
+                break
+            time.sleep(0.01)
+        return unfinished.status()
+
+    def test_only_the_partly_downloaded_ones_go_when_asked(self) -> None:
+        unfinished.start("partial")
+        state = self.wait()
+        self.assertEqual((state["kind"], state["done"], state["total"]), ("partial", 1, 1))
+        self.assertEqual(self.deleted, ["partial"])
+
     def test_removing_deletes_them_in_the_background_and_reports(self) -> None:
         unfinished.start()
         for _ in range(200):
