@@ -22,7 +22,7 @@ _READER_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="theme-color" content="#0f1115" />
+<meta name="theme-color" content="#16141d" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -31,212 +31,287 @@ _READER_HTML = """<!DOCTYPE html>
 <link rel="apple-touch-icon" href="/reader/icon.svg" />
 <title>LNCrawl · Reader</title>
 <style>
-  :root { color-scheme: dark; }
+  /* A reading room at night: ink walls, paper text, one lamp. The lamp colour
+     marks the thing to press next and where you are; nothing else uses it.
+     Titles and the chapter text are set in a book face; the controls are not.
+     The themes (paper, sepia) only swap these colours. */
+  :root {
+    color-scheme: dark;
+    --bg: #16141d; --bar: rgba(22, 20, 29, .86); --panel: #1f1c29; --raised: #2b2738;
+    --line: #34304a; --text: #efe9dc; --dim: #a59fb3; --faint: #7d778c;
+    --lamp: #f2b84b; --lamp-ink: #201803; --link: #9cc8ff;
+    --good: #7fd1a5; --warn: #f0b46a; --bad: #ff8f84; --shade: rgba(0, 0, 0, .45);
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  }
+  body.t-light {
+    color-scheme: light;
+    --bg: #f7f3ea; --bar: rgba(247, 243, 234, .9); --panel: #fffdf8; --raised: #ece5d6;
+    --line: #ddd3c0; --text: #2a2530; --dim: #5f5868; --faint: #8a8392;
+    --lamp: #b7791f; --lamp-ink: #fffaf0; --link: #2f5f9e;
+    --good: #2f7a52; --warn: #9a5a12; --bad: #b4382c; --shade: rgba(60, 40, 10, .18);
+  }
+  body.t-sepia {
+    color-scheme: light;
+    --bg: #f4ecd8; --bar: rgba(244, 236, 216, .9); --panel: #f9f2e0; --raised: #e6d9ba;
+    --line: #d8c8a4; --text: #4b3b2a; --dim: #7a6650; --faint: #9a876d;
+    --lamp: #a8641c; --lamp-ink: #fff8ea; --link: #7a4b1e;
+    --good: #4f6b2c; --warn: #8a5a14; --bad: #9c3b2b; --shade: rgba(80, 55, 20, .2);
+  }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 0;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: #0f1115; color: #e6e6e6; line-height: 1.6;
+    margin: 0; padding: 0; font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    background: var(--bg); color: var(--text);
   }
+  :focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
+  a { color: var(--link); }
+
+  /* the bar along the top */
   .topbar {
-    position: sticky; top: 0; z-index: 10; display: flex; gap: 10px; align-items: center;
-    padding: 10px 16px; background: #141821; border-bottom: 1px solid #262b36;
+    position: sticky; top: 0; z-index: 10; display: flex; gap: 14px; align-items: center;
+    padding: 10px 22px; background: var(--bar); border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   }
-  .topbar h1 { font-size: 16px; margin: 0; flex: 0 0 auto; color: #cbd2dd; }
+  .topbar h1 {
+    font-family: var(--serif); font-weight: 500; font-size: 19px; margin: 0; flex: 0 0 auto;
+    letter-spacing: .01em; color: var(--text);
+  }
+  .topbar h1 small { font-family: var(--sans); font-size: 12.5px; color: var(--faint); margin-left: 6px; }
   .topbar .spacer { flex: 1; }
-  input[type=text] {
-    padding: 8px 11px; border-radius: 8px; border: 1px solid #303644;
-    background: #0f1115; color: #e6e6e6; font-size: 14px; width: 100%;
+  .topbar .back { color: var(--dim); text-decoration: none; }
+  .topbar .back:hover { color: var(--text); text-decoration: none; }
+
+  input[type=text], input[type=number] {
+    padding: 9px 12px; border-radius: 9px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); font: inherit; font-size: 14px; width: 100%;
   }
+  input::placeholder { color: var(--faint); }
+  #search { border-radius: 999px; padding-left: 16px; }
   button {
-    padding: 8px 13px; border: 0; border-radius: 8px; background: #2a2f3a; color: #cbd2dd;
-    font-size: 14px; cursor: pointer;
+    padding: 8px 14px; border: 1px solid transparent; border-radius: 9px; background: var(--raised);
+    color: var(--text); font: inherit; font-size: 14px; cursor: pointer;
   }
-  button:hover { background: #343a47; }
-  button.primary { background: #3b82f6; color: #fff; font-weight: 600; }
-  button.primary:hover { background: #2f6fe0; }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 18px 16px 80px; }
-  .muted { color: #8b93a1; }
+  button:hover { border-color: var(--line); filter: brightness(1.08); }
+  button.primary { background: var(--lamp); color: var(--lamp-ink); font-weight: 650; }
+  button.primary:hover { filter: brightness(1.06); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  select {
+    padding: 8px 11px; border-radius: 9px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); font: inherit; font-size: 13.5px;
+  }
+  label { display: block; font-size: 13px; color: var(--dim); margin: 10px 0 4px; }
+  input[type=checkbox] { accent-color: var(--lamp); }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 22px 22px 96px; }
+  .muted { color: var(--dim); }
   .hidden { display: none !important; }
+
+  /* panels: bookmarks, stats, shelves, new chapters */
   .card {
-    background: #171a21; border: 1px solid #262b36; border-radius: 10px;
-    padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 12px; cursor: pointer;
   }
-  .card:hover { border-color: #3b4250; }
-  .card h3 { margin: 0 0 3px; font-size: 15px; }
-  .card .meta { color: #8b93a1; font-size: 13px; }
-  .libcard { display: flex; gap: 12px; align-items: flex-start; }
-  .libcard .cover {
-    width: 64px; height: 92px; flex: 0 0 64px; border-radius: 6px; object-fit: cover;
-    background: #0b0d11; border: 1px solid #262b36;
+  .card h3 { margin: 0 0 3px; font-size: 16px; }
+  .card .meta { color: var(--dim); font-size: 13px; }
+  .shelf-title { font-family: var(--serif); font-size: 19px; color: var(--text); margin: 4px 0 12px; }
+  .shelf-title .see-all { float: right; font-family: var(--sans); font-size: 13px; color: var(--link); cursor: pointer; }
+
+  /* the library: covers on a shelf, or a list */
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .toolbar.filters {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px;
   }
+  .toolbar.filters input[type=text] { flex: 1 1 220px; max-width: 360px; margin: 0; }
+  .toolbar .check { display: flex; align-items: center; gap: 6px; font-size: 13.5px; margin: 0; cursor: pointer; color: var(--text); }
+  .chap-range { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+  .chap-range input[type=number] { width: 70px; margin: 0; padding: 7px 8px; }
+  #lib-filters-btn.on { background: var(--lamp); color: var(--lamp-ink); }
+  #lib-layout { min-width: 92px; }
+  #lib-status { font-size: 13.5px; margin: 6px 0 14px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  #lib-cats { flex: 1 1 100%; margin-top: 4px; }
+  .chip {
+    font-size: 12px; color: var(--dim); background: transparent; border: 1px solid var(--line);
+    border-radius: 999px; padding: 3px 10px; cursor: pointer; white-space: nowrap;
+  }
+  .chip:hover { color: var(--text); border-color: var(--faint); }
+  .chip.active { background: var(--lamp); color: var(--lamp-ink); border-color: var(--lamp); }
+
+  .libcard { display: flex; gap: 16px; align-items: flex-start; position: relative; }
+  .libcard .cover, #novel-cover, .shelf .mini img {
+    background: linear-gradient(160deg, var(--raised), var(--panel)); border: 1px solid var(--line);
+    object-fit: cover; display: block;
+  }
+  .libcard .cover { width: 72px; height: 108px; flex: 0 0 72px; border-radius: 6px; }
   .libcard .body { flex: 1; min-width: 0; }
+  .libcard h3 { font-family: var(--serif); font-weight: 500; font-size: 18px; line-height: 1.3; }
+  .libcard .meta.resume { color: var(--lamp); }
   .libcard .desc {
-    color: #aab2c0; font-size: 13px; margin: 5px 0 0;
+    color: var(--dim); font-size: 13.5px; margin: 6px 0 0; max-width: 72ch;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   }
   .libcard .desc.open { display: block; -webkit-line-clamp: unset; }
-  .libcard .desc-more { color: #7aa2ff; font-size: 12px; cursor: pointer; }
-  .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
-  .chip {
-    font-size: 11px; color: #aab2c0; background: #20242d; border: 1px solid #2a2f3a;
-    border-radius: 999px; padding: 2px 9px; cursor: pointer; white-space: nowrap;
+  .libcard .desc-more { color: var(--link); font-size: 12.5px; cursor: pointer; }
+  .libcard .fav-star {
+    cursor: pointer; color: var(--faint); font-size: 18px; line-height: 1; float: right; padding: 0 2px;
+    font-family: var(--sans);
   }
-  .chip:hover { color: #e6e6e6; border-color: #3b4250; }
-  .chip.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
-  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
-  .toolbar.filters input[type=text] { flex: 1 1 220px; max-width: 360px; margin: 0; }
-  .chap-range { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
-  .chap-range input[type=number] { width: 68px; margin: 0; padding: 6px 8px; }
-  .toolbar .check { display: flex; align-items: center; gap: 5px; font-size: 13px; margin: 0; cursor: pointer; }
-  select {
-    padding: 7px 10px; border-radius: 8px; border: 1px solid #303644;
-    background: #0f1115; color: #e6e6e6; font-size: 13px;
+  .libcard .fav-star.on { color: var(--lamp); }
+  #lib-list:not(.grid) .libcard { padding: 14px; }
+  #lib-list:not(.grid) .libcard:hover { border-color: var(--faint); }
+
+  #lib-list.grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 26px 20px;
   }
-  #novel-cover {
-    width: 110px; height: 158px; border-radius: 8px; object-fit: cover; float: left;
-    margin: 0 16px 8px 0; background: #0b0d11; border: 1px solid #262b36;
+  #lib-list.grid .libcard {
+    flex-direction: column; gap: 0; background: transparent; border: 0; padding: 0; margin: 0;
   }
-  #novel-synopsis { color: #cbd2dd; font-size: 14px; margin: 6px 0; }
-  .shelf-title { font-size: 14px; color: #cbd2dd; margin: 2px 0 8px; }
-  .shelf { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 6px; }
-  .shelf .mini { flex: 0 0 104px; cursor: pointer; }
-  .shelf .mini img {
-    width: 104px; height: 148px; object-fit: cover; border-radius: 6px; display: block;
-    background: #0b0d11; border: 1px solid #262b36;
+  #lib-list.grid .libcard .cover {
+    width: 100%; height: auto; flex: none; aspect-ratio: 2 / 3; border-radius: 8px;
+    box-shadow: 0 10px 24px -12px var(--shade); transition: transform .18s ease, box-shadow .18s ease;
   }
-  #lib-web-btn { margin: 0 0 10px; }
-  .web-row { display: flex; align-items: center; gap: 8px; padding: 7px 4px; border-bottom: 1px solid #20242d; font-size: 13px; }
-  .web-row .t { flex: 1; min-width: 0; }
-  .web-row .t b { color: #e6e6e6; }
-  .web-row .t .muted { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .web-row button { padding: 4px 10px; font-size: 12px; margin: 0; }
-  .novel-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; clear: both; }
-  .novel-tools button { margin: 0; }
-  .rate { font-size: 20px; letter-spacing: 2px; cursor: pointer; color: #4b5563; user-select: none; }
-  .rate .on { color: #f5b301; }
-  #shelf-box { margin: 0 0 12px; }
-  .badge.fresh { background: #1e3a8a; color: #dbeafe; border-color: #1e40af; }
-  .lib-more { height: 1px; }
-  .shelf-title .see-all { float: right; font-size: 12px; color: #7aa2ff; cursor: pointer; }
-  .shelf .mini .mm { font-size: 11px; color: #8b93a1; margin-top: 2px; }
+  #lib-list.grid .libcard:hover .cover { transform: translateY(-3px); box-shadow: 0 16px 28px -14px var(--shade); }
+  #lib-list.grid .libcard .body { width: 100%; padding-top: 10px; }
+  #lib-list.grid .libcard h3 { font-size: 15.5px; }
+  #lib-list.grid .libcard .meta { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #lib-list.grid .libcard .desc, #lib-list.grid .libcard .desc-more, #lib-list.grid .libcard .tags { display: none; }
+  #lib-list.grid .libcard .fav-star {
+    position: absolute; top: 8px; right: 8px; float: none; width: 30px; height: 30px; padding: 0;
+    display: flex; align-items: center; justify-content: center; border-radius: 999px;
+    background: rgba(15, 12, 20, .62); color: #efe9dc; font-size: 16px;
+  }
+  #lib-list.grid .libcard .fav-star.on { color: #f2b84b; }
+  #lib-list.grid .lib-more { grid-column: 1 / -1; }
+  #lib-list.grid .libcard .progress { margin-top: 8px; }
+
+  .badge {
+    display: inline-block; font-family: var(--sans); font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+    color: var(--dim); background: transparent; border: 1px solid var(--line);
+    border-radius: 999px; padding: 0 7px; margin-left: 6px; vertical-align: 2px; line-height: 17px;
+  }
+  .badge.new, .badge.fresh { color: var(--good); border-color: var(--good); }
+  .badge.nochap { color: var(--warn); border-color: var(--warn); }
+  .badge.part { color: var(--link); border-color: var(--link); }
+  .progress { height: 3px; background: var(--raised); border-radius: 999px; margin-top: 6px; overflow: hidden; }
+  .progress > span { display: block; height: 100%; background: var(--lamp); }
+
+  /* continue reading */
+  .shelf { display: flex; gap: 16px; overflow-x: auto; padding-bottom: 10px; margin-bottom: 18px; }
+  .shelf .mini { flex: 0 0 116px; cursor: pointer; }
+  .shelf .mini img { width: 116px; height: 174px; border-radius: 8px; box-shadow: 0 10px 22px -12px var(--shade); }
   .shelf .mini .mt {
-    font-size: 12px; color: #cbd2dd; margin-top: 5px;
+    font-family: var(--serif); font-size: 14px; color: var(--text); margin-top: 8px; line-height: 1.3;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   }
-  .progress { height: 4px; background: #20242d; border-radius: 999px; margin-top: 6px; overflow: hidden; }
-  .progress > span { display: block; height: 100%; background: #3b82f6; }
-  .badge {
-    font-size: 10px; color: #aab2c0; background: #20242d; border: 1px solid #2a2f3a;
-    border-radius: 4px; padding: 1px 6px; margin-left: 7px; vertical-align: middle;
+  .shelf .mini .mm { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+
+  /* a novel */
+  #view-novel { max-width: 960px; margin: 0 auto; }
+  #novel-cover {
+    width: 168px; height: 252px; border-radius: 10px; float: left; margin: 0 26px 14px 0;
+    box-shadow: 0 18px 36px -18px var(--shade);
   }
-  .badge.new { color: #7ee2a8; border-color: #2f5d43; background: #12291c; }
-  .badge.nochap { color: #f0b46a; border-color: #6b4a1f; background: #2a1d0c; }
+  #novel-title { font-family: var(--serif); font-weight: 500; font-size: 34px; line-height: 1.15; margin: 4px 0 8px; }
+  #novel-meta { font-size: 14px; margin: 0 0 4px; }
+  #novel-synopsis { color: var(--dim); font-size: 15px; line-height: 1.65; margin: 10px 0; max-width: 70ch; }
+  #view-novel > button { border-radius: 999px; }
+  #continue-btn { padding: 10px 20px; }
+  .novel-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 18px; clear: both; }
+  .novel-tools button { margin: 0; border-radius: 999px; font-size: 13.5px; }
+  .rate { font-size: 21px; letter-spacing: 2px; cursor: pointer; color: var(--faint); user-select: none; margin-right: 6px; }
+  .rate .on { color: var(--lamp); }
+  #shelf-box { margin: 0 0 12px; }
   .chap {
-    display: flex; justify-content: space-between; gap: 10px; align-items: center;
-    padding: 9px 6px; border-bottom: 1px solid #20242d; cursor: pointer;
+    display: flex; justify-content: space-between; gap: 12px; align-items: center;
+    padding: 11px 8px; border-bottom: 1px solid var(--line); cursor: pointer; border-radius: 6px;
   }
-  .chap:hover { background: #171a21; }
-  .chap .n { color: #6b7280; font-size: 12px; min-width: 48px; }
-  .chap .t { flex: 1; font-size: 14px; }
-  .chap.unavail .t { color: #6b7280; }
-  #reader-content { font-size: 18px; }
-  #reader-content img { max-width: 100%; display: block; margin: 6px auto; border-radius: 4px; }
-  #reader-content h1 { font-size: 22px; }
-  .reader-nav {
-    position: sticky; bottom: 0; display: flex; gap: 10px; align-items: center;
-    padding: 10px 0; background: linear-gradient(180deg, rgba(15,17,21,0), #0f1115 40%);
-  }
-  .back { color: #7aa2ff; cursor: pointer; font-size: 14px; text-decoration: none; }
+  .chap:hover { background: var(--panel); }
+  .chap .n { color: var(--faint); font-size: 12.5px; min-width: 52px; font-variant-numeric: tabular-nums; }
+  .chap .t { flex: 1; font-size: 14.5px; }
+  .chap .rd { color: var(--good); width: 16px; }
+  .chap.unavail .t { color: var(--faint); }
+  .chap.here .t { color: var(--lamp); font-weight: 600; }
+  .back { color: var(--link); cursor: pointer; font-size: 14px; text-decoration: none; }
   .back:hover { text-decoration: underline; }
-  #auth { max-width: 360px; margin: 60px auto; }
-  label { display:block; font-size: 13px; color: #aab2c0; margin: 10px 0 4px; }
 
-  /* ---- Aa settings panel ---- */
-  #aa-panel {
-    position: fixed; top: 52px; right: 12px; z-index: 30; width: 270px;
-    background: #171a21; border: 1px solid #303644; border-radius: 10px;
-    padding: 12px 14px; box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  /* reading */
+  #view-reader { max-width: 720px; margin: 0 auto; }
+  #reader-title {
+    font-family: var(--serif); font-weight: 500; font-size: 30px; line-height: 1.25; text-align: center;
+    margin: 18px 0 34px; text-wrap: balance;
   }
-  .aa-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
-  .aa-label { font-size: 13px; color: #aab2c0; }
-
-  /* ---- Reading themes ---- */
-  body.t-light { background: #f6f6f1; color: #24262b; }
-  body.t-light .topbar { background: #ffffff; border-color: #dcdcd4; }
-  body.t-light .topbar h1 { color: #444; }
-  body.t-light .card, body.t-light #aa-panel { background: #ffffff; border-color: #dcdcd4; }
-  body.t-light .chap { border-color: #e6e6de; }
-  body.t-light .chap:hover, body.t-light .card:hover { background: #f0f0e8; }
-  body.t-light input[type=text], body.t-light select { background: #fff; color: #24262b; border-color: #ccc; }
-  body.t-light button { background: #e8e8e0; color: #333; }
-  body.t-light .muted, body.t-light .card .meta { color: #6b7280; }
-  body.t-light .chip { background: #eee; color: #555; border-color: #ddd; }
-  body.t-light #novel-synopsis { color: #3a3d44; }
-  body.t-sepia { background: #f4ecd8; color: #4b3b2a; }
-  body.t-sepia .topbar { background: #efe5cd; border-color: #ddd0b5; }
-  body.t-sepia .topbar h1 { color: #6a543c; }
-  body.t-sepia .card, body.t-sepia #aa-panel { background: #efe5cd; border-color: #ddd0b5; }
-  body.t-sepia .chap { border-color: #e4d8bd; }
-  body.t-sepia .chap:hover, body.t-sepia .card:hover { background: #eadfc4; }
-  body.t-sepia input[type=text], body.t-sepia select { background: #f8f2e2; color: #4b3b2a; border-color: #cbbd9d; }
-  body.t-sepia button { background: #e2d5b5; color: #55442f; }
-  body.t-sepia .muted, body.t-sepia .card .meta { color: #8a785f; }
-  body.t-sepia .chip { background: #e8dcc0; color: #6a583e; border-color: #d5c6a3; }
-  body.t-sepia #novel-synopsis { color: #55442f; }
-  #reader-content.f-serif { font-family: Georgia, "Times New Roman", serif; }
-
-  /* ---- Manga image fit ---- */
+  #reader-content { font-size: 19px; line-height: 1.78; }
+  #reader-content.f-serif { font-family: var(--serif); }
+  #reader-content p { margin: 0 0 1.05em; }
+  #reader-content h1, #reader-content h2, #reader-content h3 { font-family: var(--serif); font-weight: 500; font-size: 1.2em; }
+  #reader-content img { max-width: 100%; display: block; margin: 6px auto; border-radius: 4px; }
   #reader-content.fit-h img { max-height: 94vh; width: auto; max-width: 100%; }
   #reader-content.strip img { margin: 0 auto; border-radius: 0; }
-
-  /* ---- Bookmarks ---- */
-  .bmk-row {
-    display: flex; align-items: center; gap: 8px; padding: 7px 6px;
-    border-bottom: 1px solid #20242d; font-size: 13px; cursor: pointer;
+  .reader-nav {
+    position: sticky; bottom: 14px; display: flex; gap: 10px; align-items: center; margin-top: 28px;
+    padding: 8px; background: var(--bar); border: 1px solid var(--line); border-radius: 999px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 12px 30px -16px var(--shade);
   }
-  .bmk-row:hover { background: #171a21; }
-  .bmk-row .x { color: #6b7280; padding: 0 6px; }
-  .bmk-row .x:hover { color: #e66; }
-  .bmk-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .bmk-row .nv { color: #cbd2dd; font-weight: 600; }
-  .bmk-row .when { color: #6b7280; font-size: 12px; white-space: nowrap; }
-  .libcard .fav-star { cursor: pointer; color: #6b7280; font-size: 18px; line-height: 1; float: right; padding: 0 2px; }
-  .libcard .fav-star.on { color: #f5b301; }
+  .reader-nav button { border-radius: 999px; margin: 0; }
+  #reader-pos { font-size: 13px; font-variant-numeric: tabular-nums; }
 
-  /* ---- Tap-translate popup ---- */
+  #auth { max-width: 380px; margin: 70px auto; }
+  #auth h2 { font-family: var(--serif); font-weight: 500; font-size: 30px; margin: 0 0 6px; }
+
+  /* the Aa panel and the translation pop-up */
+  #aa-panel {
+    position: fixed; top: 60px; right: 16px; z-index: 30; width: 290px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 16px; box-shadow: 0 18px 40px -16px var(--shade);
+  }
+  .aa-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+  .aa-label { font-size: 13px; color: var(--dim); }
   #trans-pop {
     position: fixed; z-index: 40; max-width: 300px; font-size: 14px;
-    background: #1d2129; border: 1px solid #3b4250; border-radius: 8px;
-    padding: 8px 11px; box-shadow: 0 6px 24px rgba(0,0,0,.5);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 9px 12px; box-shadow: 0 12px 30px -12px var(--shade);
   }
-  #trans-pop .w { color: #7aa2ff; font-weight: 600; }
+  #trans-pop .w { color: var(--lamp); font-weight: 600; }
 
+  /* menus, rows, stats */
   .more-menu { position: relative; }
   .more-menu > summary {
-    list-style: none; cursor: pointer; padding: 7px 12px; border-radius: 8px;
-    border: 1px solid #303644; font-size: 13px; user-select: none;
+    list-style: none; cursor: pointer; padding: 8px 13px; border-radius: 9px;
+    border: 1px solid var(--line); font-size: 13.5px; user-select: none; background: var(--panel);
   }
   .more-menu > summary::-webkit-details-marker { display: none; }
   .more-list {
-    position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 220px;
-    display: flex; flex-direction: column; gap: 4px; padding: 6px;
-    background: #12151b; border: 1px solid #262b36; border-radius: 10px; box-shadow: 0 8px 24px #0008;
+    position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; min-width: 240px;
+    display: flex; flex-direction: column; gap: 2px; padding: 6px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 18px 40px -16px var(--shade);
   }
-  .more-list button { margin: 0; text-align: left; }
-  #lib-filters-btn.on { background: #3b82f6; color: #fff; border-color: #3b82f6; }
-  .chap .rd { color: #22c55e; width: 16px; }
-  .chap.here .t { color: #7aa2ff; font-weight: 600; }
+  .more-list button { margin: 0; text-align: left; background: transparent; }
+  .more-list button:hover { background: var(--raised); }
+  #lib-web-btn { margin: 0 0 10px; }
+  .web-row { display: flex; align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+  .web-row .t { flex: 1; min-width: 0; }
+  .web-row .t b { color: var(--text); }
+  .web-row .t .muted { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .web-row button { padding: 4px 10px; font-size: 12.5px; margin: 0; }
+  .bmk-row {
+    display: flex; align-items: center; gap: 8px; padding: 8px 6px;
+    border-bottom: 1px solid var(--line); font-size: 13.5px; cursor: pointer;
+  }
+  .bmk-row:hover { background: var(--raised); }
+  .bmk-row .x { color: var(--faint); padding: 0 6px; }
+  .bmk-row .x:hover { color: var(--bad); }
+  .bmk-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bmk-row .nv { color: var(--text); font-weight: 600; }
+  .bmk-row .when { color: var(--faint); font-size: 12px; white-space: nowrap; }
   .stat-bars { display: flex; align-items: flex-end; gap: 4px; height: 80px; margin: 8px 0 4px; }
-  .stat-bars span { flex: 1; background: #3b82f6; border-radius: 3px 3px 0 0; min-height: 2px; }
-  .stat-days { display: flex; gap: 4px; font-size: 10px; color: #6b7280; }
+  .stat-bars span { flex: 1; background: var(--lamp); border-radius: 3px 3px 0 0; min-height: 2px; }
+  .stat-days { display: flex; gap: 4px; font-size: 10px; color: var(--faint); }
   .stat-days span { flex: 1; text-align: center; }
-  .shelf-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid #20242d; }
+  .shelf-row { display: flex; align-items: center; gap: 8px; padding: 7px 4px; border-bottom: 1px solid var(--line); }
   .shelf-row .n { flex: 1; }
-  .shelf-row button { margin: 0; padding: 3px 9px; font-size: 12px; }
+  .shelf-row button { margin: 0; padding: 3px 9px; font-size: 12.5px; }
+  .lib-more { height: 1px; }
 
-  /* ---- Mobile / small screens ---- */
+  /* phones */
   @media (max-width: 640px) {
     .toolbar { gap: 6px; }
     .toolbar select, .toolbar.filters input[type=text] { flex: 1 1 46%; min-width: 0; max-width: none; }
@@ -244,26 +319,35 @@ _READER_HTML = """<!DOCTYPE html>
     .chap-range { flex: 1 1 100%; }
     .more-list { left: auto; right: 0; }
     .novel-tools button { flex: 1 1 46%; }
-    .topbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); }
-    .topbar h1 { font-size: 15px; }
-    #search-wrap { order: 3; flex: 1 1 100%; max-width: none; }
-    .wrap { padding: 14px 12px 90px; }
-    button { padding: 10px 14px; }            /* larger tap targets */
+    .topbar { flex-wrap: wrap; gap: 8px 12px; padding: 8px 14px; padding-top: max(8px, env(safe-area-inset-top)); }
+    .topbar h1 { font-size: 17px; }
+    .topbar h1 small { display: none; }
+    #search-wrap { order: 3; flex: 1 1 100% !important; max-width: none !important; }
+    .wrap { padding: 16px 14px 96px; }
+    button { padding: 10px 14px; }
     .back { padding: 6px 2px; }
-    #novel-cover { width: 92px; height: 132px; margin: 0 12px 6px 0; }
-    .libcard .cover { width: 56px; height: 80px; flex-basis: 56px; }
-    #reader-content { font-size: 17px; }
-    .reader-nav { padding: 10px 0 max(10px, env(safe-area-inset-bottom)); }
-    .reader-nav button { padding: 12px 16px; }
+    #lib-list.grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 18px 12px; }
+    #lib-list.grid .libcard h3 { font-size: 13.5px; }
+    #lib-list.grid .libcard .badge { display: none; }
+    #novel-cover { width: 112px; height: 168px; margin: 0 16px 10px 0; }
+    #novel-title { font-size: 25px; }
+    .libcard .cover { width: 60px; height: 90px; flex-basis: 60px; }
+    #reader-title { font-size: 24px; margin: 8px 0 24px; }
+    #reader-content { font-size: 18px; }
+    .reader-nav { bottom: max(10px, env(safe-area-inset-bottom)); }
+    .reader-nav button { padding: 11px 16px; }
   }
   @media (hover: none) {
-    .card:active { border-color: #3b4250; }    /* touch feedback */
+    .card:active { border-color: var(--faint); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
   }
 </style>
 </head>
 <body>
 <div class="topbar">
-  <h1>📖 LNCrawl Reader</h1>
+  <h1>Lightnovel Crawler<small>Reader</small></h1>
   <a class="back hidden" id="nav-back">&larr; Back</a>
   <div class="spacer"></div>
   <div id="search-wrap" style="flex:1;max-width:380px"><input id="search" type="text" placeholder="Search title, author, description, tags…" /></div>
@@ -326,6 +410,14 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="manhwa">Manhwa (Korean)</option>
         <option value="manhua">Manhua (Chinese)</option>
       </select>
+      <select id="lib-dl" title="Show novels by how much of them is downloaded">
+        <option value="">Any downloads</option>
+        <option value="complete">Fully downloaded</option>
+        <option value="started">Hide details-only</option>
+        <option value="partial">Partly downloaded</option>
+        <option value="none">Details only</option>
+      </select>
+      <button id="lib-layout" title="Show the library as covers or as a list">☰ List</button>
       <button id="lib-filters-btn" title="Show or hide the filters">Filters</button>
       <button id="lib-auto-btn" title="New chapters: automatic checks and notifications">🔔 New chapters</button>
       <button id="lib-bmks-btn" title="Every bookmark, across all novels">🔖 Bookmarks</button>
@@ -615,7 +707,8 @@ _READER_HTML = """<!DOCTYPE html>
       lang: els["lib-lang"].value, state: els["lib-state"].value, progress: els["lib-progress"].value,
       favonly: els["lib-favonly"].checked, dupes: els["lib-dupes"].checked, shelf: els["lib-shelf"].value,
       nobl: els["lib-nobl"].checked, len: els["lib-len"].value, lenMin: els["lib-len-min"].value,
-      lenMax: els["lib-len-max"].value, nomtl: els["lib-nomtl"].checked, noch: els["lib-noch"].checked
+      lenMax: els["lib-len-max"].value, nomtl: els["lib-nomtl"].checked, noch: els["lib-noch"].checked,
+      dl: els["lib-dl"].value
     };
   }
   function applyView(v) {
@@ -632,6 +725,7 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-nobl"].checked = !!v.nobl;
     els["lib-nomtl"].checked = !!v.nomtl;
     els["lib-noch"].checked = !!v.noch;
+    els["lib-dl"].value = v.dl || "";
     els["lib-len"].value = v.len || "";
     els["lib-len-min"].value = v.lenMin || "";
     els["lib-len-max"].value = v.lenMax || "";
@@ -831,7 +925,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-getch","lib-getsel","getch-btn","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-getsel","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -885,7 +979,8 @@ _READER_HTML = """<!DOCTYPE html>
       .catch(function () { /* leave placeholder */ });
   }
   function loadCover(img, novelId) {
-    if (coverCache[novelId] || !coverWatch) { fetchCover(img, novelId); return; }
+    // an image that is not shown is never "in view": fetch those straight away
+    if (coverCache[novelId] || !coverWatch || img.classList.contains("hidden")) { fetchCover(img, novelId); return; }
     img.dataset.novel = novelId;
     coverWatch.observe(img);
   }
@@ -1245,7 +1340,7 @@ _READER_HTML = """<!DOCTYPE html>
   });
 
   function filtersActive() {
-    return !!(els["lib-kind"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
+    return !!(els["lib-kind"].value || els["lib-dl"].value || els["lib-tag"].value.trim() || els["lib-source"].value ||
       els["lib-state"].value || els["lib-progress"].value || els["lib-favonly"].checked || !!chapterRange() || !!els["lib-shelf"].value || els["lib-nobl"].checked || els["lib-dupes"].checked ||
       els["lib-lang"].value || els["lib-nomtl"].checked || els["lib-noch"].checked || lib.cat);
   }
@@ -1346,6 +1441,8 @@ _READER_HTML = """<!DOCTYPE html>
     if (els["lib-nobl"].checked) items = items.filter(function (n) { return !isBL(n); });
     if (els["lib-nomtl"].checked) items = items.filter(function (n) { return !n.mtl; });
     if (els["lib-noch"].checked) items = items.filter(detailsOnly);
+    var dl = els["lib-dl"].value;
+    if (dl && lib.got) items = items.filter(function (n) { return downloadState(n) === dl || (dl === "started" && downloadState(n) !== "none"); });
     els["lib-clear"].classList.toggle("hidden", !filtersActive());
 
     var sort = els["lib-sort"].value;
@@ -1428,7 +1525,7 @@ _READER_HTML = """<!DOCTYPE html>
       var c = document.createElement("div");
       c.className = "card libcard";
 
-      var img = document.createElement("img"); img.className = "cover hidden"; img.alt = "";
+      var img = document.createElement("img"); img.className = "cover"; img.alt = "";
       if (n.cover_available) loadCover(img, n.id);
 
       var body = document.createElement("div"); body.className = "body";
@@ -1459,6 +1556,12 @@ _READER_HTML = """<!DOCTYPE html>
         xb.textContent = "details only"; xb.title = "No chapters downloaded yet — open it, or use ⋯ More, to get them";
         h.appendChild(xb);
       }
+      if (lib.got && downloadState(n) === "partial") {
+        var pb = document.createElement("span"); pb.className = "badge part";
+        pb.textContent = lib.got[n.id] + "/" + (n.chapter_count || 0) + " downloaded";
+        pb.title = "Not every chapter is downloaded yet";
+        h.appendChild(pb);
+      }
       var upd = loadUpdates()[n.id];
       if (upd && upd.found) {
         var nb = document.createElement("span"); nb.className = "badge new";
@@ -1475,8 +1578,7 @@ _READER_HTML = """<!DOCTYPE html>
 
       var pe = posOf(n.id);
       if (pe) {
-        var line = document.createElement("div"); line.className = "meta";
-        line.style.color = "#7aa2ff";
+        var line = document.createElement("div"); line.className = "meta resume";
         line.textContent = (progressOf(n) === "finished" ? "✓ Finished" : "▶ Resume") +
           (pe.serial ? (" · ch " + pe.serial + (n.chapter_count ? " / " + n.chapter_count : "")) : "");
         body.appendChild(line);
@@ -1513,11 +1615,11 @@ _READER_HTML = """<!DOCTYPE html>
       }
 
       c.appendChild(img); c.appendChild(body);
-      if (lib.manage && lib.sel[n.id]) c.style.outline = "2px solid #3b82f6";
+      if (lib.manage && lib.sel[n.id]) c.style.outline = "2px solid var(--lamp)";
       c.addEventListener("click", function () {
         if (!lib.manage) { openNovel(n); return; }
         if (lib.sel[n.id]) { delete lib.sel[n.id]; c.style.outline = ""; }
-        else { lib.sel[n.id] = true; c.style.outline = "2px solid #3b82f6"; }
+        else { lib.sel[n.id] = true; c.style.outline = "2px solid var(--lamp)"; }
         updateDelBtn();
       });
       els["lib-list"].appendChild(c);
@@ -1544,6 +1646,12 @@ _READER_HTML = """<!DOCTYPE html>
   }
   function detailsOnly(n) {
     return !!lib.got && !lib.got[n.id];
+  }
+  // "complete", "partial" or "none": how much of a novel is downloaded
+  function downloadState(n) {
+    var got = (lib.got && lib.got[n.id]) || 0, total = n.chapter_count || 0;
+    if (!got) return "none";
+    return got >= total ? "complete" : "partial";
   }
   function renderGetChapters() {
     var n = (lib.everything || []).filter(detailsOnly).length;
@@ -1632,6 +1740,20 @@ _READER_HTML = """<!DOCTYPE html>
 
   els["lib-sort"].addEventListener("change", renderLibrary);
   els["lib-kind"].addEventListener("change", renderLibrary);
+  els["lib-dl"].addEventListener("change", function () { saveView(); renderLibrary(); });
+  // covers or a list, remembered on this device
+  var LAYOUT = "lncrawl_reader_layout";
+  function applyLayout() {
+    var list = (function () { try { return localStorage.getItem(LAYOUT) === "list"; } catch (e) { return false; } })();
+    els["lib-list"].classList.toggle("grid", !list);
+    els["lib-layout"].textContent = list ? "▦ Covers" : "☰ List";
+  }
+  els["lib-layout"].addEventListener("click", function () {
+    var list = els["lib-list"].classList.contains("grid");
+    try { localStorage.setItem(LAYOUT, list ? "list" : "grid"); } catch (e) {}
+    applyLayout();
+  });
+  applyLayout();
   els["lib-source"].addEventListener("change", renderLibrary);
   els["lib-lang"].addEventListener("change", renderLibrary);
   els["lib-state"].addEventListener("change", renderLibrary);
@@ -1661,7 +1783,7 @@ _READER_HTML = """<!DOCTYPE html>
     tagTimer = setTimeout(renderLibrary, 150);
   });
   els["lib-clear"].addEventListener("click", function () {
-    els["lib-kind"].value = ""; els["lib-tag"].value = ""; els["lib-source"].value = "";
+    els["lib-kind"].value = ""; els["lib-dl"].value = ""; els["lib-tag"].value = ""; els["lib-source"].value = "";
     els["lib-lang"].value = ""; els["lib-state"].value = ""; els["lib-progress"].value = ""; els["lib-favonly"].checked = false;
     els["lib-len"].value = ""; els["lib-len-min"].value = ""; els["lib-len-max"].value = "";
     els["lib-len-custom"].classList.add("hidden"); els["lib-nobl"].checked = false; els["lib-dupes"].checked = false; els["lib-shelf"].value = ""; els["lib-nomtl"].checked = false; els["lib-noch"].checked = false; lib.cat = "";
@@ -2744,9 +2866,8 @@ _READER_HTML = """<!DOCTYPE html>
   function applyPrefs() {
     document.body.classList.toggle("t-light", prefs.theme === "light");
     document.body.classList.toggle("t-sepia", prefs.theme === "sepia");
-    els["reader-content"].classList.toggle("f-serif", prefs.font === "serif");
-    var wrap = document.querySelector(".wrap");
-    if (wrap) wrap.style.maxWidth = prefs.width === "narrow" ? "620px" : (prefs.width === "wide" ? "1100px" : "860px");
+    els["reader-content"].classList.toggle("f-serif", prefs.font !== "system");
+    els["view-reader"].style.maxWidth = prefs.width === "narrow" ? "600px" : (prefs.width === "wide" ? "980px" : "720px");
     applyFit();
   }
   function chipRow(el, options, key, def) {
@@ -2764,7 +2885,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
   function renderAaPanel() {
     chipRow(els["aa-theme"], [{v:"dark",t:"Dark"},{v:"light",t:"Light"},{v:"sepia",t:"Sepia"}], "theme", "dark");
-    chipRow(els["aa-font"], [{v:"system",t:"System"},{v:"serif",t:"Serif"}], "font", "system");
+    chipRow(els["aa-font"], [{v:"serif",t:"Book"},{v:"system",t:"Plain"}], "font", "serif");
     chipRow(els["aa-width"], [{v:"narrow",t:"Narrow"},{v:"normal",t:"Normal"},{v:"wide",t:"Wide"}], "width", "normal");
     chipRow(els["aa-trans"], [{v:"",t:"Off"},{v:"on",t:"On"}], "translate", "");
   }
@@ -3142,17 +3263,17 @@ _MANIFEST = """{
   "scope": "/reader",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0f1115",
-  "theme_color": "#0f1115",
+  "background_color": "#16141d",
+  "theme_color": "#16141d",
   "icons": [
     { "src": "/reader/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]
 }"""
 
 _ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
-  <rect width="192" height="192" rx="36" fill="#0f1115"/>
-  <rect x="48" y="40" width="96" height="112" rx="8" fill="#3b82f6"/>
-  <rect x="64" y="40" width="16" height="112" fill="#2f6fe0"/>
+  <rect width="192" height="192" rx="36" fill="#16141d"/>
+  <rect x="48" y="40" width="96" height="112" rx="8" fill="#f2b84b"/>
+  <rect x="64" y="40" width="16" height="112" fill="#d99a26"/>
   <rect x="92" y="64" width="40" height="8" rx="4" fill="#cbd2dd"/>
   <rect x="92" y="84" width="40" height="8" rx="4" fill="#cbd2dd"/>
   <rect x="92" y="104" width="28" height="8" rx="4" fill="#cbd2dd"/>
