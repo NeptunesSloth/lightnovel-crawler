@@ -12,7 +12,11 @@ What is done here, in order, and always on copies:
    and the first table page is still there, a new header is written for a copy
    (its page size taken from the journal, or from what the first page says),
    and the copy is rebuilt into a clean database with SQLite's own VACUUM INTO.
-2. Else the newest automatic copy of the database (``backups/database``) that
+2. Else, if the first page itself is damaged, the newest whole copy of it in
+   the write-ahead journal is put in its place, on a copy, and rebuilt the same
+   way: the first page holds the list of tables, and is written to the journal
+   whenever the database grows.
+3. Else the newest automatic copy of the database (``backups/database``) that
    reads cleanly is used.
 
 What was found and done is written to ``database-rescue.txt`` in the library's
@@ -27,7 +31,7 @@ import shutil
 import sqlite3
 import struct
 import time
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Iterator, List, Optional, Tuple
 
 MAGIC = b"SQLite format 3\x00"
 PAGE_SIZES = (4096, 1024, 2048, 8192, 16384, 32768, 65536, 512)
@@ -188,6 +192,69 @@ def _repair_header(database: Path, work: Path, say: Say) -> Optional[Path]:
     return None
 
 
+def _journal_frames(wal: Path, page_size: int) -> Iterator[Tuple[int, int, bytes]]:
+    """Every frame in a write-ahead journal: (order, page number, page), whatever its age.
+
+    Frames left from before the journal last started over are still in the
+    file past the current ones, and still hold pages as they once were.
+    """
+    frame = 24 + page_size
+    with open(wal, "rb") as journal:
+        journal.seek(32)
+        order = 0
+        while True:
+            block = journal.read(frame)
+            if len(block) < frame:
+                return
+            page_number = struct.unpack(">I", block[:4])[0]
+            yield order, page_number, block[24:]
+            order += 1
+
+
+def _page_one_from_journal(database: Path, work: Path, say: Say) -> Optional[Path]:
+    """A clean database from ``database`` with its first page taken from its journal.
+
+    The first page holds the list of tables, and is written to the journal
+    whenever the database grows: on a library downloading all day, there are
+    copies of it there from the last minutes.
+    """
+    wal = Path(f"{database}-wal")
+    page_size = _journal_page_size(database)
+    if page_size is None:
+        say("There is no journal to take its first page from.")
+        return None
+    size = database.stat().st_size
+    pages = [
+        (order, page)
+        for order, number, page in _journal_frames(wal, page_size)
+        if number == 1 and page[:16] == MAGIC and page[100] in (0x0D, 0x05)
+    ]
+    say(f"Its journal holds {len(pages)} cop(ies) of its first page.")
+    newest = sorted(pages, reverse=True)[:5]
+    for tried, (order, page) in enumerate(newest, start=1):
+        say(f"Trying the first page from journal frame {order} ({tried} of {len(newest)})...")
+        first = bytearray(page)
+        # the page count and free list it held were for the file as it was then
+        first[28:32] = struct.pack(">I", max(size, len(first)) // page_size)
+        first[32:40] = bytes(8)
+        first[92:96] = first[24:28]
+        copy = work / "from-journal.db"
+        shutil.copyfile(database, copy)
+        with open(copy, "r+b") as patched:
+            patched.write(bytes(first))
+        for keep_journal in (True, False):
+            Path(f"{copy}-wal").unlink(missing_ok=True)
+            Path(f"{copy}-shm").unlink(missing_ok=True)
+            if keep_journal:
+                shutil.copyfile(wal, f"{copy}-wal")
+            else:
+                say("  trying again without the journal's newest changes")
+            clean = work / "clean.db"
+            if _clean_copy(copy, clean, say):
+                return clean
+    return None
+
+
 def snapshots(library: Path) -> List[Path]:
     """The automatic copies of the database, newest first."""
     folder = library / SNAPSHOTS
@@ -252,6 +319,8 @@ def rescue(database: Path, library: Path, error: str) -> str:
     try:
         found = _repair_header(database, work, say)
         source = "a repaired copy of itself"
+        if found is None:
+            found = _page_one_from_journal(database, work, say)
         if found is None:
             from_snapshot = _from_snapshot(library, work, say)
             if from_snapshot is not None:
