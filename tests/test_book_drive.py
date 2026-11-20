@@ -32,6 +32,12 @@ def make_library(folder: Path) -> None:
     (folder / "exports" / "manifest" / "site.json").write_text("{}")
     (folder / "exports" / "big.zip").write_bytes(b"zip")
     (folder / "library.zip").write_bytes(b"zip")
+    cache = folder / "app-browser" / "Default" / "Cache"
+    cache.mkdir(parents=True)
+    (cache / "data_1").write_bytes(b"cache")
+    (folder / "app-browser" / "Default" / "Preferences").write_text("{}")
+    (folder / "webdriver").mkdir()
+    (folder / "webdriver" / "profile").write_text("x")
 
 
 class SplitTests(unittest.TestCase):
@@ -55,6 +61,10 @@ class SplitTests(unittest.TestCase):
         self.assertTrue((self.here / "exports" / "manifest" / "site.json").is_file())
         self.assertFalse((self.here / "exports" / "big.zip").exists())
         self.assertFalse((self.here / "library.zip").exists())
+        # a browser's profile comes, not its cache; the crawler's is made again
+        self.assertTrue((self.here / "app-browser" / "Default" / "Preferences").is_file())
+        self.assertFalse((self.here / "app-browser" / "Default" / "Cache").exists())
+        self.assertFalse((self.here / "webdriver").exists())
         # nothing of the books was removed; the drive is no longer a library
         self.assertTrue((self.drive / "novels" / "a" / "chapters" / "000001.zst").is_file())
         self.assertFalse((self.drive / "sqlite.db").exists())

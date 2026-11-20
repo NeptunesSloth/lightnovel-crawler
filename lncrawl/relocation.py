@@ -1012,11 +1012,22 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
         _snapshot_database(drive / DATABASE, here / DATABASE, say)
 
     say("Copying the settings")
+    # "webdriver" is a browser profile made again when needed; the browsers'
+    # caches are thousands of small files, slow to read off an external drive
     skip = [*_LEFT_ON_DRIVE, *_DATABASE_FILES, MARKER, STAMP, BOOKS, BOOK_STAMP, MOVE_LOG]
+    skip.append("webdriver")
     for entry in os.scandir(drive):
         if entry.is_file() and (entry.name.endswith(".zip") or entry.name.startswith(DATABASE)):
             skip.append(entry.name)
-    copy_tree(drive, here, tuple(skip), lambda files, size: None)
+    copied = [0, 0]
+
+    def counted(files: int, size: int) -> None:
+        copied[0] += files
+        copied[1] += size
+        if copied[0] % 200 == 0:
+            say(f"Copying the settings: {copied[0]:,} files ({copied[1] // (1024 * 1024):,} MB)")
+
+    copy_tree(drive, here, tuple(skip), counted, skip_folders=_CACHES)
     manifest = drive / "exports" / "manifest"
     if manifest.is_dir():
         copy_tree(manifest, here / "exports" / "manifest", (), lambda files, size: None)
