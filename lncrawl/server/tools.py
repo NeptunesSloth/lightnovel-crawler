@@ -1580,6 +1580,11 @@ _TOOLS_HTML = """<!DOCTYPE html>
   // ---- the library ZIP: made in the background, followed here ----
   var zipTimer = null, zipSeen = null;
   function zipLine(z) {
+    if (z.phase === "making") {
+      var pm = z.total ? Math.floor(100 * z.done / z.total) : 100;
+      return "Making e-books for the novels that have none: " + count(z.done) + " of " + count(z.total) +
+        " (" + pm + "%)" + (z.title ? ": " + z.title : "") + "…";
+    }
     if (z.phase === "finding") return "Finding the books in your library…";
     if (z.phase === "reading") {
       // a past download's ZIP is one of the count, and holds hundreds of books

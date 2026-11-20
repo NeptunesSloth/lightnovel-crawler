@@ -373,6 +373,9 @@ class LibraryExportApiTests(unittest.TestCase):
             db=SimpleNamespace(session=lambda: nullcontext(session)),
             books=SimpleNamespace(folder=lambda: None, plugged=lambda: False),
         )
+        made = patch("lncrawl.services.library_books.make_missing_books", return_value=(0, 0))
+        made.start()
+        self.addCleanup(made.stop)
         # the package re-exports the admin router under the module's own name
         admin = importlib.import_module("lncrawl.server.api.admin")
         patcher = patch.object(admin, "ctx", self.ctx)
