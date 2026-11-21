@@ -1062,7 +1062,19 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
                 f"{copied[1] // mb:,} of {whole[1] // mb:,} MB"
             )
 
-    copy_tree(drive, here, tuple(skip), counted, skip_folders=_CACHES)
+    # A file something still has open (a browser left running from the last
+    # session holds its profile) was waited on for 15 minutes and then ended
+    # the split: it is left behind, and named in move.log, instead.
+    left: List[str] = []
+    copy_tree(
+        drive,
+        here,
+        tuple(skip),
+        counted,
+        skip_folders=_CACHES,
+        left_behind=left,
+        on_left=lambda name, error: _note(drive, f"Left behind, in use: {name} ({error})"),
+    )
     manifest = drive / "exports" / "manifest"
     if manifest.is_dir():
         copy_tree(manifest, here / "exports" / "manifest", (), lambda files, size: None)

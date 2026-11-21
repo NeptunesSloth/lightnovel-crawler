@@ -921,6 +921,25 @@ class JobService:
     ) -> Job:
         data["archive_file"] = archive_file
         data["archive_name"] = archive_name
+        # The same ZIP imported twice at once: both wrote the same novels'
+        # files, Windows refused each one the other had open ("Access is
+        # denied") and the database was locked between them. The one already
+        # under way is the import asked for.
+        with ctx.db.session() as sess:
+            running = sess.exec(
+                sq.select(Job)
+                .where(
+                    Job.type == JobType.IMPORT_ARCHIVE,
+                    sq.col(Job.is_done).is_(False),
+                    sq.col(Job.status).in_(
+                        [JobStatus.PENDING, JobStatus.RUNNING, JobStatus.PAUSED]
+                    ),
+                    Job.extra["archive_file"].as_string() == archive_file,
+                )
+                .limit(1)
+            ).first()
+        if running is not None:
+            return running
         return self._create(
             user=user,
             data=data,
