@@ -980,6 +980,31 @@ def _bar(done: float, total: float, width: int = 30) -> str:
     return f"[{'#' * filled}{'-' * (width - filled)}]  {int(part * 100)}%"
 
 
+def _database_free(drive: Path) -> None:
+    """Raise OSError, saying so, when the drive's database is open in another program.
+
+    The split ends by renaming it, which Windows refuses while anything has it
+    open: a copy of the app left running, which would also go on writing to
+    it while this one used the copy. Found out at the end, after the database,
+    the settings and every cover had been copied, the split was lost; renamed
+    there and back first, it stops before anything is done.
+    """
+    for name in _DATABASE_FILES:
+        file = drive / name
+        if not file.exists():
+            continue
+        trial = file.with_name(f"{name}.split-check")
+        try:
+            os.replace(file, trial)
+        except OSError as error:
+            raise OSError(
+                f"{file} is open in another program, most likely another copy of "
+                f"Lightnovel Crawler still running: close it (Task Manager, every "
+                f"lncrawl) and start the app again ({error})"
+            ) from error
+        os.replace(trial, file)
+
+
 def begin_split(base: Path, drive: Path, here: Path) -> None:
     """At the next start, keep the library in ``here`` and its books where they are.
 
@@ -1013,6 +1038,7 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
     say: Report = report or (lambda text: None)
     if not drive.is_dir():
         raise OSError(f"{drive} cannot be found: connect that drive and start again")
+    _database_free(drive)
     here.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     _note(drive, f"Keeping the library in {here} and the books here")
@@ -1115,7 +1141,14 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
     (here / STAMP).write_text(f"{IN_USE} since the split from {drive}\n", encoding="utf-8")
     for name in _DATABASE_FILES:  # the copy in ``here`` is the library's database now
         if (drive / name).exists():
-            os.replace(drive / name, drive / f"{name}.before-split-{stamp}")
+            try:
+                os.replace(drive / name, drive / f"{name}.before-split-{stamp}")
+            except OSError as error:
+                raise OSError(
+                    f"{drive / name} was opened by another program during the split, most "
+                    f"likely another copy of Lightnovel Crawler: close it and start again "
+                    f"({error})"
+                ) from error
     try:
         (drive / STAMP).unlink()
     except FileNotFoundError:
