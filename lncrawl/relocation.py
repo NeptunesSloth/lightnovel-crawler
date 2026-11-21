@@ -309,10 +309,13 @@ def resolve(base: Path) -> Path:
             )
             return Path(split_to)
         except Exception as error:  # the library is whole where it was: use it, and say why
+            # kept until the next try, for the books section of Tools to show
+            reason = str(error) or type(error).__name__
             try:
-                _update_marker(base, drop=("split_to",), failed=f"{error}", failed_target=split_to)
+                _update_marker(base, drop=("split_to",), split_failed=reason, split_target=split_to)
             except OSError:
                 pass
+            _note(current, f"Could not keep the library in {split_to}: {error!r}")
             print(f"Could not split the library: {error}; still using {current}.", file=sys.stderr)
         marker = read_marker(base)
     target = marker.get("moving_to")
@@ -992,7 +995,7 @@ def begin_split(base: Path, drive: Path, here: Path) -> None:
             raise ValueError(f"{here} cannot be in {drive}, or {drive} in it")
     if here.exists() and not here.is_dir():
         raise ValueError(f"{here} is a file, not a folder")
-    _update_marker(base, split_to=str(here))
+    _update_marker(base, drop=("split_failed", "split_target"), split_to=str(here))
 
 
 def cancel_split(base: Path) -> None:
@@ -1110,7 +1113,8 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
         for key, value in read_marker(base).items()
         # an earlier move's old copy may be ``here`` itself: never removed now
         if key
-        not in ("split_to", "path", "state", "failed", "failed_target")
+        not in ("split_to", "path", "state", "failed", "failed_target", "split_failed")
+        + ("split_target",)
         + ("cleanup", "old", "refresh", "left_behind")
     }
     if _key(here) != _key(base):

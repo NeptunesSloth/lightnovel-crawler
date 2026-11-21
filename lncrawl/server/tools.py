@@ -2018,7 +2018,13 @@ _TOOLS_HTML = """<!DOCTYPE html>
       box.appendChild(undo);
       return;
     }
-    if (!b.configured) { p.textContent = "All of the library is in " + b.library + "."; return; }
+    if (!b.configured) {
+      p.textContent = "All of the library is in " + b.library + "." + (b.split_failed
+        ? " The last try at keeping it on this computer did not finish, so it carried on from there: " +
+          b.split_failed + ". Each step it got through is in " + b.library + String.fromCharCode(92) + "move.log."
+        : "");
+      return;
+    }
     var line = (b.plugged ? "The books are in " + b.folder + (b.free != null ? " (" + fmtSize(b.free) + " free)" : "")
       : "The drive with the books (" + b.folder + ") is not plugged in: what is on it can't be read until it is.") +
       " " + b.on_drive.length + " novel(s) there; the rest are on this computer.";

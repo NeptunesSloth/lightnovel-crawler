@@ -286,6 +286,14 @@ async function clearFilters(page) {
   await D.close();
 
   console.log("Books on a drive");
+  const N = await open(browser);
+  await N.evaluate(() => document.getElementById("lib-select").click());
+  check("Keep on this computer is there in Select mode without a drive", await N.isVisible("#lib-here"));
+  let told = "";
+  N.once("dialog", (d) => { told = d.message(); d.accept(); });
+  await N.click("#lib-here"); await N.waitForTimeout(200);
+  check("without a drive it says how to set one up", /Books on a drive/.test(told), told);
+  await N.close();
   const K = await open(browser);
   let moved = null;
   await K.route("**/api/books", (r) => r.fulfill({ json: {

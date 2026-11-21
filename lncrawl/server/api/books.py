@@ -22,7 +22,9 @@ def _refuse(error: Exception) -> ServerError:
 @router.get("", summary="Where the books are: the drive, whether it is plugged in, what is on it")
 def book_drive() -> Dict[str, Any]:
     status = ctx.books.status()
-    status["split_to"] = read_marker(ctx.config.app.base_dir).get("split_to")
+    marker = read_marker(ctx.config.app.base_dir)
+    status["split_to"] = marker.get("split_to")
+    status["split_failed"] = marker.get("split_failed")  # why the last try did not finish
     status["library"] = str(ctx.config.app.app_dir)
     status["base"] = str(ctx.config.app.base_dir)
     return status

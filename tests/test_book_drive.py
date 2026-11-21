@@ -95,8 +95,12 @@ class SplitTests(unittest.TestCase):
         with patch.object(relocation, "_snapshot_database", side_effect=OSError("disk full")):
             self.assertEqual(relocation.resolve(self.base), self.drive)
         self.assertTrue((self.drive / "sqlite.db").is_file())
-        self.assertNotIn("split_to", relocation.read_marker(self.base))
-        self.assertIn("disk full", relocation.read_marker(self.base)["failed"])
+        marker = relocation.read_marker(self.base)
+        self.assertNotIn("split_to", marker)
+        self.assertIn("disk full", marker["split_failed"])  # kept for Tools to show
+        self.assertIn("disk full", (self.drive / relocation.MOVE_LOG).read_text())
+        relocation.begin_split(self.base, self.drive, self.here)  # a new try forgets it
+        self.assertNotIn("split_failed", relocation.read_marker(self.base))
 
 
 class BookDriveTests(unittest.TestCase):
