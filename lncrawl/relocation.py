@@ -309,10 +309,13 @@ def resolve(base: Path) -> Path:
             )
             return Path(split_to)
         except Exception as error:  # the library is whole where it was: use it, and say why
+            # kept until the next try, for the books section of Tools to show
+            reason = str(error) or type(error).__name__
             try:
-                _update_marker(base, drop=("split_to",), failed=f"{error}", failed_target=split_to)
+                _update_marker(base, drop=("split_to",), split_failed=reason, split_target=split_to)
             except OSError:
                 pass
+            _note(current, f"Could not keep the library in {split_to}: {error!r}")
             print(f"Could not split the library: {error}; still using {current}.", file=sys.stderr)
         marker = read_marker(base)
     target = marker.get("moving_to")
@@ -977,6 +980,31 @@ def _bar(done: float, total: float, width: int = 30) -> str:
     return f"[{'#' * filled}{'-' * (width - filled)}]  {int(part * 100)}%"
 
 
+def _database_free(drive: Path) -> None:
+    """Raise OSError, saying so, when the drive's database is open in another program.
+
+    The split ends by renaming it, which Windows refuses while anything has it
+    open: a copy of the app left running, which would also go on writing to
+    it while this one used the copy. Found out at the end, after the database,
+    the settings and every cover had been copied, the split was lost; renamed
+    there and back first, it stops before anything is done.
+    """
+    for name in _DATABASE_FILES:
+        file = drive / name
+        if not file.exists():
+            continue
+        trial = file.with_name(f"{name}.split-check")
+        try:
+            os.replace(file, trial)
+        except OSError as error:
+            raise OSError(
+                f"{file} is open in another program, most likely another copy of "
+                f"Lightnovel Crawler still running: close it (Task Manager, every "
+                f"lncrawl) and start the app again ({error})"
+            ) from error
+        os.replace(trial, file)
+
+
 def begin_split(base: Path, drive: Path, here: Path) -> None:
     """At the next start, keep the library in ``here`` and its books where they are.
 
@@ -992,7 +1020,7 @@ def begin_split(base: Path, drive: Path, here: Path) -> None:
             raise ValueError(f"{here} cannot be in {drive}, or {drive} in it")
     if here.exists() and not here.is_dir():
         raise ValueError(f"{here} is a file, not a folder")
-    _update_marker(base, split_to=str(here))
+    _update_marker(base, drop=("split_failed", "split_target"), split_to=str(here))
 
 
 def cancel_split(base: Path) -> None:
@@ -1010,6 +1038,7 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
     say: Report = report or (lambda text: None)
     if not drive.is_dir():
         raise OSError(f"{drive} cannot be found: connect that drive and start again")
+    _database_free(drive)
     here.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     _note(drive, f"Keeping the library in {here} and the books here")
@@ -1059,7 +1088,19 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
                 f"{copied[1] // mb:,} of {whole[1] // mb:,} MB"
             )
 
-    copy_tree(drive, here, tuple(skip), counted, skip_folders=_CACHES)
+    # A file something still has open (a browser left running from the last
+    # session holds its profile) was waited on for 15 minutes and then ended
+    # the split: it is left behind, and named in move.log, instead.
+    left: List[str] = []
+    copy_tree(
+        drive,
+        here,
+        tuple(skip),
+        counted,
+        skip_folders=_CACHES,
+        left_behind=left,
+        on_left=lambda name, error: _note(drive, f"Left behind, in use: {name} ({error})"),
+    )
     manifest = drive / "exports" / "manifest"
     if manifest.is_dir():
         copy_tree(manifest, here / "exports" / "manifest", (), lambda files, size: None)
@@ -1100,7 +1141,14 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
     (here / STAMP).write_text(f"{IN_USE} since the split from {drive}\n", encoding="utf-8")
     for name in _DATABASE_FILES:  # the copy in ``here`` is the library's database now
         if (drive / name).exists():
-            os.replace(drive / name, drive / f"{name}.before-split-{stamp}")
+            try:
+                os.replace(drive / name, drive / f"{name}.before-split-{stamp}")
+            except OSError as error:
+                raise OSError(
+                    f"{drive / name} was opened by another program during the split, most "
+                    f"likely another copy of Lightnovel Crawler: close it and start again "
+                    f"({error})"
+                ) from error
     try:
         (drive / STAMP).unlink()
     except FileNotFoundError:
@@ -1110,7 +1158,8 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
         for key, value in read_marker(base).items()
         # an earlier move's old copy may be ``here`` itself: never removed now
         if key
-        not in ("split_to", "path", "state", "failed", "failed_target")
+        not in ("split_to", "path", "state", "failed", "failed_target", "split_failed")
+        + ("split_target",)
         + ("cleanup", "old", "refresh", "left_behind")
     }
     if _key(here) != _key(base):

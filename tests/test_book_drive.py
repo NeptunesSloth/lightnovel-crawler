@@ -86,6 +86,21 @@ class SplitTests(unittest.TestCase):
         settings = [text for text in heard if "Step 2 of 3" in text and "files" in text]
         self.assertIn("[" + "#" * 30 + "]", settings[-1])
 
+    def test_a_database_another_copy_has_open_stops_it_before_anything_is_copied(self) -> None:
+        relocation.begin_split(self.base, self.drive, self.here)
+        real = relocation.os.replace
+
+        def in_use(source, target):
+            if str(source).endswith("sqlite.db") and str(target).endswith(".split-check"):
+                raise PermissionError(32, "being used by another process")
+            return real(source, target)
+
+        with patch.object(relocation.os, "replace", in_use):
+            self.assertEqual(relocation.resolve(self.base), self.drive)
+        self.assertIn("another copy", relocation.read_marker(self.base)["split_failed"])
+        self.assertFalse((self.here / "sqlite.db").exists())  # nothing was copied
+        self.assertTrue((self.drive / "sqlite.db").is_file())
+
     def test_a_split_into_the_drive_itself_is_refused(self) -> None:
         with self.assertRaises(ValueError):
             relocation.begin_split(self.base, self.drive, self.drive / "inside")
@@ -95,8 +110,12 @@ class SplitTests(unittest.TestCase):
         with patch.object(relocation, "_snapshot_database", side_effect=OSError("disk full")):
             self.assertEqual(relocation.resolve(self.base), self.drive)
         self.assertTrue((self.drive / "sqlite.db").is_file())
-        self.assertNotIn("split_to", relocation.read_marker(self.base))
-        self.assertIn("disk full", relocation.read_marker(self.base)["failed"])
+        marker = relocation.read_marker(self.base)
+        self.assertNotIn("split_to", marker)
+        self.assertIn("disk full", marker["split_failed"])  # kept for Tools to show
+        self.assertIn("disk full", (self.drive / relocation.MOVE_LOG).read_text())
+        relocation.begin_split(self.base, self.drive, self.here)  # a new try forgets it
+        self.assertNotIn("split_failed", relocation.read_marker(self.base))
 
 
 class BookDriveTests(unittest.TestCase):

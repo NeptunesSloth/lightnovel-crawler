@@ -1667,11 +1667,12 @@ _READER_HTML = """<!DOCTYPE html>
     els["lib-del"].classList.toggle("hidden", !lib.manage);
     els["lib-getsel"].textContent = "⬇ Get chapters (" + n + ")";
     els["lib-getsel"].classList.toggle("hidden", !lib.manage);
-    var drive = lib.books && lib.books.configured;
+    // shown in Select mode whether or not the books have a drive yet: a button
+    // that was not there left people looking for it (clicking it says how)
     els["lib-here"].textContent = "💻 Keep on this computer (" + n + ")";
-    els["lib-here"].classList.toggle("hidden", !lib.manage || !drive);
+    els["lib-here"].classList.toggle("hidden", !lib.manage);
     els["lib-todrive"].textContent = "💾 Send to the drive (" + n + ")";
-    els["lib-todrive"].classList.toggle("hidden", !lib.manage || !drive);
+    els["lib-todrive"].classList.toggle("hidden", !lib.manage);
   }
 
   // ---- Books kept on a drive that is not always plugged in ----
@@ -1690,8 +1691,16 @@ _READER_HTML = """<!DOCTYPE html>
     return !!(lib.books && lib.books.configured && !lib.books.plugged && lib.books.away[n.id]);
   }
   function moveBooks(to, btn) {
+    if (!lib.books || !lib.books.configured) {
+      alert("Your books are not on a drive of their own yet, so there is nothing to " +
+        (to === "drive" ? "send to it" : "bring to this computer") + ".\\n\\n" +
+        "Set it up in Tools, Library and drives, \\"Books on a drive that is not always plugged in\\": " +
+        "with the library on an external drive, \\"Keep the library here\\" (then close and reopen the app); " +
+        "with it on this computer, choose a folder on the drive for the books.");
+      return;
+    }
     var ids = Object.keys(lib.sel);
-    if (!ids.length) return;
+    if (!ids.length) { alert("Pick the novels first: click their covers."); return; }
     if (!lib.books.plugged) { alert("Plug in the drive with the books (" + lib.books.folder + ") first."); return; }
     btn.disabled = true;
     api("/books/move", { method: "POST", body: JSON.stringify({ ids: ids, to: to }) }).then(function (b) {

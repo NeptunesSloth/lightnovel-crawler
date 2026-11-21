@@ -3,8 +3,10 @@ import logging
 import os
 from pathlib import Path
 import shlex
+import stat
 import subprocess
 import tempfile
+import time
 from typing import Iterator, Union
 
 from slugify import slugify
@@ -32,13 +34,36 @@ def atomic_write(path: Union[str, Path], mode: str = "wb") -> Iterator:
     try:
         with os.fdopen(fd, mode) as f:
             yield f
-        os.replace(tmp_name, path)
+        _replace(tmp_name, path)
     except BaseException:
         try:
             os.unlink(tmp_name)
         except OSError:
             pass
         raise
+
+
+# Windows refuses to replace a file another program has open for a moment (an
+# antivirus scan, the search indexer, a reader) or one marked read-only: tried
+# again this many times, a little longer each time.
+REPLACE_TRIES = 5
+REPLACE_WAIT = 0.2
+_WINDOWS = os.name == "nt"
+
+
+def _replace(source: str, path: Path) -> None:
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(source, path)
+            return
+        except PermissionError:
+            if not _WINDOWS or attempt + 1 >= REPLACE_TRIES:
+                raise
+            try:
+                os.chmod(path, stat.S_IREAD | stat.S_IWRITE)  # read-only: allow it
+            except OSError:
+                pass
+            time.sleep(REPLACE_WAIT * (attempt + 1))
 
 
 def format_size(num_bytes: int, decimals: int = 1, suffix: str = "B") -> str:
