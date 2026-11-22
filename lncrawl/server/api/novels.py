@@ -32,6 +32,23 @@ def repair_novel(
     return ctx.jobs.fetch_missing_chapters(user, novel_id, rebuild_epub=True)
 
 
+@router.post(
+    "/{novel_id}/ebook",
+    summary="This novel's e-book with every chapter it has, made now if need be",
+)
+def novel_ebook(novel_id: str = Path()) -> Artifact:
+    from ...services.library_books import book_for
+
+    ctx.novels.get(novel_id)
+    books = getattr(ctx, "books", None)
+    if books is not None and books.unavailable(novel_id):
+        raise ServerError(503, f"This novel is on the book drive ({books.folder()}): plug it in")
+    try:
+        return book_for(novel_id)
+    except ValueError as error:
+        raise ServerError(400, str(error)) from error
+
+
 @router.get("/{novel_id}/cover", summary="Serve the novel cover image (for the reader)")
 def novel_cover(
     request: Request,

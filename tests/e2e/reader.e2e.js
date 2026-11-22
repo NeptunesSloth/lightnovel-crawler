@@ -324,6 +324,23 @@ async function clearFilters(page) {
   check("no errors with books on a drive", K.errors.length === 0, K.errors);
   await K.close();
 
+  console.log("An e-book for the phone");
+  const E = await open(browser);
+  let made = null;
+  await E.route(/\/api\/novel\/[^/]+\/ebook$/, (r) => { made = r.request().method();
+    r.fulfill({ json: { id: "a1", file_name: "Reading Now.epub", output_file: "novels/x/artifacts/Reading Now.epub" } }); });
+  await E.route("**/static/**", (r) => r.fulfill({ body: "PK epub", contentType: "application/epub+zip" }));
+  await search(E, "reading now");
+  await E.click("#lib-list .libcard h3"); await E.waitForTimeout(600);
+  const ebookDownload = E.waitForEvent("download", { timeout: 5000 }).catch(() => null);
+  await E.click("#ebook-btn");
+  const file = await ebookDownload;
+  check("Download e-book makes it and saves the file", made === "POST" && file && file.suggestedFilename() === "Reading Now.epub",
+    [made, file && file.suggestedFilename()]);
+  check("it says where it went", /Saved Reading Now\.epub/.test(await E.textContent("#offline-msg")), await E.textContent("#offline-msg"));
+  check("no errors downloading an e-book", E.errors.length === 0, E.errors);
+  await E.close();
+
   console.log("Delete unfinished novels");
   const U = await open(browser);
   let asked = null, unfPolls = 0;
