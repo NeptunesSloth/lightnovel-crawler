@@ -1020,7 +1020,45 @@ class JobService:
             count = getattr(result, "rowcount", 0) or 0
         if count:
             ctx.logger.info(f"Requeued {count} stale running job(s) on startup")
+        self.cancel_duplicate_imports()
         return count
+
+    def cancel_duplicate_imports(self) -> int:
+        """Keep one unfinished import per archive; cancel the others. How many went.
+
+        Three imports of one ZIP, queued before duplicates were refused, started
+        again together at every launch: they wrote the same novels at once, the
+        database was locked between them and manga lost their pages.
+        """
+        with ctx.db.session() as sess:
+            jobs = sess.exec(
+                sq.select(Job)
+                .where(
+                    Job.type == JobType.IMPORT_ARCHIVE,
+                    sq.col(Job.is_done).is_(False),
+                    sq.col(Job.status).in_(
+                        [JobStatus.PENDING, JobStatus.RUNNING, JobStatus.PAUSED]
+                    ),
+                )
+                .order_by(sq.col(Job.created_at))
+            ).all()
+        seen = set()
+        extra = []
+        for job in jobs:
+            archive = (job.extra or {}).get("archive_file")
+            if not archive:
+                continue
+            if archive in seen:
+                extra.append(job.id)
+            seen.add(archive)
+        for job_id in extra:
+            try:
+                self.cancel(job_id, "the app (the same archive is being imported already)")
+            except Exception as error:
+                ctx.logger.warn(f"Could not cancel duplicate import {job_id}: {error}")
+        if extra:
+            ctx.logger.info(f"Cancelled {len(extra)} duplicate import(s) of the same archive")
+        return len(extra)
 
     # Jobs that put things in the library, shown together on the Downloads page.
     DOWNLOAD_TYPES = (

@@ -1,12 +1,16 @@
+import logging
 import re
 import shutil
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import sqlmodel as sq
 
 from ..context import ctx
 from ..dao import (
     Artifact,
+    Chapter,
+    ChapterImage,
+    ChapterTranslation,
     LanguageCode,
     Library,
     LibraryNovel,
@@ -15,10 +19,27 @@ from ..dao import (
     ReadHistory,
     User,
     UserRole,
+    Volume,
+    VolumeTranslation,
 )
 from ..exceptions import ServerErrors
 from ..server.models import Paginated
 from ..utils.url_tools import extract_host
+
+logger = logging.getLogger(__name__)
+
+# Everything that belongs to one novel, children before parents.
+_NOVEL_ROWS: Tuple[Any, ...] = (
+    ChapterImage,
+    ChapterTranslation,
+    Chapter,
+    VolumeTranslation,
+    Volume,
+    Artifact,
+    NovelTranslation,
+    ReadHistory,
+    LibraryNovel,
+)
 
 
 def _norm(text: str) -> str:
@@ -191,14 +212,37 @@ class NovelService:
             books.forget(novel_id)
         with ctx.db.session() as sess:
             novel = sess.get(Novel, novel_id)
-            if not novel:
-                return True
-            novel_title = novel.title
-            sess.delete(novel)
+            novel_title = novel.title if novel else ""
+            # SQLite is not told to cascade, so what belongs to the novel is
+            # removed by hand: its page rows left behind made a later import of
+            # the same manga show no pages at all
+            for table in _NOVEL_ROWS:
+                sess.exec(sq.delete(table).where(sq.col(table.novel_id) == novel_id))
+            if novel:
+                sess.delete(novel)
             sess.commit()
+        if not novel:
+            return True
         ctx.recommendations.invalidate(novel_id)
         ctx.recommendations.index_remove(novel_id, novel_title)
         return True
+
+    def remove_orphans(self) -> int:
+        """Remove rows left behind by novels deleted before deleting cleaned up. How many.
+
+        Run when the app starts. Files are not touched: a deleted novel's folder
+        went with it.
+        """
+        removed = 0
+        with ctx.db.session() as sess:
+            novels = sq.select(Novel.id)
+            for table in _NOVEL_ROWS:
+                result = sess.exec(sq.delete(table).where(sq.col(table.novel_id).not_in(novels)))
+                removed += getattr(result, "rowcount", 0) or 0
+            sess.commit()
+        if removed:
+            logger.info(f"Removed {removed} row(s) left behind by deleted novels")
+        return removed
 
     def find_by_url(self, novel_url: str) -> Optional[Novel]:
         with ctx.db.session() as sess:
