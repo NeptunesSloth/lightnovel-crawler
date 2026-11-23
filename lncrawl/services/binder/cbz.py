@@ -7,6 +7,7 @@ import zipfile
 from ...context import ctx
 from ...dao import Artifact
 from ...exceptions import AbortedException
+from ...utils.file_tools import move_into_place
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,5 @@ def make_cbz(working_dir: Path, artifact: Artifact, signal: Event = Event(), **k
     with zipfile.ZipFile(tmp_file, "w", zipfile.ZIP_STORED) as zf:
         for arcname, file in pages:
             zf.write(file, arcname=arcname)
-    out_file.unlink(True)
-    tmp_file.rename(out_file)
+    move_into_place(tmp_file, out_file)
     logger.info(f"Created: {out_file} ({len(pages)} pages)")

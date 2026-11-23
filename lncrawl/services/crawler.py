@@ -37,6 +37,13 @@ POOL_MAX_IDLE: int = 8
 _PoolKey = Tuple[str, str]
 
 
+def _reachable(novel_id: str) -> None:
+    """Stop (BookDriveUnplugged) when the novel's books are on a drive that is not plugged in."""
+    books = getattr(ctx, "books", None)
+    if books is not None:
+        books.require(novel_id)
+
+
 class CrawlerService:
     """Fetches novels, chapters and images through source crawlers.
 
@@ -341,6 +348,7 @@ class CrawlerService:
     ) -> Chapter:
         chapter = ctx.chapters.get(chapter_id)
         novel = ctx.novels.get(chapter.novel_id)
+        _reachable(chapter.novel_id)
         try:
             url = HttpUrl(chapter.url)
         except Exception:
@@ -469,6 +477,7 @@ class CrawlerService:
     ) -> ChapterImage:
         image = ctx.images.get(image_id)
         novel = ctx.novels.get(image.novel_id)
+        _reachable(image.novel_id)
         try:
             url = HttpUrl(image.url)
         except Exception:

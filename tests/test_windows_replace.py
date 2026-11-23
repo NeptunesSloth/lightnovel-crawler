@@ -98,6 +98,12 @@ class SplitLeavesInUseFilesTests(unittest.TestCase):
             (drive / "app-browser").mkdir()
             (drive / "app-browser" / "Cookies").write_text("locked")
             (drive / "config.json").write_text("{}")
+            import sqlite3
+
+            database = sqlite3.connect(str(drive / "sqlite.db"))
+            database.execute("CREATE TABLE novels (id TEXT)")
+            database.commit()
+            database.close()
             real = relocation.shutil.copy2
 
             def locked(source, target, *args, **kwargs):

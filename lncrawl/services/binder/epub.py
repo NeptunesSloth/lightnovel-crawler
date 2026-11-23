@@ -10,6 +10,7 @@ from ...assets.epub import epub_chapter_xhtml, epub_cover_xhtml, epub_style_css
 from ...context import ctx
 from ...dao import Artifact, Chapter, LanguageCode, Novel, Volume
 from ...exceptions import AbortedException
+from ...utils.file_tools import move_into_place
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +248,5 @@ def make_epub(working_dir: Path, artifact: Artifact, signal=Event(), **kwargs) -
     # save file
     epub.write_epub(str(tmp_file), book, {})
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.unlink(True)
-    tmp_file.rename(out_file)
+    move_into_place(tmp_file, out_file)
     logger.info(f"Created: {out_file}")

@@ -3,6 +3,7 @@ import logging
 import os
 from pathlib import Path
 import shlex
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -64,6 +65,28 @@ def _replace(source: str, path: Path) -> None:
             except OSError:
                 pass
             time.sleep(REPLACE_WAIT * (attempt + 1))
+
+
+def move_into_place(made: Union[str, Path], target: Union[str, Path]) -> None:
+    """Put a finished file at ``target``, replacing what is there only once it has arrived.
+
+    The e-book makers deleted the old book and then renamed the new one over
+    from the work folder. With the work folder on one drive and the novel on
+    another, Windows refuses that rename, and the old book was already gone.
+    The new file is brought beside the target first, then swapped in.
+    """
+    made, target = Path(made), Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    arriving = target.with_name(f".{target.name}.arriving")
+    try:
+        shutil.move(str(made), str(arriving))  # a copy when it is another drive
+        _replace(str(arriving), target)
+    except BaseException:
+        try:
+            arriving.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def format_size(num_bytes: int, decimals: int = 1, suffix: str = "B") -> str:
