@@ -45,21 +45,42 @@ class DatabaseUnreadable(Exception):
     """The database cannot be read, and could not be got back. Nothing was changed."""
 
 
-def unreadable(database: Path) -> Optional[str]:
-    """Why ``database`` cannot be opened, or None when it can (or is not there yet)."""
+# What SQLite says of a file that is damaged. Anything else ("disk I/O error"
+# from a drive still waking, "database is locked" by another copy of the app)
+# says nothing about the file: a repair then copied a gigabyte, rebuilt it and
+# swapped it in for a database that was healthy.
+_DAMAGED = ("not a database", "malformed", "disk image")
+GONE = "the database file is missing or empty, and the library has automatic copies of it"
+
+
+def unreadable(database: Path, library: Optional[Path] = None) -> Optional[str]:
+    """Why ``database`` cannot be read and should be got back, or None.
+
+    None when it opens, when it is not there yet, and when it only cannot be
+    reached just now. With ``library``, a database that is missing or empty
+    while the library holds automatic copies of it counts as unreadable: a
+    cable pulled mid-write can leave it at 0 bytes, and starting from an empty
+    one showed an empty library and soon rotated the good copies away.
+    """
     if not database.is_file() or database.stat().st_size == 0:
+        if library is not None and snapshots(library):
+            return GONE
         return None
-    try:
-        connection = sqlite3.connect(f"file:{database.as_posix()}?mode=ro", uri=True, timeout=30)
-    except sqlite3.Error as error:
-        return str(error)
-    try:
-        connection.execute("SELECT count(*) FROM sqlite_master").fetchone()
-        return None
-    except sqlite3.DatabaseError as error:
-        return str(error)
-    finally:
-        connection.close()
+    for attempt in range(4):
+        try:
+            connection = sqlite3.connect(
+                f"file:{database.as_posix()}?mode=ro", uri=True, timeout=30
+            )
+            try:
+                connection.execute("SELECT count(*) FROM sqlite_master").fetchone()
+                return None
+            finally:
+                connection.close()
+        except sqlite3.Error as error:
+            if any(sign in str(error).lower() for sign in _DAMAGED):
+                return str(error)
+            time.sleep(2 * (attempt + 1))  # the drive may be waking: look again
+    return None
 
 
 def _journal_page_size(database: Path) -> Optional[int]:
@@ -591,7 +612,8 @@ def _rescue(
 ) -> str:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     say(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')}: {database} cannot be read: {error}")
-    size = database.stat().st_size
+    present = database.is_file() and database.stat().st_size > 0
+    size = database.stat().st_size if present else 0
     wal = Path(f"{database}-wal")
     wal_size = wal.stat().st_size if wal.is_file() else 0
     say(f"Its journal ({wal.name}): {f'{wal_size:,} bytes' if wal.is_file() else 'none'}")
@@ -612,11 +634,11 @@ def _rescue(
     work = library / "tmp" / f"rescue-{stamp}"
     work.mkdir(parents=True, exist_ok=True)
     try:
-        found = _repair_header(database, work, say)
+        found = _repair_header(database, work, say) if present else None
         source = "a repaired copy of itself"
-        if found is None:
+        if found is None and present:
             found = _page_one_from_journal(database, work, say)
-        if found is None:
+        if found is None and present:
             found = _salvage(database, work, say)
             if found is not None:
                 source = "a copy rebuilt from what was left in it"

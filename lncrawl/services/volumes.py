@@ -4,7 +4,7 @@ import sqlmodel as sq
 
 from ..context import ctx
 from ..core import Volume as CrawlerVolume
-from ..dao import LanguageCode, User, UserRole, Volume, VolumeTranslation
+from ..dao import Chapter, LanguageCode, User, UserRole, Volume, VolumeTranslation
 from ..exceptions import ServerErrors
 
 
@@ -112,7 +112,19 @@ class VolumeService:
             wk = set(wanted.keys())
             ek = set(existing.keys())
             to_insert = wk - ek
-            to_delete = ek - wk
+            # A volume that still holds chapters stays (downloaded chapters are
+            # kept when a site's list comes back short): without it they fell
+            # out of every e-book made afterwards.
+            to_delete = set()
+            if wanted:
+                for serial in ek - wk:
+                    held = sess.exec(
+                        sq.select(Chapter.id)
+                        .where(Chapter.volume_id == existing[serial].id)
+                        .limit(1)
+                    ).first()
+                    if held is None:
+                        to_delete.add(serial)
             to_update = ek & wk
 
             if to_insert:

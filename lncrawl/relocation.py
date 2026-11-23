@@ -1016,8 +1016,11 @@ def begin_split(base: Path, drive: Path, here: Path) -> None:
     if not here.is_absolute():
         raise ValueError(f"{here} is not a full path to a folder")
     for one, other in ((here, drive), (drive, here)):
-        if _key(one) == _key(other) or _key(one).startswith(_key(other) + os.sep):
-            raise ValueError(f"{here} cannot be in {drive}, or {drive} in it")
+        try:  # relative_to copes with a drive's root ("F:\\"), which adding a separator did not
+            Path(_key(one)).relative_to(Path(_key(other)))
+        except ValueError:
+            continue
+        raise ValueError(f"{here} cannot be in {drive}, or {drive} in it")
     if here.exists() and not here.is_dir():
         raise ValueError(f"{here} is a file, not a folder")
     _update_marker(base, drop=("split_failed", "split_target"), split_to=str(here))
@@ -1038,22 +1041,37 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
     say: Report = report or (lambda text: None)
     if not drive.is_dir():
         raise OSError(f"{drive} cannot be found: connect that drive and start again")
+    if not (drive / DATABASE).is_file() or (drive / DATABASE).stat().st_size == 0:
+        # Without this a second try after one that got as far as renaming the
+        # drive's database copied an empty one over the good copy in ``here``.
+        earlier = sorted(drive.glob(f"{DATABASE}.before-split-*"))
+        raise OSError(
+            f"{drive} has no database to copy"
+            + (
+                f" (an earlier try left {earlier[-1].name} there: nothing was changed)"
+                if earlier
+                else ""
+            )
+        )
     _database_free(drive)
     here.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     _note(drive, f"Keeping the library in {here} and the books here")
+    say(f"Step 1 of 3: copying the database\n{_bar(0, 1)}")
+
+    def database(text: str) -> None:
+        percent = int(text.rsplit(" ", 1)[-1].rstrip("%")) if text.endswith("%") else 0
+        say(f"Step 1 of 3: copying the database\n{_bar(percent, 100)}")
+
+    # Copied beside the one already here (an older install's, or an earlier
+    # try's) and put in its place only once it is whole.
+    arriving = here / f"{DATABASE}.arriving"
+    _snapshot_database(drive / DATABASE, arriving, database)
     if (here / DATABASE).exists():  # whatever was here before is kept, out of the way
         for name in _DATABASE_FILES:
             if (here / name).exists():
                 os.replace(here / name, here / f"{name}.before-split-{stamp}")
-    if (drive / DATABASE).is_file():
-        say(f"Step 1 of 3: copying the database\n{_bar(0, 1)}")
-
-        def database(text: str) -> None:
-            percent = int(text.rsplit(" ", 1)[-1].rstrip("%")) if text.endswith("%") else 0
-            say(f"Step 1 of 3: copying the database\n{_bar(percent, 100)}")
-
-        _snapshot_database(drive / DATABASE, here / DATABASE, database)
+    os.replace(arriving, here / DATABASE)
 
     say("Step 2 of 3: copying the settings (counting them)")
     # "webdriver" is a browser profile made again when needed; the browsers'
@@ -1109,6 +1127,8 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
     try:
         entries = sorted(os.scandir(drive / "novels"), key=lambda entry: entry.name)
     except FileNotFoundError:
+        if not drive.is_dir():  # the drive went away: not "a library with no novels"
+            raise
         entries = []
     for index, entry in enumerate(entries):
         if not entry.is_dir(follow_symlinks=False):
@@ -1139,20 +1159,6 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
     )
     os.replace(writing, here / BOOKS)
     (here / STAMP).write_text(f"{IN_USE} since the split from {drive}\n", encoding="utf-8")
-    for name in _DATABASE_FILES:  # the copy in ``here`` is the library's database now
-        if (drive / name).exists():
-            try:
-                os.replace(drive / name, drive / f"{name}.before-split-{stamp}")
-            except OSError as error:
-                raise OSError(
-                    f"{drive / name} was opened by another program during the split, most "
-                    f"likely another copy of Lightnovel Crawler: close it and start again "
-                    f"({error})"
-                ) from error
-    try:
-        (drive / STAMP).unlink()
-    except FileNotFoundError:
-        pass
     marker = {
         key: value
         for key, value in read_marker(base).items()
@@ -1164,6 +1170,19 @@ def split(base: Path, drive: Path, here: Path, report: Optional[Report] = None) 
     }
     if _key(here) != _key(base):
         marker.update(path=str(here), state="moved")
+    # From here the library is ``here``. The marker is written before the
+    # drive's database is renamed: a failure after a rename used to leave the
+    # app starting from the drive with no database there, making an empty one.
     write_marker(base, **marker)
+    for name in _DATABASE_FILES:  # so the drive's folder is not taken for a library
+        if (drive / name).exists():
+            try:
+                os.replace(drive / name, drive / f"{name}.before-split-{stamp}")
+            except OSError as error:
+                _note(drive, f"Could not rename {name} (left as it is): {error!r}")
+    try:
+        (drive / STAMP).unlink()
+    except OSError:
+        pass
     _note(drive, f"Split done: the library is in {here}, {len(novels):,} novels' books are here")
     say("Done")

@@ -27,6 +27,7 @@ class LibraryBooksTests(unittest.TestCase):
 
         def make_artifact(novel_id, title, format, signal=None):
             self.made.append((novel_id, format))
+            return f"made {novel_id}"
 
         fake = SimpleNamespace(
             db=SimpleNamespace(session=session),
@@ -97,6 +98,15 @@ class LibraryBooksTests(unittest.TestCase):
         self.assertIn(("none", OutputFormat.epub), self.made)
         self.assertEqual(heard[0], ("making", 0, 4))
         self.assertEqual(heard[-1], ("making", 4, 4))
+
+    def test_a_novel_for_the_phone_gets_its_e_book_made_only_when_needed(self) -> None:
+        self.assertEqual(library_books.book_for("none"), "made none")
+        fresh = library_books.book_for("fresh")
+        self.assertEqual(fresh.file_name, "Fresh.epub")  # every chapter is in it already
+        self.assertEqual(self.made, [("none", OutputFormat.epub)])
+        self.assertEqual(library_books.book_for("old-book"), "made old-book")
+        with self.assertRaisesRegex(ValueError, "No chapters"):
+            library_books.book_for("details")
 
 
 if __name__ == "__main__":

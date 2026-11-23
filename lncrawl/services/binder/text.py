@@ -6,6 +6,7 @@ import zipfile
 from ...context import ctx
 from ...dao import Artifact, LanguageCode
 from ...exceptions import AbortedException
+from ...utils.file_tools import move_into_place
 from ...utils.html_tools import extract_text
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,5 @@ def make_text(working_dir: Path, artifact: Artifact, signal=Event(), **kwargs) -
         zipf.writestr("meta.txt", meta_text.encode())
 
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.unlink(True)
-    tmp_file.rename(out_file)
+    move_into_place(tmp_file, out_file)
     logger.info(f"Created: {out_file}")

@@ -34,17 +34,18 @@ import re
 import shutil
 from tempfile import TemporaryDirectory
 from threading import Event
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 import xml.etree.ElementTree as ET
 import zipfile
 
+from sqlalchemy.exc import IntegrityError
 import sqlmodel as sq
 
 from ..context import ctx
 from ..core import Chapter as CrawlerChapter, Volume as CrawlerVolume
 from ..dao import Artifact, Chapter, ChapterImage, Novel, OutputFormat
 from ..exceptions import AbortedException
-from ..utils.file_tools import safe_filename
+from ..utils.file_tools import atomic_write, safe_filename
 from ..utils.url_tools import extract_host
 
 logger = logging.getLogger(__name__)
@@ -811,46 +812,83 @@ def _write_images(
     if not wanted:
         return
 
-    with ctx.db.session() as sess:
-        taken: Dict[str, str] = {}
-        ids = list(wanted)
-        for offset in range(0, len(ids), 500):
-            for image in sess.exec(
-                sq.select(ChapterImage).where(
-                    sq.col(ChapterImage.id).in_(ids[offset : offset + 500])
+    # A page already filed under this id is left where it is only while the
+    # novel it is filed under still exists. Deleting a novel used to leave its
+    # page rows behind (SQLite was never told to cascade), so a book imported
+    # again found every page "taken" by a novel that was gone, stored none of
+    # them, and the Reader showed "(image unavailable)" for the whole manga.
+    # Those rows are handed to this novel, and the pages stored.
+    #
+    # Another import or a download can file the same pages between the look
+    # and the insert: the insert then failed whole ("UNIQUE constraint failed:
+    # chapter_images.id") and the book was given up on with its text already
+    # stored. Looked at again and tried again with what is still not filed.
+    ids = list(wanted)
+    elsewhere: Set[str] = set()  # pages filed under another novel that still exists
+    for attempt in range(4):
+        with ctx.db.session() as sess:
+            found: Dict[str, ChapterImage] = {}
+            for offset in range(0, len(ids), 500):
+                for image in sess.exec(
+                    sq.select(ChapterImage).where(
+                        sq.col(ChapterImage.id).in_(ids[offset : offset + 500])
+                    )
+                ).all():
+                    found[image.id] = image
+            others = {image.novel_id for image in found.values()} - {novel.id}
+            alive: Set[str] = set()
+            if others:
+                alive = set(
+                    sess.exec(sq.select(Novel.id).where(sq.col(Novel.id).in_(list(others)))).all()
                 )
-            ).all():
-                taken[image.id] = image.chapter_id
-        fresh = [
-            ChapterImage(
-                id=image_id,
-                url=f"{novel.url}#{book.images[image_id]}",
-                chapter_id=row.id,
-                novel_id=novel.id,
-                is_done=True,
-            ).model_dump()
-            for image_id, row in wanted.items()
-            if image_id not in taken
-        ]
-        if fresh:
-            sess.exec(sq.insert(ChapterImage), params=fresh)  # type: ignore[call-overload]
-        sess.commit()
+            elsewhere = set()
+            for image_id, image in found.items():
+                if image.novel_id == novel.id:
+                    continue
+                if image.novel_id in alive:
+                    elsewhere.add(image_id)
+                    continue
+                image.novel_id = novel.id  # its novel is gone: this one takes it
+                image.chapter_id = wanted[image_id].id
+                image.is_done = True
+                sess.add(image)
+            fresh = [
+                ChapterImage(
+                    id=image_id,
+                    url=f"{novel.url}#{book.images[image_id]}",
+                    chapter_id=row.id,
+                    novel_id=novel.id,
+                    is_done=True,
+                ).model_dump()
+                for image_id, row in wanted.items()
+                if image_id not in found
+            ]
+            try:
+                if fresh:
+                    sess.exec(sq.insert(ChapterImage), params=fresh)  # type: ignore[call-overload]
+                sess.commit()
+                break
+            except IntegrityError:
+                sess.rollback()
+                if attempt == 3:
+                    raise
 
     with _open_zip(data) as zf:
         for image_id, row in wanted.items():
             if signal.is_set():
                 raise AbortedException()
-            if taken.get(image_id, row.id) != row.id:
-                continue
+            if image_id in elsewhere:
+                continue  # filed under another novel in the library: served from there
             target = ctx.files.resolve(f"novels/{novel.id}/images/{image_id}.jpg")
-            if target.is_file():
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
             try:
-                with zf.open(book.images[image_id]) as src, target.open("wb") as dst:
+                size = zf.getinfo(book.images[image_id]).file_size
+                # a page cut short (the app closed, the drive unplugged) is stored again
+                if target.is_file() and target.stat().st_size == size:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(book.images[image_id]) as src, atomic_write(target) as dst:
                     shutil.copyfileobj(src, dst, 1024 * 1024)
             except Exception as e:
-                target.unlink(missing_ok=True)
                 logger.warning(f"Could not store image {book.images[image_id]}: {e}")
 
 
@@ -911,6 +949,12 @@ def import_book(
     elif fmt == OutputFormat.cbz:
         book = parse_cbz(data, member)
 
+    if book is None and fmt in (OutputFormat.epub, OutputFormat.json, OutputFormat.cbz):
+        # A format that is read, and this file could not be (cut short, no
+        # pages): it used to become an empty novel named after the file,
+        # counted as new, beside the real one.
+        stats.fail("Unreadable or empty")
+        return
     if book is None:
         # The text cannot be recovered from this format, but the file is still
         # the reader's copy of the novel — file it under the title it names.

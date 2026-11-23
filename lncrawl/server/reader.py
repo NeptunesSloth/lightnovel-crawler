@@ -580,6 +580,7 @@ _READER_HTML = """<!DOCTYPE html>
       <button id="prog-unread" class="secondary" title="Forget where you were">↺ Mark unread</button>
       <button id="prog-set" class="secondary" title="Say which chapter you are on (read elsewhere)">✎ Set chapter…</button>
       <button id="shelf-btn" class="secondary" title="Put this novel on your shelves">📚 Shelves</button>
+      <button id="ebook-btn" class="secondary" title="Save this novel as an e-book file on this device, to read in any e-book app without a connection">📱 Download e-book</button>
       <button id="offline-btn" class="secondary" title="Keep chapters on this device to read without a connection">⬇ Save for offline</button>
       <span id="offline-msg" class="muted"></span>
     </div>
@@ -952,7 +953,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
+  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -2444,6 +2445,39 @@ _READER_HTML = """<!DOCTYPE html>
       return caches.open(OFFLINE_CACHE).then(function (c) { return c.put(url, copy); }).then(function () { return res; });
     });
   }
+  // A phone opens the Reader at this computer's plain-http Wi-Fi address,
+  // where browsers keep nothing for offline use (that needs https, or the
+  // device itself): Save for offline is only offered where it can work, and the
+  // e-book is what goes to a phone.
+  if (!window.isSecureContext || !("caches" in window)) els["offline-btn"].classList.add("hidden");
+  els["ebook-btn"].addEventListener("click", function () {
+    var novel = current.novel;
+    if (!novel) return;
+    var btn = this, msg = els["offline-msg"], novelId = novel.id;
+    btn.disabled = true;
+    msg.textContent = "Making the e-book (a long novel can take a minute)…";
+    api("/novel/" + novelId + "/ebook", { method: "POST" }).then(function (artifact) {
+      if (current.novel && current.novel.id === novelId) msg.textContent = "Downloading " + artifact.file_name + "…";
+      return fetch("/static/" + artifact.output_file.split("/").map(encodeURIComponent).join("/") +
+        "?token=" + encodeURIComponent(token()), {
+        headers: { "Authorization": "Bearer " + token() }
+      }).then(function (response) {
+        if (!response.ok) throw new Error("Download failed: HTTP " + response.status);
+        return response.blob();
+      }).then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement("a");
+        link.href = url; link.download = artifact.file_name;
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+        if (current.novel && current.novel.id === novelId) {
+          msg.textContent = "✓ Saved " + artifact.file_name + ": open it from your downloads in an e-book app (Google Play Books, Apple Books, …).";
+        }
+      });
+    }).catch(function (e) {
+      if (current.novel && current.novel.id === novelId) msg.textContent = "Couldn't make the e-book: " + e.message;
+    }).finally(function () { btn.disabled = false; });
+  });
   els["offline-btn"].addEventListener("click", function () {
     var novel = current.novel;
     if (!novel) return;

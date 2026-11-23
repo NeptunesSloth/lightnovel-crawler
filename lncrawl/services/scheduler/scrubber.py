@@ -91,6 +91,12 @@ class Scrubber:
                 sess.commit()
 
     def delete_novel_data(self, current_size: int, size_limit: int) -> None:
+        books = getattr(ctx, "books", None)
+        if books is not None and books.configured:
+            # With the books on a drive of their own, the folders here hold
+            # covers and the few novels kept to read: emptying them freed
+            # nothing, never got under the limit, and so went through them all.
+            return
         to_delete = []
 
         novel_dirs = list(ctx.files.resolve("novels").iterdir())

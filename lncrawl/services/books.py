@@ -22,15 +22,19 @@ from pathlib import Path
 import shutil
 import threading
 from time import monotonic
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from ..context import ctx
-from ..relocation import BOOK_STAMP, BOOKS, copy_tree, drive_roots
+from ..relocation import BOOK_STAMP, BOOKS, copy_tree, drive_roots, walk
 
 logger = logging.getLogger(__name__)
 
 # How long whether the drive is plugged in is taken as known.
 PLUGGED_CHECK = 5.0
+# How often book-drive.json is looked at for a change made by another process.
+RELOAD_CHECK = 1.0
+# Room kept free on the place novels are moved to.
+MOVE_SPARE = 256 * 1024 * 1024
 COVER = "cover.jpg"
 
 
@@ -46,6 +50,10 @@ class BookDriveUnplugged(OSError):
     """A novel's books are on the drive, and it is not plugged in."""
 
 
+class _StopMoving(OSError):
+    """Moving novels cannot go on: no room, or the drive is gone."""
+
+
 class BookDrive:
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -58,6 +66,8 @@ class BookDrive:
         self._here: Set[str] = set()  # novels found to be on this computer
         self._plugged = False
         self._checked = -PLUGGED_CHECK
+        self._looked = -RELOAD_CHECK  # when book-drive.json was last looked at
+        self._stamp: Optional[Tuple[int, int]] = None  # its time and size then
         self._moving: Dict[str, Any] = {"running": False, "done": 0, "total": 0, "failed": 0}
 
     # ------------------------------------------------------------------ #
@@ -66,19 +76,46 @@ class BookDrive:
         return Path(ctx.config.app.app_dir)
 
     def _load(self) -> None:
-        """Read ``book-drive.json`` from the library in use (lock held)."""
+        """Read ``book-drive.json`` from the library in use (lock held).
+
+        Read again whenever the file has changed: a download worker is a
+        process of its own with its own copy of this, and one that never looked
+        again kept writing a novel to the drive after it had been brought here,
+        then wrote its stale list over the new one.
+        """
         home = self._home()
-        if self._loaded_from == home:
+        file = home / BOOKS
+        now = monotonic()
+        if self._loaded_from == home and now - self._looked < RELOAD_CHECK:
             return
-        self._loaded_from = home
-        self._here.clear()
-        self._checked = -PLUGGED_CHECK
+        self._looked = now
         try:
-            config = json.loads((home / BOOKS).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            config = {}
-        if not isinstance(config, dict) or not config.get("folder"):
-            config = {}
+            info = file.stat()
+            stamp: Optional[Tuple[int, int]] = (info.st_mtime_ns, info.st_size)
+        except FileNotFoundError:
+            stamp = None
+        except OSError:
+            return  # cannot be looked at just now: what is known stands
+        if self._loaded_from == home and stamp == self._stamp:
+            return
+        if stamp is None:
+            config: Dict[str, Any] = {}
+        else:
+            try:
+                config = json.loads(file.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                # Not "there is no book drive": that sent every novel on the
+                # drive to this computer, where none of its chapters are.
+                logger.warning(f"Could not read {file} ({error}); trying again")
+                self._looked = -RELOAD_CHECK
+                return
+            if not isinstance(config, dict) or not config.get("folder"):
+                config = {}
+        if self._loaded_from != home:
+            self._checked = -PLUGGED_CHECK
+        self._loaded_from = home
+        self._stamp = stamp
+        self._here.clear()
         self._config = config
         self._on_drive = {str(item) for item in config.get("novels") or []}
         self._copies = {str(item) for item in config.get("copies") or []}
@@ -88,9 +125,14 @@ class BookDrive:
         self._config["novels"] = sorted(self._on_drive)
         self._config["copies"] = sorted(self._copies)
         target = self._home() / BOOKS
-        writing = target.with_name(f"{BOOKS}.part")
+        writing = target.with_name(f"{BOOKS}.{os.getpid()}.part")
         writing.write_text(json.dumps(self._config, indent=2), encoding="utf-8")
         os.replace(writing, target)
+        try:
+            info = target.stat()
+            self._stamp = (info.st_mtime_ns, info.st_size)
+        except OSError:
+            self._stamp = None
 
     @property
     def configured(self) -> bool:
@@ -142,6 +184,8 @@ class BookDrive:
                     plugged = True
             if plugged and not self._plugged and self._config.get("remove_later"):
                 threading.Thread(target=self._remove_later, daemon=True).start()
+            if plugged != self._plugged:
+                self._here.clear()  # where an unlisted novel goes depends on the drive
             self._plugged = plugged
             self._checked = monotonic()
             return plugged
@@ -159,22 +203,44 @@ class BookDrive:
         """Whether this novel's books are on the drive and it is not plugged in."""
         return self.on_drive(novel_id) and not self.plugged()
 
+    def require(self, novel_id: str) -> None:
+        """Raise BookDriveUnplugged when this novel's books cannot be reached now.
+
+        Asked before anything decides what is missing from a novel: with the
+        drive unplugged every chapter looked missing, was marked not
+        downloaded, fetched from the site again and then could not be saved.
+        """
+        if self.unavailable(novel_id):
+            raise BookDriveUnplugged(
+                f"This novel's books are on {self.folder()}, which is not plugged in"
+            )
+
     def _place_new(self, novel_id: str) -> bool:
-        """Whether a novel not placed yet goes on the drive (lock held)."""
+        """Whether a novel not in the list is on the drive (lock held).
+
+        It is listed only once its folder is really there: looking a deleted
+        novel's file up used to put its id back in the list. Until then a new
+        novel goes where new novels go, decided afresh each time.
+        """
         folder = self._home() / "novels" / novel_id
         try:
             here = any(entry.name != COVER for entry in os.scandir(folder))
         except OSError:
             here = False
-        if here or self._config.get("new") == "here" or not self.plugged():
+        if here:
             self._here.add(novel_id)
             return False
-        self._on_drive.add(novel_id)
-        try:
-            self._save()
-        except OSError as error:
-            logger.warning(f"Could not note that {novel_id} is on the book drive: {error}")
-        return True
+        if not self.plugged():
+            return False
+        there = Path(self._config["folder"]) / "novels" / novel_id
+        if there.is_dir():
+            self._on_drive.add(novel_id)
+            try:
+                self._save()
+            except OSError as error:
+                logger.warning(f"Could not note that {novel_id} is on the book drive: {error}")
+            return True
+        return self._config.get("new") != "here"
 
     def route(self, relative: Path) -> Optional[Path]:
         """Where ``relative`` (a path in the library) is, when on the drive; else None."""
@@ -188,6 +254,9 @@ class BookDrive:
             self._load()
             if not self._config or novel_id in self._here:
                 return None
+            # looked at first: a drive back under another letter is found, and
+            # the path below made with the letter it has now
+            self.plugged()
             if novel_id not in self._on_drive and not self._place_new(novel_id):
                 return None
             return Path(self._config["folder"]).joinpath(*parts)
@@ -337,19 +406,65 @@ class BookDrive:
                     with self._lock:
                         self._moving["failed"] += 1
                         self._moving["error"] = self._moving["error"] or str(error)
+                    if isinstance(error, _StopMoving):
+                        # no room, or the drive is gone: the rest would fail the same way
+                        with self._lock:
+                            self._moving["failed"] += (
+                                self._moving["total"] - self._moving["done"] - 1
+                            )
+                            self._moving["done"] = self._moving["total"]
+                        return
                 with self._lock:
                     self._moving["done"] += 1
         finally:
             with self._lock:
                 self._moving["running"] = False
 
+    @staticmethod
+    def _listing(folder: Path) -> Dict[str, int]:
+        """Every file under ``folder`` with its size."""
+        found: Dict[str, int] = {}
+        for relative, entry in walk(folder):
+            try:
+                found[relative] = entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                continue
+        return found
+
     def _move_one(self, novel_id: str, to_drive: bool, keep_copy: bool = True) -> None:
+        """Copy a novel's books across, switch to the copy, then remove what was copied.
+
+        Nothing is removed that is not seen, whole, in the other place: a drive
+        that dropped out for a moment used to count as "nothing to copy", after
+        which the novel was switched over and its only copy deleted.
+        """
         home = self._home() / "novels" / novel_id
         with self._lock:
-            drive = Path(self._config["folder"]) / "novels" / novel_id
+            root = Path(self._config["folder"])
+        drive = root / "novels" / novel_id
         source, target = (home, drive) if to_drive else (drive, home)
-        if source.is_dir():
-            copy_tree(source, target, (), lambda files, size: None)
+        if not self.plugged() or not root.is_dir():
+            raise _StopMoving(f"The book drive ({root}) is not plugged in")
+        if not source.is_dir():
+            if to_drive:
+                return  # nothing of it here: it is on the drive already, or has no books
+            raise OSError(f"{source} cannot be found on the drive")
+        listed = self._listing(source)
+        try:
+            free = shutil.disk_usage(target.parent if target.parent.is_dir() else root).free
+        except OSError:
+            free = None
+        already = self._listing(target) if target.is_dir() else {}
+        need = sum(size for name, size in listed.items() if already.get(name) != size)
+        if free is not None and free < need + MOVE_SPARE:
+            raise _StopMoving(
+                f"Not enough room in {target.parent}: {need // (1024 * 1024):,} MB more is needed"
+            )
+        copy_tree(source, target, (), lambda files, size: None)
+        arrived = self._listing(target)
+        missing = [name for name, size in listed.items() if arrived.get(name) != size]
+        if missing:
+            raise OSError(f"{len(missing)} file(s) did not arrive whole (first: {missing[0]})")
         with self._lock:
             if to_drive:
                 self._on_drive.add(novel_id)
@@ -362,21 +477,27 @@ class BookDrive:
             self._save()
         if not to_drive and keep_copy:
             return  # the drive keeps its copy
-        # the copy is in use from here; the old one goes (a cover stays here)
-        if not source.is_dir():
-            return
-        for entry in os.scandir(source):
-            if to_drive and entry.name == COVER:
+        # The copy is in use from here. What was written to the old place while
+        # it was being copied comes across too, then only what is seen in the
+        # new place, the same size, goes from the old one (a cover stays here).
+        try:
+            copy_tree(source, target, (), lambda files, size: None)
+        except OSError as error:
+            logger.warning(f"Could not bring the last files of {novel_id} across: {error}")
+        arrived = self._listing(target)
+        for name, size in self._listing(source).items():
+            if to_drive and name == COVER:
                 continue
-            if entry.is_dir(follow_symlinks=False):
-                shutil.rmtree(entry.path, ignore_errors=True)
-            else:
-                try:
-                    os.unlink(entry.path)
-                except OSError:
-                    pass
-        if not to_drive:
+            if arrived.get(name) != size:
+                continue
             try:
-                source.rmdir()
+                os.unlink(source / name)
+            except OSError:
+                pass
+        for folder, _, _ in sorted(os.walk(source), reverse=True):
+            if to_drive and Path(folder) == source:
+                continue
+            try:
+                os.rmdir(folder)  # only when empty
             except OSError:
                 pass

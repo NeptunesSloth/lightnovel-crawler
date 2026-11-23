@@ -16,11 +16,20 @@ class ChapterService:
         pass
 
     def completeness(self, novel_id: str) -> NovelCompleteness:
-        """Inspect actual cached content in one chapter query, not completion flags."""
+        """Inspect actual cached content in one chapter query, not completion flags.
+
+        The files are looked at with one listing of the novel's folder (and the
+        checks kept beside them), not a stat and a read of each: opening a
+        5,000-chapter novel read 5,000 files off the drive every time.
+        """
+        books = getattr(ctx, "books", None)
+        if books is not None:
+            books.require(novel_id)  # unplugged is not "nothing downloaded"
         chapters = self.list(novel_id=novel_id)
+        have = ctx.files.chapters_with_content(novel_id, [c.serial for c in chapters])
         gaps: List[ChapterGap] = []
         for chapter in chapters:
-            if chapter.is_available:
+            if chapter.serial in have:
                 continue
             status = "missing"
             if (
@@ -324,8 +333,28 @@ class ChapterService:
             wk = set(wanted.keys())
             ek = set(existing.keys())
             to_insert = wk - ek
-            to_delete = ek - wk
-            to_update = ek & wk
+            # A chapter that is downloaded is never removed for being missing
+            # from the list: a site's chapter page that came back empty or cut
+            # short (blocked, rate limited, changed) took every chapter of the
+            # novel with it, files and all, the moment the novel was opened.
+            # Only chapters never downloaded go, and none when the list is empty.
+            gone = ek - wk if wanted else set()
+            # ...nor one whose file is there though its row does not say so (the
+            # app stopped between the two, or the database was put back from a copy)
+            kept = ctx.files.chapters_with_content(novel_id, gone) if gone else set()
+            to_delete = {s for s in gone if not existing[s].is_done and s not in kept}
+            # Only rows that differ are written. Every chapter used to be given a
+            # new time on every re-read of the novel, so each looked newer than
+            # the novel's e-book (rebuilt before every library ZIP) and as if it
+            # had just arrived.
+            to_update = {
+                s
+                for s in ek & wk
+                if existing[s].url != wanted[s].url
+                or existing[s].title != wanted[s].title
+                or existing[s].volume_id != vol_id_map.get(wanted[s].volume)
+                or any(existing[s].extra.get(k) != v for k, v in wanted[s].get_extras().items())
+            }
 
             if to_insert:
                 sess.exec(
@@ -338,7 +367,7 @@ class ChapterService:
                             title=wanted[s].title,
                             extra=wanted[s].get_extras(),
                             volume_id=vol_id_map.get(wanted[s].volume),
-                        ).model_dump()
+                        ).model_dump(exclude={"is_available", "content_file"})
                         for s in to_insert
                     ],
                 )
@@ -349,6 +378,7 @@ class ChapterService:
                     params=[
                         Chapter(
                             id=existing[s].id,
+                            created_at=existing[s].created_at,
                             serial=s,
                             novel_id=novel_id,
                             url=wanted[s].url,
@@ -356,7 +386,7 @@ class ChapterService:
                             is_done=existing[s].is_done,
                             extra={**existing[s].extra, **wanted[s].get_extras()},
                             volume_id=vol_id_map.get(wanted[s].volume),
-                        ).model_dump()
+                        ).model_dump(exclude={"is_available", "content_file"})
                         for s in to_update
                     ],
                 )

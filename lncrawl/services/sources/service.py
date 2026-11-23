@@ -113,6 +113,9 @@ class Sources:
                     current = self._index.crawlers.get(id)
                     if current and current.version >= source.version:
                         continue
+                    shipped = ctx.config.crawler.local_sources.parent / source.file_path
+                    if shipped.is_file():
+                        continue  # the build's own copy is the one used
                     try:
                         ctx.github.download_online_source(source.file_path)
                         logger.debug(f"Downloaded source: {source.file_path}")
@@ -147,20 +150,25 @@ class Sources:
                 self.info.clear()
                 self.crawlers.clear()
                 self.sources.clear()
-                self.load_crawlers(
-                    *ctx.config.crawler.local_sources.glob("**/*.py"),
-                    *ctx.config.crawler.user_sources.glob("**/*.py"),
-                )
+                # The sources this build ships win over copies of them in the
+                # library's own sources folder. Those copies are downloaded
+                # from the upstream project, which has gone its own way: its
+                # NovelFire was the one running, opening a browser window each
+                # time a novel was re-read and returning no chapters, while the
+                # fixed one in the build was never used. The folder still adds
+                # sources the build does not have.
+                self.load_crawlers(*ctx.config.crawler.user_sources.glob("**/*.py"))
+                self.load_crawlers(*ctx.config.crawler.local_sources.glob("**/*.py"), shipped=True)
         except AbortedException:
             pass
 
-    def load_crawlers(self, *files: Path):
+    def load_crawlers(self, *files: Path, shipped: bool = False):
         for crawler in batch_import(*files):
             if self._signal.is_set():
                 return
-            self.add_crawler(crawler)
+            self.add_crawler(crawler, shipped)
 
-    def add_crawler(self, crawler: Type[Crawler]):
+    def add_crawler(self, crawler: Type[Crawler], shipped: bool = False):
         # add to index if not available
         name = crawler.__name__
         cid = getattr(crawler, "__id__")  # crawler id
@@ -171,8 +179,8 @@ class Sources:
             info = create_crawler_info(crawler)
             self._index.crawlers[cid] = info
 
-        # skip this crawler if it is not the latest
-        if cid in self.info and info.version < self.info[cid].version:
+        # skip this crawler if it is not the latest (one the build ships always is)
+        if not shipped and cid in self.info and info.version < self.info[cid].version:
             return
         self.info[cid] = info
         self.crawlers[cid] = crawler
@@ -181,12 +189,16 @@ class Sources:
         for url in crawler.base_url:
             if self._signal.is_set():
                 return
-            self.add_source(url, info)
+            self.add_source(url, info, shipped)
 
-    def add_source(self, url: str, info: CrawlerInfo):
+    def add_source(self, url: str, info: CrawlerInfo, shipped: bool = False):
         item = create_source_item(url, info, self.rejected)
         # skip this item if it is not the latest
-        if item.domain in self.sources and item.version < self.sources[item.domain].version:
+        if (
+            not shipped
+            and item.domain in self.sources
+            and item.version < self.sources[item.domain].version
+        ):
             return
         self.sources[item.domain] = item
 

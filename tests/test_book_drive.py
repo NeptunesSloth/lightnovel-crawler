@@ -101,6 +101,39 @@ class SplitTests(unittest.TestCase):
         self.assertFalse((self.here / "sqlite.db").exists())  # nothing was copied
         self.assertTrue((self.drive / "sqlite.db").is_file())
 
+    def test_a_failure_at_the_very_end_still_leaves_one_whole_library(self) -> None:
+        # The drive's database could not be renamed: the library is here all
+        # the same, and the app does not start again from a drive with none.
+        relocation.begin_split(self.base, self.drive, self.here)
+        real = relocation.os.replace
+
+        def refused(source, target):
+            if ".before-split-" in str(target) and str(source).startswith(str(self.drive)):
+                raise PermissionError(5, "Access is denied")
+            return real(source, target)
+
+        with (
+            patch.object(relocation, "_database_free"),
+            patch.object(relocation.os, "replace", refused),
+        ):
+            self.assertEqual(relocation.resolve(self.base), self.here)
+        self.assertEqual(relocation.resolve(self.base), self.here)
+        database = sqlite3.connect(str(self.here / "sqlite.db"))
+        self.assertEqual(database.execute("SELECT id FROM novels").fetchall(), [("a",)])
+        database.close()
+
+    def test_a_second_try_never_copies_over_the_good_copy_with_nothing(self) -> None:
+        relocation.begin_split(self.base, self.drive, self.here)
+        self.assertEqual(relocation.resolve(self.base), self.here)
+        # asked again by mistake, with the drive's database already set aside
+        relocation.point_at(self.base, self.drive)
+        relocation.begin_split(self.base, self.drive, self.here)
+        self.assertEqual(relocation.resolve(self.base), self.drive)
+        self.assertIn("no database", relocation.read_marker(self.base)["split_failed"])
+        database = sqlite3.connect(str(self.here / "sqlite.db"))
+        self.assertEqual(database.execute("SELECT id FROM novels").fetchall(), [("a",)])
+        database.close()
+
     def test_a_split_into_the_drive_itself_is_refused(self) -> None:
         with self.assertRaises(ValueError):
             relocation.begin_split(self.base, self.drive, self.drive / "inside")
@@ -165,6 +198,12 @@ class BookDriveTests(unittest.TestCase):
             self.route("novels/new/chapters/000001.zst"),
             self.drive / "novels" / "new" / "chapters" / "000001.zst",
         )
+        # listed only once its folder is really there: looking up a file of a
+        # novel that was deleted must not put it back in the list
+        saved = json.loads((self.here / relocation.BOOKS).read_text())
+        self.assertNotIn("new", saved["novels"])
+        (self.drive / "novels" / "new" / "chapters").mkdir(parents=True)
+        self.route("novels/new/chapters/000001.zst")
         saved = json.loads((self.here / relocation.BOOKS).read_text())
         self.assertIn("new", saved["novels"])
         self.books.set_new("here")
@@ -234,6 +273,55 @@ class BookDriveTests(unittest.TestCase):
         )
         self.books.forget("a")
         self.assertEqual(self.books.status()["copies"], [])
+
+    def test_a_drive_that_drops_out_mid_copy_does_not_cost_the_only_copy(self) -> None:
+        # the copy skips what it cannot find; the novel must stay on the drive
+        real = books_module.copy_tree
+
+        def dropped(source, target, *args, **kwargs):
+            return None  # the drive answered nothing: "nothing to copy"
+
+        with patch.object(books_module, "copy_tree", dropped):
+            self.books.move(["a"], to_drive=False, keep_copy=False)
+            status = self.wait_moved()
+        self.assertEqual(status["moving"]["failed"], 1)
+        self.assertIn("did not arrive", status["moving"]["error"])
+        self.assertEqual(status["on_drive"], ["a", "b"])
+        self.assertTrue((self.drive / "novels" / "a" / "chapters" / "000001.zst").is_file())
+        self.assertIsNotNone(real)
+
+    def test_a_file_written_during_the_move_is_not_lost(self) -> None:
+        real = books_module.copy_tree
+        calls = []
+
+        def late_write(source, target, *args, **kwargs):
+            real(source, target, *args, **kwargs)
+            if not calls:  # a download saves a chapter just after the first pass
+                (source / "chapters" / "000002.zst").write_bytes(b"late")
+            calls.append(1)
+
+        with patch.object(books_module, "copy_tree", late_write):
+            self.books.move(["a"], to_drive=False, keep_copy=False)
+            self.wait_moved()
+        self.assertEqual(
+            (self.here / "novels" / "a" / "chapters" / "000002.zst").read_bytes(), b"late"
+        )
+        self.assertFalse((self.drive / "novels" / "a").exists())
+
+    def test_a_change_made_by_another_process_is_seen(self) -> None:
+        other = BookDrive()  # a download worker's own copy
+        self.assertTrue(other.on_drive("a"))
+        self.books.move(["a"], to_drive=False, keep_copy=False)
+        self.wait_moved()
+        other._looked = -books_module.RELOAD_CHECK
+        self.assertFalse(other.on_drive("a"))
+
+    def test_an_unreadable_list_is_not_taken_for_no_drive(self) -> None:
+        self.assertTrue(self.books.configured)
+        (self.here / relocation.BOOKS).write_text("{ cut short")
+        self.books._looked = -books_module.RELOAD_CHECK
+        self.assertTrue(self.books.configured)
+        self.assertTrue(self.books.on_drive("a"))
 
     def test_moving_needs_the_drive(self) -> None:
         self.unplug()

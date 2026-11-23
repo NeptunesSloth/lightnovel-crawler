@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
@@ -72,6 +73,18 @@ class CustomStaticFiles(StaticFiles):
     @all_directories.setter
     def all_directories(self, _value: Any) -> None:
         pass
+
+    def lookup_path(self, path: str):
+        # A novel's files may be on the book drive, which only ctx.files knows:
+        # looked for in the library alone, its e-books were "not found".
+        found = super().lookup_path(path)
+        if found[1] is None and path.replace("\\", "/").startswith("novels/"):
+            try:
+                file = ctx.files.resolve(path.replace("\\", "/"))
+                return str(file), os.stat(file)
+            except OSError:
+                pass
+        return found
 
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)

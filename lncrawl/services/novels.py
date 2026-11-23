@@ -1,12 +1,16 @@
+import logging
 import re
 import shutil
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import sqlmodel as sq
 
 from ..context import ctx
 from ..dao import (
     Artifact,
+    Chapter,
+    ChapterImage,
+    ChapterTranslation,
     LanguageCode,
     Library,
     LibraryNovel,
@@ -15,10 +19,27 @@ from ..dao import (
     ReadHistory,
     User,
     UserRole,
+    Volume,
+    VolumeTranslation,
 )
 from ..exceptions import ServerErrors
 from ..server.models import Paginated
 from ..utils.url_tools import extract_host
+
+logger = logging.getLogger(__name__)
+
+# Everything that belongs to one novel, children before parents.
+_NOVEL_ROWS: Tuple[Any, ...] = (
+    ChapterImage,
+    ChapterTranslation,
+    Chapter,
+    VolumeTranslation,
+    Volume,
+    Artifact,
+    NovelTranslation,
+    ReadHistory,
+    LibraryNovel,
+)
 
 
 def _norm(text: str) -> str:
@@ -191,14 +212,37 @@ class NovelService:
             books.forget(novel_id)
         with ctx.db.session() as sess:
             novel = sess.get(Novel, novel_id)
-            if not novel:
-                return True
-            novel_title = novel.title
-            sess.delete(novel)
+            novel_title = novel.title if novel else ""
+            # SQLite is not told to cascade, so what belongs to the novel is
+            # removed by hand: its page rows left behind made a later import of
+            # the same manga show no pages at all
+            for table in _NOVEL_ROWS:
+                sess.exec(sq.delete(table).where(sq.col(table.novel_id) == novel_id))
+            if novel:
+                sess.delete(novel)
             sess.commit()
+        if not novel:
+            return True
         ctx.recommendations.invalidate(novel_id)
         ctx.recommendations.index_remove(novel_id, novel_title)
         return True
+
+    def remove_orphans(self) -> int:
+        """Remove rows left behind by novels deleted before deleting cleaned up. How many.
+
+        Run when the app starts. Files are not touched: a deleted novel's folder
+        went with it.
+        """
+        removed = 0
+        with ctx.db.session() as sess:
+            novels = sq.select(Novel.id)
+            for table in _NOVEL_ROWS:
+                result = sess.exec(sq.delete(table).where(sq.col(table.novel_id).not_in(novels)))
+                removed += getattr(result, "rowcount", 0) or 0
+            sess.commit()
+        if removed:
+            logger.info(f"Removed {removed} row(s) left behind by deleted novels")
+        return removed
 
     def find_by_url(self, novel_url: str) -> Optional[Novel]:
         with ctx.db.session() as sess:
@@ -305,21 +349,55 @@ class NovelService:
         if len(group) < 2:
             return {"canonical_id": novel_id, "merged": 0, "message": "No other copy found."}
 
-        canonical = max(group, key=lambda n: n.chapter_count or 0)
+        # A title with no Latin letters or digits in common says nothing: two
+        # different novels titled in Chinese ending in "2" both came down to "2".
+        if not re.search(r"[a-z]", norm_title):
+            group = [n for n in group if (n.title or "").strip() == (novel.title or "").strip()]
+            if len(group) < 2:
+                return {"canonical_id": novel_id, "merged": 0, "message": "No other copy found."}
+        books = getattr(ctx, "books", None)
+        if books is not None:
+            for copy in group:
+                books.require(copy.id)  # nothing is merged, or deleted, blind
+
+        def downloaded(copy: Novel) -> Dict[str, int]:
+            """A copy's downloaded chapters, by title as matched across copies."""
+            rows = ctx.chapters.list(novel_id=copy.id)
+            have = ctx.files.chapters_with_content(copy.id, [row.serial for row in rows])
+            return {_norm(row.title): row.serial for row in rows if row.serial in have}
+
+        # The copy with the most chapters downloaded is kept, not the one with
+        # the longest list: a copy listing 500 and holding none used to win
+        # over one holding all 480 of its own.
+        held = {copy.id: downloaded(copy) for copy in group}
+        canonical = max(group, key=lambda n: (len(held[n.id]), n.chapter_count or 0))
         heal = self.heal_from_library(canonical.id)
+        kept = downloaded(canonical)
         merged = 0
+        left: List[str] = []
         for other in group:
             if other.id == canonical.id:
+                continue
+            # A copy goes only when everything downloaded in it is now in the
+            # one kept. Manga pages are never carried over, and a copy whose
+            # chapters could not be read was deleted all the same.
+            only_there = [title for title in held[other.id] if title not in kept]
+            if only_there:
+                left.append(f"{other.title} ({len(only_there)} chapter(s) only it has)")
                 continue
             self.delete(other.id)
             merged += 1
         healed = heal.get("healed", 0)
+        message = (
+            f"Merged {merged} duplicate cop{'ies' if merged != 1 else 'y'} into the most "
+            f"complete one ({healed} chapter(s) filled in)."
+        )
+        if left:
+            message += " Kept, since it would have lost chapters: " + "; ".join(left) + "."
         return {
             "canonical_id": canonical.id,
             "merged": merged,
             "healed": healed,
-            "message": (
-                f"Merged {merged} duplicate cop{'ies' if merged != 1 else 'y'} into the most "
-                f"complete one ({healed} chapter(s) filled in)."
-            ),
+            "kept": len(left),
+            "message": message,
         }

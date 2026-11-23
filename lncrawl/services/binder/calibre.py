@@ -11,6 +11,7 @@ from ...assets.images import default_cover_image
 from ...context import ctx
 from ...dao import Artifact, LanguageCode, Novel, OutputFormat
 from ...exceptions import AbortedException, ServerErrors
+from ...utils.file_tools import move_into_place
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +246,5 @@ def convert_epub(
         raise ServerErrors.failed_creating_artifact
 
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.unlink(True)
-    tmp_file.rename(out_file)
+    move_into_place(tmp_file, out_file)
     logger.info("Created: %s", out_file.name)

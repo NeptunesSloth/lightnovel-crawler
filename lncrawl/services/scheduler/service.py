@@ -53,6 +53,14 @@ class JobScheduler:
             ctx.jobs.requeue_stale_running()
         except Exception:
             logger.error("Failed to requeue stale running jobs", exc_info=True)
+
+        def sweep() -> None:
+            try:
+                ctx.novels.remove_orphans()
+            except Exception:
+                logger.warning("Could not remove rows of deleted novels", exc_info=True)
+
+        Thread(target=sweep, daemon=True, name="orphan-rows").start()
         # Force nodriver + its CDP submodules to import now, in this single thread,
         # before any worker can race the first import. nodriver.cdp is a web of
         # circular submodule imports that is only safe to use once fully loaded; a

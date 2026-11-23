@@ -15,7 +15,7 @@ from starlette.background import BackgroundTask
 
 from ...context import ctx
 from ...dao import User
-from ...exceptions import ServerErrors
+from ...exceptions import ServerError, ServerErrors
 from ...utils.file_tools import format_size, writable_folder
 from ..models import (
     ConfigSection,
@@ -336,6 +336,9 @@ def cancel_library_move() -> Dict[str, Any]:
     return ctx.library_move.cancel()
 
 
+BACKUP_DESKTOP_LIMIT = 2 * 1024 * 1024 * 1024
+
+
 @router.post("/backup", summary="Create a full backup zip (database + downloaded library)")
 def create_backup() -> Dict[str, Any]:
     """Zip a consistent snapshot of the database plus the whole novels library.
@@ -349,7 +352,18 @@ def create_backup() -> Dict[str, Any]:
     exports = ctx.files.resolve("exports")
     exports.mkdir(parents=True, exist_ok=True)
     name = f"backup-{time.strftime('%Y%m%d-%H%M%S')}.zip"
-    out = exports / name
+    final = exports / name
+    # With the books on a drive of their own, the folder here holds only
+    # covers for those novels: a "backup of the whole library" without the
+    # drive plugged in would hold no books and say it had worked.
+    drive = ctx.books.folder()
+    if drive is not None and not ctx.books.plugged():
+        raise ServerError(
+            503, f"The books are on {drive}, which is not plugged in: plug it in to back them up"
+        )
+    # written under another name: one cut short (no room, a pulled cable) used
+    # to be left as "the latest backup"
+    out = final.with_name(f"{name}.part")
 
     with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as zf:
         # a consistent DB snapshot via SQLite's online backup API (safe mid-run)
@@ -368,14 +382,24 @@ def create_backup() -> Dict[str, Any]:
                 zf.write(tmp, arcname=f"database/{Path(db_path).name}")
                 tmp.unlink()
         # every downloaded novel: chapters, images, covers
-        novels_dir = ctx.files.resolve("novels")
-        if novels_dir.is_dir():
+        written = set()
+        folders = [ctx.files.resolve("novels")]
+        if drive is not None:
+            folders.append(drive / "novels")
+        for novels_dir in folders:
+            if not novels_dir.is_dir():
+                continue
             for f in novels_dir.rglob("*"):
-                if f.is_file():
-                    zf.write(f, arcname=f"novels/{f.relative_to(novels_dir).as_posix()}")
+                arcname = f"novels/{f.relative_to(novels_dir).as_posix()}"
+                if arcname not in written and f.is_file():
+                    written.add(arcname)
+                    zf.write(f, arcname=arcname)
 
-    size = out.stat().st_size
-    saved_to = _copy_to_desktop(out, name)
+    os.replace(out, final)
+    size = final.stat().st_size
+    # a copy on the Desktop only when it is small: the Desktop is on the system
+    # drive (often synced), the one a big library was moved away from
+    saved_to = _copy_to_desktop(final, name) if size < BACKUP_DESKTOP_LIMIT else None
     return {"file": name, "size": size, "saved_to": saved_to}
 
 
