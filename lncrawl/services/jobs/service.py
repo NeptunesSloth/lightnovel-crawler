@@ -1010,10 +1010,16 @@ class JobService:
         by closing the app stays RUNNING forever, displaying its last frozen state.
         Returns the number requeued.
         """
+        # A job that has started others and is only waiting for them is left
+        # as it is: made pending again it took its first-run path, started its
+        # volume and chapter jobs a second time, finished one short and had
+        # its last job (the e-book) cancelled.
+        parents = sq.select(Job.parent_job_id).where(sq.col(Job.parent_job_id).is_not(None))
         with ctx.db.session() as sess:
             result = sess.exec(
                 sq.update(Job)
                 .where(sq.col(Job.status) == JobStatus.RUNNING)
+                .where(sq.or_(sq.col(Job.done) == 0, sq.col(Job.id).not_in(parents)))
                 .values(status=job_pending_literal, updated_at=current_timestamp())
             )
             sess.commit()

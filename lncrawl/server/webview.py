@@ -14,6 +14,7 @@ from ..assets.htmls import loading_path
 from ..context import ctx
 from ..enums import UserRole
 from ..services.logger import enable_crash_log, log_to_file
+from ..utils import single_instance
 from ..utils.browser_detect import pick_executable
 from ..utils.platforms import Platform, Screen
 from ..utils.sockets import free_port
@@ -362,6 +363,62 @@ def _report_failure(error: BaseException, log_path: Optional[Path]) -> None:
         ctypes.windll.user32.MessageBoxW(None, message, "Lightnovel Crawler", 0x10)  # type: ignore[attr-defined]
 
 
+def _already_running(library: Path) -> None:
+    """Another copy has this library: show its window, and say so."""
+    url = single_instance.running_address(library)
+    message = (
+        "Lightnovel Crawler is already running with this library"
+        + (f" ({library}).\n\nIts window is being opened." if url else f" ({library}).")
+        + "\n\nIf you cannot find it, end every lncrawl in Task Manager and start again."
+    )
+    if url:
+        with suppress(Exception):
+            import webbrowser
+
+            webbrowser.open(url)
+    if _has_console():
+        print(message, file=sys.stderr)
+        return
+    with suppress(Exception):
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, "Lightnovel Crawler", 0x40)  # type: ignore[attr-defined]
+
+
+# How long closing may take before the process is ended anyway.
+SHUTDOWN_PATIENCE = 30.0
+
+
+def _shut_down() -> None:
+    """Stop the downloads, close the database, and end the process.
+
+    Closing the window used to stop nothing: the server ran in a thread nobody
+    told to finish, so the process stayed until every queued download had run,
+    holding the database and the library's files (the "leftover copy" that had
+    to be ended in Task Manager), and the database was never closed.
+    """
+
+    def close() -> None:
+        try:
+            ctx.destroy()
+        except Exception:
+            logger.exception("Closing down did not finish cleanly")
+
+    closing = Thread(target=close, daemon=True, name="shutdown")
+    closing.start()
+    closing.join(SHUTDOWN_PATIENCE)
+    if closing.is_alive():
+        logger.warning(f"Closing took more than {SHUTDOWN_PATIENCE:g}s; ending the process now")
+    else:
+        logger.info("Closed down")
+    single_instance.release()
+    logging.shutdown()
+    if getattr(sys, "frozen", False):
+        import os
+
+        os._exit(0)  # no waiting on threads still in the middle of a request
+
+
 def start() -> None:
     host = "localhost"
     # The server listens on SERVER_HOST, so the port has to be claimed there.
@@ -375,6 +432,11 @@ def start() -> None:
     # nothing behind at all — the window closes and there is no way to tell
     # what went wrong.
     ctx.config.load()
+    library = ctx.config.app.app_dir
+    if not single_instance.acquire(library):
+        _already_running(library)
+        return
+    single_instance.note_address(library, f"http://{host}:{port}/")
     log_path = log_to_file(ctx.config.app.app_dir / "logs" / "app.log")
     # A crash in native code (a decoder, the HTTP library) ends the process
     # before Python can log anything: the stacks of every thread go here.
@@ -399,6 +461,7 @@ def start() -> None:
             code = _start_app_in_browser(host, port, cdp_port, storage_path)
             if not _reopen(code, reopened, time.monotonic()):
                 logger.info(f"The app window was closed (exit code {code}); stopping")
+                _shut_down()
                 break
             logger.warning(
                 f"The app window's browser ended unexpectedly (exit code {code}); "

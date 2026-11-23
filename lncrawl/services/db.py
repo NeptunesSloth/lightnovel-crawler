@@ -141,6 +141,15 @@ class DB:
     def close(self):
         self._closing.set()
         if "engine" in self.__dict__:
+            # Fold the journal into the database before letting go. Left to the
+            # next start, a drive unplugged after the app "closed" still had
+            # the last changes only in the journal.
+            if self._database_file() is not None:
+                try:
+                    with self.engine.connect() as conn:
+                        conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+                except Exception as error:
+                    logger.debug(f"Could not fold the journal in on closing: {error}")
             self.engine.dispose()
             self.__dict__.pop("engine")
 
@@ -238,7 +247,7 @@ class DB:
         database = self._database_file()
         if database is None:
             return
-        error = unreadable(database)
+        error = unreadable(database, ctx.config.app.app_dir)
         if error is None:
             return
         logger.error(f"The database {database} cannot be read: {error}; trying to get it back")
