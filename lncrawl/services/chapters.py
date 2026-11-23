@@ -324,7 +324,12 @@ class ChapterService:
             wk = set(wanted.keys())
             ek = set(existing.keys())
             to_insert = wk - ek
-            to_delete = ek - wk
+            # A chapter that is downloaded is never removed for being missing
+            # from the list: a site's chapter page that came back empty or cut
+            # short (blocked, rate limited, changed) took every chapter of the
+            # novel with it, files and all, the moment the novel was opened.
+            # Only chapters never downloaded go, and none when the list is empty.
+            to_delete = {s for s in ek - wk if not existing[s].is_done} if wanted else set()
             to_update = ek & wk
 
             if to_insert:
