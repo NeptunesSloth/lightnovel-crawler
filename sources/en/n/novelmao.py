@@ -58,7 +58,8 @@ class NovelMaoCrawler(LegacyCrawler):
             logger.info("Getting chapters: %s", url)
             data = self.get_json(url)
             logger.info("Received %d items", len(data["items"]))
-            has_more_pages = data["hasMorePages"] == 1
+            # a page with nothing on it ends the list even if the site says there is more
+            has_more_pages = data["hasMorePages"] == 1 and bool(data["items"])
             temp_chapters += data["items"]
             current_page += 1
 

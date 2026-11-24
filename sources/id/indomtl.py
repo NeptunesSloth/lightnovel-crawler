@@ -62,7 +62,8 @@ class IndoMTLCrawler(LegacyCrawler):
             logger.debug("Visiting %s", url)
             data = self.get_json(url)
             all_items += data["items"]
-            hasMore = data["hasMorePages"] == 1
+            # a page with nothing on it ends the list even if the site says there is more
+            hasMore = data["hasMorePages"] == 1 and bool(data["items"])
 
         for item in reversed(all_items):
             self.chapters.append(

@@ -50,8 +50,13 @@ class Xnunu(LegacyCrawler):
         first_page = curr_page.select_one("#chaptercontent")
         chap_data = [cleanup_page(first_page)]
 
+        seen_pages = set()  # a "next" link back to a page already read would never end
         while _has_next_page(curr_page.select_one("#next_url")):
-            curr_page = self.get_soup(self.absolute_url(curr_page.select_one("#next_url")["href"]))
+            next_url = self.absolute_url(curr_page.select_one("#next_url")["href"])
+            if next_url in seen_pages:
+                break
+            seen_pages.add(next_url)
+            curr_page = self.get_soup(next_url)
             chap_data.append(cleanup_page(curr_page.select_one("#chaptercontent")))
 
         return "\n".join([self.cleaner.extract_contents(chap) for chap in chap_data])

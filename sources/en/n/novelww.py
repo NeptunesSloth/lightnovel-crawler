@@ -39,11 +39,16 @@ class Eight88NovelCrawler(LegacyCrawler):
         chapter_count = 1
         first_iteration = True
         next_page = None
+        seen_pages = set()  # a "»" link back to a page already read would never end
         while next_page or first_iteration:
             if first_iteration:
                 first_iteration = False
             else:
-                soup = self.get_soup(next_page.get("href"))
+                href = next_page.get("href")
+                if not href or href in seen_pages:
+                    break
+                seen_pages.add(href)
+                soup = self.get_soup(href)
 
             try:
                 next_page = soup.find("ul", {"id": "id_pagination"}).find(

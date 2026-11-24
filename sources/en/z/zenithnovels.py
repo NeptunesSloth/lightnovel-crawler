@@ -32,6 +32,7 @@ class ZenithNovelsCrawler(LegacyCrawler):
             self.novel_cover = self.absolute_url(possible_cover["src"])
         logger.info("Novel cover: %s", self.novel_cover)
 
+        seen_pages = set()  # a "next" link back to a page already read would never end
         while True:
             for a in soup.select("ul.lcp_catlist li a"):
                 chap_id = len(self.chapters) + 1
@@ -48,7 +49,8 @@ class ZenithNovelsCrawler(LegacyCrawler):
                 )
 
             next_link = soup.select_one("ul.lcp_paginator a.lcp_nextlink")
-            if next_link:
+            if next_link and next_link["href"] not in seen_pages:
+                seen_pages.add(next_link["href"])
                 soup = self.get_soup(next_link["href"])
             else:
                 break

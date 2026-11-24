@@ -53,12 +53,16 @@ class LiteroticaCrawler(LegacyCrawler):
     def download_chapter_body(self, chapter: Chapter) -> str:
         soup = self.get_soup(f"{chapter['url'].replace('www.', 'speedy.', 1)}", timeout=50)
         chapterText = ""
+        seen_pages = set()  # a "next" link back to a page already read would never end
         while 1:
             chapterText += self.cleaner.extract_contents(soup.select_one("div.aa_ht"))
             try:
                 nextUrl = (
                     "https://speedy.literotica.com" + soup.select_one("a.l_bJ.l_bL").attrs["href"]
                 )
+                if nextUrl in seen_pages:
+                    break
+                seen_pages.add(nextUrl)
                 soup = self.get_soup(nextUrl, timeout=100)
             except Exception:
                 break
