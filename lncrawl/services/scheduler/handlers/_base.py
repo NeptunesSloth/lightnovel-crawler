@@ -11,6 +11,9 @@ from ....utils.time_utils import current_timestamp
 
 # Child jobs a batch creates per transaction.
 CREATE_CHUNK: int = 500
+# How the job ended is written this many times, this many seconds apart (growing).
+SETTLE_TRIES: int = 5
+SETTLE_WAIT: float = 2.0
 
 
 class HandlerException(Exception):
@@ -41,13 +44,30 @@ class BaseHandler(ABC):
         self._log_entry()
         try:
             self.run()
-            return self._set_success()
         except AbortedException:
             return False  # ignore error
         except HandlerException as e:
-            return self._set_failure(e.message, e)
+            refused: HandlerException = e
+            return self._settle(lambda: self._set_failure(refused.message, refused))
         except Exception as e:
-            return self._set_failure("Failed to create requests", e)
+            broke: Exception = e
+            return self._settle(lambda: self._set_failure("Failed to create requests", broke))
+        return self._settle(self._set_success)
+
+    def _settle(self, write: Callable[[], bool]) -> bool:
+        """Record how the job ended, trying again while the database is busy.
+
+        On a slow drive the write could fail ("database is locked"); the error
+        then left the worker with the job still marked running, for good.
+        """
+        for attempt in range(SETTLE_TRIES):
+            try:
+                return write()
+            except Exception as error:
+                if attempt == SETTLE_TRIES - 1 or self.signal.wait(SETTLE_WAIT * (attempt + 1)):
+                    ctx.logger.warn(f"Could not record the end of job {self.job.id}: {error}")
+                    return False
+        return False
 
     # ------------------------------------------------------------------ #
     #                               Helpers                              #
@@ -143,13 +163,15 @@ class BatchHandler(BaseHandler):
 
         try:
             self.run()
-            return self._increment()
         except AbortedException:
             return False  # ignore error
         except HandlerException as e:
-            return self._set_failure(e.message, e)
+            refused: HandlerException = e
+            return self._settle(lambda: self._set_failure(refused.message, refused))
         except Exception as e:
-            return self._set_failure("Failed to create requests", e)
+            broke: Exception = e
+            return self._settle(lambda: self._set_failure("Failed to create requests", broke))
+        return self._settle(self._increment)
 
     def _run_children_inline(
         self,

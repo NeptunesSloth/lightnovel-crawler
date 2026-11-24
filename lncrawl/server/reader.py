@@ -1797,6 +1797,7 @@ _READER_HTML = """<!DOCTYPE html>
     els["unf-all"].textContent = "Both: " + unf.count + " novel(s)";
     var note = "Their reading positions go with them. This cannot be undone.";
     if (unf.kept) note += " " + unf.kept + " unfinished novel(s) are kept: a download still running, queued or paused is working on them (or on their site). Stop it to delete those too.";
+    if (unf.behind) note += " " + unf.behind + " novel(s) that were fully downloaded and have new chapters since are not counted: those only need updating.";
     els["unf-note"].textContent = note;
     var n = unfCount(unfKind());
     els["unf-go"].disabled = !n;

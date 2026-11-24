@@ -203,6 +203,14 @@ class BookDrive:
         """Whether this novel's books are on the drive and it is not plugged in."""
         return self.on_drive(novel_id) and not self.plugged()
 
+    def new_books_folder(self) -> Optional[Path]:
+        """Where a new novel's books go now when that is the drive; else None (the library)."""
+        with self._lock:
+            self._load()
+            if not self._config or self._config.get("new") == "here" or not self.plugged():
+                return None
+            return Path(self._config["folder"])
+
     def require(self, novel_id: str) -> None:
         """Raise BookDriveUnplugged when this novel's books cannot be reached now.
 

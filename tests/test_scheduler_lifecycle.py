@@ -25,12 +25,14 @@ class SchedulerLifecycleTests(unittest.TestCase):
         self.stack.enter_context(patch.object(runner, "_lock", EventLock()))
 
     def create_export(self):
+        self.exports = getattr(self, "exports", 0) + 1
         return self.ctx.jobs._create(
             self.user,
             JobType.EXPORT_SOURCE,
             {
                 "domain": "novelfire.net",
-                "urls": ["https://novelfire.net/book/example"],
+                # each its own novel: the very same download asked twice is one job
+                "urls": [f"https://novelfire.net/book/example-{self.exports}"],
             },
         )
 

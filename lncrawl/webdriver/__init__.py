@@ -115,7 +115,9 @@ def create_new(
     warmup_nodriver()
 
     if not user_data_dir:
-        user_data_dir = str(ctx.config.app.app_dir / "webdriver")
+        # on this computer, not with a library moved to an external drive: a
+        # browser profile there is slow, and breaks when the drive sleeps
+        user_data_dir = str(ctx.config.app.base_dir / "webdriver")
         os.makedirs(user_data_dir, exist_ok=True)
 
     from .local import create_local

@@ -38,6 +38,33 @@ class ImporterParsingTests(unittest.TestCase):
         self.assertIn(f"images/{book.chapters[0].images[0]}.jpg", book.chapters[0].body)
         self.assertEqual(len(book.images), 3)
 
+    def test_a_cbz_that_says_which_novel_it_is_comes_back_as_that_novel(self):
+        import io
+        import json
+        import zipfile
+
+        page_id = "0123456789abcdef0123456789abcdef"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("00003_0001.jpg", b"jpg")
+            archive.writestr(
+                "lncrawl.json",
+                json.dumps(
+                    {
+                        "title": "DanMachi: Sword's Oratoria",
+                        "url": "https://site.com/series/danmachi",
+                        "chapters": {"3": "Chapter 2.5: Interlude"},
+                        "pages": {"00003_0001.jpg": page_id},
+                    }
+                ),
+            )
+        book = parse_cbz(buffer.getvalue(), "Danmachi  Sword S Oratoria.cbz")
+        assert book is not None
+        self.assertEqual(book.title, "DanMachi: Sword's Oratoria")
+        self.assertEqual(book.source_url, "https://site.com/series/danmachi")
+        self.assertEqual(book.chapters[0].title, "Chapter 2.5: Interlude")
+        self.assertEqual(book.chapters[0].images, [page_id])  # the id it had in the library
+
     def test_other_cbz_has_one_chapter_per_folder_in_natural_order(self):
         data = cbz("Ch 10/1.jpg", "Ch 2/2.png", "Ch 2/10.png", "Ch 2/1.png")
         book = parse_cbz(data, "Other.cbz")

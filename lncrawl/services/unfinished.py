@@ -70,6 +70,11 @@ def _kept_by_downloads() -> Tuple[Set[str], Set[str], Set[str]]:
     return ids, urls, domains
 
 
+# Chapters listed this long (ms) after the newest downloaded one was listed were
+# added by the site later, not left behind by a download that stopped: a novel's
+# chapters are all listed together when it is first looked at.
+NEW_AFTER = 60 * 60 * 1000
+
 # Which unfinished novels to remove: with only their details, partly downloaded, or both.
 KINDS = ("details", "partial", "all")
 
@@ -95,17 +100,37 @@ def find(kind: str = "all") -> Dict[str, Any]:
                 sq.func.sum(sq.case((sq.col(Chapter.is_done).is_(True), 1), else_=0)),
             ).group_by(sq.col(Chapter.novel_id))
         ).all()
+        listed = sess.exec(
+            sq.select(
+                Chapter.novel_id,
+                Chapter.is_done,
+                sq.func.min(Chapter.created_at),
+                sq.func.max(Chapter.created_at),
+            ).group_by(sq.col(Chapter.novel_id), sq.col(Chapter.is_done))
+        ).all()
         novels = sess.exec(sq.select(Novel.id, Novel.title, Novel.url)).all()
     chapters: Dict[str, Tuple[int, int]] = {
         novel_id: (int(total or 0), int(done or 0)) for novel_id, total, done in counted
     }
+    newest_done: Dict[str, int] = {}
+    oldest_missing: Dict[str, int] = {}
+    for novel_id, is_done, first, last in listed:
+        if is_done:
+            newest_done[novel_id] = int(last or 0)
+        else:
+            oldest_missing[novel_id] = int(first or 0)
     kept_ids, kept_urls, kept_domains = _kept_by_downloads()
     remove: List[Dict[str, Any]] = []
-    kept = 0
+    kept = behind = 0
     for novel_id, title, url in novels:
         total, done = chapters.get(novel_id, (0, 0))
         if total and done >= total:
             continue  # every chapter is here
+        if done and oldest_missing.get(novel_id, 0) > newest_done.get(novel_id, 0) + NEW_AFTER:
+            # Everything it had was downloaded; the site has added chapters
+            # since. That is a novel to update, not a download that stopped.
+            behind += 1
+            continue
         if novel_id in kept_ids or url in kept_urls or _domain(url or "") in kept_domains:
             kept += 1
             continue
@@ -116,6 +141,7 @@ def find(kind: str = "all") -> Dict[str, Any]:
         "partial": sum(1 for item in remove if item["done"]),
         "chapters": sum(item["done"] for item in remove),
         "kept": kept,
+        "behind": behind,
     }
 
 

@@ -260,6 +260,14 @@ def import_file(
     except OSError:
         free = None
     need = int(size * IMPORT_ROOM) + 1024 * 1024 * 1024
+    books = getattr(ctx, "books", None)
+    drive = books.new_books_folder() if books is not None else None
+    if drive is not None:  # the books go to a drive of their own: that is where room is needed
+        library = drive
+        try:
+            free = shutil.disk_usage(drive).free
+        except OSError:
+            free = None
     if free is not None and free < need:
         raise ServerErrors.invalid_input.with_extra(
             f"The library's drive ({library}) has {format_size(free)} free, and importing "

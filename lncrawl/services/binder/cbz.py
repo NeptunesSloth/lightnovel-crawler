@@ -1,3 +1,4 @@
+import json
 import logging
 from pathlib import Path
 import re
@@ -14,6 +15,9 @@ logger = logging.getLogger(__name__)
 # Stored chapter HTML embeds each page image as <img src="images/<id>.jpg">
 # (see Crawler._extract_images). The order they appear in the body is the
 # reading order, which is exactly what a CBZ needs.
+# What the archive says about itself, read back by the importer.
+ABOUT = "lncrawl.json"
+
 RE_IMG = re.compile(r"""<img[^>]+src=["']images/([0-9a-fA-F]+)\.jpg["']""")
 
 
@@ -32,6 +36,18 @@ def make_cbz(working_dir: Path, artifact: Artifact, signal: Event = Event(), **k
     novel = ctx.novels.get(artifact.novel_id)
 
     pages: list = []  # (arcname, source Path)
+    # Which novel this is, and which page is which, kept in the archive: a CBZ
+    # said neither, so importing one made a second novel named after the file
+    # ("Danmachi  Sword S Oratoria") beside the one it came from.
+    about: dict = {
+        "title": novel.title,
+        "url": novel.url,
+        "authors": novel.authors,
+        "language": novel.language,
+        "tags": list(novel.tags or []),
+        "chapters": {},
+        "pages": {},
+    }
 
     # lead with the cover so the archive opens on it
     if novel.cover_available:
@@ -54,7 +70,11 @@ def make_cbz(working_dir: Path, artifact: Artifact, signal: Event = Event(), **k
             if not file.is_file():
                 continue
             page_no += 1
-            pages.append((f"{chapter.serial:05}_{page_no:04}.jpg", file))
+            arcname = f"{chapter.serial:05}_{page_no:04}.jpg"
+            pages.append((arcname, file))
+            about["pages"][arcname] = image_id
+        if page_no:
+            about["chapters"][str(chapter.serial)] = chapter.title
 
     if not pages:
         logger.info(f"No page images to bundle into CBZ for novel {artifact.novel_id}")
@@ -66,5 +86,6 @@ def make_cbz(working_dir: Path, artifact: Artifact, signal: Event = Event(), **k
     with zipfile.ZipFile(tmp_file, "w", zipfile.ZIP_STORED) as zf:
         for arcname, file in pages:
             zf.write(file, arcname=arcname)
+        zf.writestr(ABOUT, json.dumps(about, ensure_ascii=False))
     move_into_place(tmp_file, out_file)
     logger.info(f"Created: {out_file} ({len(pages)} pages)")

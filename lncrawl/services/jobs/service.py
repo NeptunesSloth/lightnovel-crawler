@@ -1209,6 +1209,27 @@ class JobService:
             if active >= search_limit:
                 raise ServerErrors.search_job_limit_reached.with_extra(active)
 
+    @staticmethod
+    def _same_job(sess: Any, user: User, type: JobType, data: dict) -> Optional[Job]:
+        """This user's job of this kind, asked for with the same things, not yet over."""
+        for job in sess.exec(
+            sq.select(Job)
+            .where(
+                Job.user_id == user.id,
+                Job.type == type,
+                sq.col(Job.parent_job_id).is_(None),
+                sq.col(Job.is_done).is_(False),
+                sq.col(Job.status).in_([JobStatus.PENDING, JobStatus.RUNNING]),
+            )
+            .order_by(sq.col(Job.created_at))
+            .limit(50)
+        ).all():
+            extra = job.extra or {}
+            if all(key in extra and extra[key] == value for key, value in data.items()):
+                sess.expunge(job)
+                return job
+        return None
+
     def _create(
         self,
         user: User,
@@ -1219,7 +1240,15 @@ class JobService:
         job_id: Optional[str] = None,
     ) -> Job:
         with ctx.db.session() as sess:
-            if parent_id is None:
+            if parent_id is None and job_id is None and data:
+                # Asked for twice (a double click, the page opened again): the
+                # one already waiting or running is the answer, not a second
+                # download of the same thing beside it.
+                same = self._same_job(sess, user, type, data)
+                if same is not None:
+                    return same
+                self._ensure_user_access_limit(sess, user)
+            elif parent_id is None:
                 self._ensure_user_access_limit(sess, user)
 
             job = Job(

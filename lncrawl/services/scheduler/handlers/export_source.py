@@ -541,9 +541,16 @@ def _take_out_of_library(novel_url: str) -> bool:
 
 
 def _free_space() -> Optional[int]:
-    """Bytes free on the library's drive, or None when it cannot be told."""
+    """Bytes free where downloaded books go, or None when it cannot be told.
+
+    That is the book drive when new novels go there: measuring the library's
+    own drive held downloads back when the laptop was low, and not at all when
+    the drive they were being written to was full.
+    """
+    books = getattr(ctx, "books", None)
+    folder = books.new_books_folder() if books is not None else None
     try:
-        return shutil.disk_usage(ctx.files.resolve(".")).free
+        return shutil.disk_usage(folder or ctx.files.resolve(".")).free
     except OSError:
         return None
 

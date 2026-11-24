@@ -34,7 +34,7 @@ import re
 import shutil
 from tempfile import TemporaryDirectory
 from threading import Event
-from typing import Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -55,6 +55,7 @@ logger = logging.getLogger(__name__)
 # be stable so a second import of the same book updates the first rather than
 # landing beside it.
 IMPORTED_HOST = "imported.local"
+CBZ_ABOUT = "lncrawl.json"  # see binder/cbz.py
 
 # Guard against an archive that expands far beyond its size. A manga EPUB or CBZ
 # can run to gigabytes, so this matches the largest upload accepted.
@@ -557,6 +558,28 @@ def parse_cbz(data: Payload, member: str) -> Optional[ParsedBook]:
         if "cover" in posixpath.basename(pages[0]).lower():
             book.cover = _safe_read(zf, pages[0])
             pages = pages[1:]
+        # what an archive made by this app says about itself (see binder/cbz.py)
+        about: Dict[str, Any] = {}
+        try:
+            raw = _safe_read(zf, CBZ_ABOUT)
+            loaded = json.loads(raw.decode("utf-8")) if raw else {}
+            about = loaded if isinstance(loaded, dict) else {}
+        except (ValueError, UnicodeError):
+            about = {}
+    if about.get("title"):
+        book.title = str(about["title"])
+    if about.get("url"):
+        book.source_url = str(about["url"])
+    if about.get("authors"):
+        book.authors = str(about["authors"])
+    if about.get("language"):
+        book.language = str(about["language"])
+    if isinstance(about.get("tags"), list):
+        book.tags = [str(tag) for tag in about["tags"]]
+    chapters_said = about.get("chapters")
+    pages_said = about.get("pages")
+    named: Dict[str, Any] = chapters_said if isinstance(chapters_said, dict) else {}
+    filed: Dict[str, Any] = pages_said if isinstance(pages_said, dict) else {}
 
     ours = all(_RE_CBZ_PAGE.match(posixpath.basename(p)) for p in pages)
     groups: Dict[str, List[str]] = {}
@@ -569,10 +592,14 @@ def parse_cbz(data: Payload, member: str) -> Optional[ParsedBook]:
 
     for index, (key, members) in enumerate(groups.items(), start=1):
         serial = int(key) if ours else index
-        title = f"Chapter {serial}"
+        title = str(named.get(str(serial)) or f"Chapter {serial}")
         if not ours and key:
             title = posixpath.basename(key)
-        ids = [_image_id(book, m) for m in members]
+        # the ids the pages had in the library, when the archive says them
+        ids = [
+            str(filed[m]) if _RE_IMAGE_ID.match(str(filed.get(m) or "")) else _image_id(book, m)
+            for m in members
+        ]
         for image_id, page in zip(ids, members):
             book.images[image_id] = page
         body = "".join(f'<p><img src="images/{i}.jpg" alt="{i}"/></p>' for i in ids)
@@ -656,9 +683,41 @@ def _placeholder_url(book: ParsedBook, member: str) -> str:
     return f"https://{IMPORTED_HOST}/{slug.lower() or 'novel'}"
 
 
+def _named_like(member: str) -> Optional[Novel]:
+    """The one novel in the library whose e-book would be named like ``member``.
+
+    For a book that says nothing of where it came from (a CBZ made before they
+    did): e-book files are named from the novel's title, so the name leads
+    back to the novel. None unless exactly one fits.
+    """
+    stem = _title_of(posixpath.basename(member)).casefold()
+    with ctx.db.session() as sess:
+        rows = sess.exec(sq.select(Novel.id, Novel.title, Novel.domain)).all()
+    named = [
+        (novel_id, domain)
+        for novel_id, title, domain in rows
+        if safe_filename(title or "").title().casefold() == stem
+    ]
+    # the novel from a site, over a copy an earlier import filed under the file's name
+    fits = [novel_id for novel_id, domain in named if domain != IMPORTED_HOST] or [
+        novel_id for novel_id, _ in named
+    ]
+    if len(fits) != 1:
+        return None
+    with ctx.db.session() as sess:
+        return sess.get(Novel, fits[0])
+
+
 def _upsert_novel(book: ParsedBook, member: str) -> Tuple[Novel, bool]:
     url = book.source_url or _placeholder_url(book, member)
-    novel = ctx.novels.find_by_url(url)
+    novel = None
+    if not book.source_url and book.manga:
+        novel = _named_like(member)
+        if novel is not None:
+            url = novel.url
+            book.title = novel.title  # the name read off the file is the rougher one
+    if novel is None:
+        novel = ctx.novels.find_by_url(url)
     created = novel is None
     if novel is None:
         with ctx.db.session() as sess:
