@@ -288,9 +288,9 @@ _TOOLS_HTML = """<!DOCTYPE html>
     <p class="hint">Use the same email and password as in the app.</p>
     <div id="logged-out">
       <label for="email">Email or username</label>
-      <input id="email" type="text" autocomplete="username" />
+      <input id="email" autocapitalize="none" autocorrect="off" spellcheck="false" type="text" autocomplete="username" />
       <label for="password">Password</label>
-      <input id="password" type="password" autocomplete="current-password" />
+      <input id="password" autocapitalize="none" autocorrect="off" spellcheck="false" type="password" autocomplete="current-password" />
       <button id="login-btn">Sign in</button>
     </div>
   </section>

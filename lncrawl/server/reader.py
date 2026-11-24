@@ -377,9 +377,9 @@ _READER_HTML = """<!DOCTYPE html>
   <div id="auth" class="hidden">
     <h2>Sign in</h2>
     <label for="email">Email</label>
-    <input id="email" type="text" autocomplete="username" />
+    <input id="email" autocapitalize="none" autocorrect="off" spellcheck="false" type="text" autocomplete="username" />
     <label for="password">Password</label>
-    <input id="password" type="text" autocomplete="current-password" style="-webkit-text-security:disc" />
+    <input id="password" autocapitalize="none" autocorrect="off" spellcheck="false" type="text" autocomplete="current-password" style="-webkit-text-security:disc" />
     <button id="login" class="primary" style="margin-top:14px">Sign in</button>
     <p class="muted" id="auth-msg"></p>
   </div>
