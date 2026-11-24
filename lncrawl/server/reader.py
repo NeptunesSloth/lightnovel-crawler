@@ -570,7 +570,7 @@ _READER_HTML = """<!DOCTYPE html>
     <div style="clear:both"></div>
     <button id="continue-btn" class="primary hidden" style="margin-bottom:12px">▶ Continue reading</button>
     <button id="fav-btn" style="margin:0 0 12px 8px" title="Add to favorites">☆ Favorite</button>
-    <button id="heal-btn" class="hidden" style="margin:0 0 12px 8px" title="Fill gaps from another copy of this novel in your library">✨ Fill missing chapters</button>
+    <button id="heal-btn" class="hidden" style="margin:0 0 12px 8px" title="Get the missing chapters: from a copy in your library, then this novel's own site, then other sites that have it">✨ Fill missing chapters</button>
     <button id="deep-btn" class="hidden" style="margin:0 0 12px 8px" title="Search other sites for the missing chapters and download them">🔍 Find missing on other sites</button>
     <button id="merge-btn" class="hidden" style="margin:0 0 12px 8px" title="Combine all copies of this title into the most complete one">⧉ Merge copies</button>
     <button id="del-btn" style="margin:0 0 12px 8px" title="Delete this novel from your library">🗑</button>
@@ -2858,8 +2858,7 @@ _READER_HTML = """<!DOCTYPE html>
       els["chap-more-wrap"].classList.toggle("hidden", current.offset >= total);
       // offer cross-source healing only when there are gaps to fill
       if (gaps) {
-        els["heal-btn"].classList.remove("hidden");
-        els["deep-btn"].classList.remove("hidden");
+        els["heal-btn"].classList.remove("hidden");  // deep-btn stays hidden: this runs it
         maybeAutoHeal();
       }
     }).catch(function (e) { els["chap-list"].innerHTML = "<p class='muted'>Couldn't load chapters: " + e.message + "</p>"; });
@@ -2884,23 +2883,9 @@ _READER_HTML = """<!DOCTYPE html>
     }).catch(function () { /* auto-heal is best-effort */ });
   }
 
-  els["heal-btn"].addEventListener("click", function () {
-    if (!current.novel) return;
-    var btn = this;
-    btn.disabled = true;
-    els["heal-msg"].textContent = "Looking for another copy in your library…";
-    els["heal-msg"].classList.remove("hidden");
-    api("/novel/" + current.novel.id + "/heal", { method: "POST" }).then(function (res) {
-      els["heal-msg"].textContent = (res && res.message) || "Done.";
-      if (res && res.healed) {
-        // reload the chapter list to reflect the filled chapters
-        current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
-        loadChapters();
-      }
-    }).catch(function (e) {
-      els["heal-msg"].textContent = "Heal failed: " + e.message;
-    }).finally(function () { btn.disabled = false; });
-  });
+  // One button fills the gaps: the job behind it tries a copy in the library,
+  // then the novel's own site, then other sites, and needs no second copy.
+  els["heal-btn"].addEventListener("click", function () { els["deep-btn"].click(); });
 
   // Deep heal: a background job searches other sites for the missing chapters,
   // downloads them, and copies matches in. Poll it and refresh when done.
@@ -2908,12 +2893,13 @@ _READER_HTML = """<!DOCTYPE html>
     if (!current.novel) return;
     var btn = this; btn.disabled = true;
     var novelId = current.novel.id;
-    els["heal-msg"].textContent = "Searching other sites for the missing chapters…";
+    els["heal-btn"].disabled = true;
+    els["heal-msg"].textContent = "Looking for the missing chapters…";
     els["heal-msg"].classList.remove("hidden");
     api("/novel/" + novelId + "/heal-deep", { method: "POST" }).then(function (job) {
       (function poll() {
         api("/job/" + job.id).then(function (j) {
-          if (!current.novel || current.novel.id !== novelId) { btn.disabled = false; return; }
+          if (!current.novel || current.novel.id !== novelId) { btn.disabled = false; els["heal-btn"].disabled = false; return; }
           var ex = j.extra || {};
           var active = j.status === 0 || j.status === 1 || j.status === "PENDING" || j.status === "RUNNING";
           if (active) {
@@ -2924,7 +2910,7 @@ _READER_HTML = """<!DOCTYPE html>
             later(poll, 3000);
             return;
           }
-          btn.disabled = false;
+          btn.disabled = false; els["heal-btn"].disabled = false;
           els["heal-msg"].textContent = ex.message || (j.error ? ("Failed: " + j.error) : "Done.");
           if (ex.healed) {
             current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
@@ -2933,8 +2919,8 @@ _READER_HTML = """<!DOCTYPE html>
         }).catch(function () { later(poll, 5000); });
       })();
     }).catch(function (e) {
-      btn.disabled = false;
-      els["heal-msg"].textContent = "Couldn't start the search: " + e.message;
+      btn.disabled = false; els["heal-btn"].disabled = false;
+      els["heal-msg"].textContent = "Couldn't start: " + e.message;
     });
   });
 
