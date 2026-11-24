@@ -1613,6 +1613,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
       zipSeen = null;
       if (z.state === "done") {
         var exports = !document.getElementById("library-savedir").value.trim() && z.file && /[\\/]exports[\\/]/.test(z.file);
+        if (z.unreadable) {
+          log(z.unreadable + " book(s) could not be opened and are NOT in the ZIP (in use by a download, or their file is gone): " +
+            (z.unreadable_titles || []).join("; ") + ". Make the ZIP again when nothing is downloading.", "log-err");
+        }
         log("Library ZIP made: " + z.books + " book(s), " + fmtSize(z.size) + "." + leftOutNote(z.left_out) +
           (exports ? " Downloading it now." : " Saved to " + z.file + ".") + " Extract it and open index.html to browse.", "log-ok");
         if (exports) {
@@ -1660,11 +1664,23 @@ _TOOLS_HTML = """<!DOCTYPE html>
   });
 
   // ---- Storage, backup & phone ----
-  function loadStorage() {
-    api("/novels/storage", { method: "GET" }).then(function (s) {
-      document.getElementById("storage-line").textContent =
-        (s.novel_count || 0) + " novel(s) use " + (fmtSize(s.total || 0) || "0 MB") +
-        " · export zips use " + (fmtSize(s.exports || 0) || "0 MB");
+  // What uses the space is worked out only when asked (going through every
+  // novel's folder takes minutes on a big library), then kept and shown.
+  function loadStorage(measure) {
+    api("/novels/storage" + (measure ? "?measure=true" : ""), { method: "GET" }).then(function (s) {
+      var line = document.getElementById("storage-line");
+      var free = s.free != null ? (fmtSize(s.free) || "0 MB") + " free of " + fmtSize(s.disk_total) + " on the library's drive" : "";
+      if (s.novel_count != null) {
+        line.textContent = (s.novel_count || 0) + " novel(s) use " + (fmtSize(s.total || 0) || "0 MB") +
+          " · export zips use " + (fmtSize(s.exports || 0) || "0 MB") + (free ? " · " + free : "") +
+          (s.measured_at ? " (measured " + new Date(s.measured_at * 1000).toLocaleString() + ")" : "");
+      } else {
+        line.textContent = (free || "") + (s.measuring ? "" : (free ? ". " : "") + "Press “Check what uses the space” to measure the novels.");
+      }
+      if (s.measuring) {
+        line.textContent += " Measuring now: this can take a while on a big library…";
+        setTimeout(function () { loadStorage(false); }, 4000);
+      }
       var box = document.getElementById("storage-largest");
       box.innerHTML = "";
       (s.largest || []).slice(0, 8).forEach(function (n) {
@@ -2105,7 +2121,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
   document.getElementById("storage-refresh").addEventListener("click", function () {
     if (!requireAuth()) return;
-    loadStorage();
+    loadStorage(true);
   });
   document.getElementById("storage-clean").addEventListener("click", function () {
     if (!requireAuth()) return;

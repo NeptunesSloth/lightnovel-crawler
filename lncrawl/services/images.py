@@ -90,7 +90,9 @@ class ChapterImageService:
             wk = set(images.keys())
             ek = set(existing.keys())
             to_insert = wk - ek
-            to_delete = ek - wk
+            # A refetch that finds no images at all in a chapter that had some is
+            # a page that did not load, not a chapter that lost its pictures.
+            to_delete = ek - wk if wk else set()
 
             if to_insert:
                 crawler_version = chapter.extra.get("crawler_version")

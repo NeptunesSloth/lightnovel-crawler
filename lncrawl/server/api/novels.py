@@ -1,4 +1,7 @@
 import os
+import shutil
+import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Path, Query, Request, Security
@@ -163,34 +166,67 @@ def remove_unfinished_novels(
         raise ServerError(400, str(error)) from error
 
 
+# What uses the space, worked out in the background and kept: going through
+# every novel's folder is 1.6 million files on a big library (minutes to hours
+# on an external drive), and it was done again each time the Tools page was
+# opened, however many were already running.
+_storage_lock = threading.Lock()
+_storage: Dict[str, Any] = {"measuring": False, "measured_at": None, "result": None}
+
+
+def _measure_storage() -> None:
+    try:
+        sizes: Dict[str, int] = {}
+        folders = [ctx.files.resolve("novels")]
+        drive = ctx.books.folder() if ctx.books.plugged() else None
+        if drive is not None:
+            folders.append(drive / "novels")  # books kept on a drive of their own
+        for novels_dir in folders:
+            if not novels_dir.is_dir():
+                continue
+            for child in os.scandir(novels_dir):
+                if child.is_dir(follow_symlinks=False):
+                    # Allocated blocks, not the apparent byte sum: this view answers
+                    # "how full is the disk", and it is the measure the scrubber
+                    # decides by when it starts deleting to make room.
+                    sizes[child.name] = sizes.get(child.name, 0) + dir_size(
+                        child.path, allocated=True
+                    )
+        largest = sorted(sizes.items(), key=lambda kv: -kv[1])[:15]
+        # Titles for exactly the rows shown, not the newest 100 novels.
+        titles = ctx.novels.titles_by_id([nid for nid, _ in largest])
+        result = {
+            "total": sum(sizes.values()),
+            "exports": dir_size(ctx.files.resolve("exports"), allocated=True),
+            "novel_count": len(sizes),
+            "largest": [
+                {"id": nid, "title": titles.get(nid, nid), "size": size} for nid, size in largest
+            ],
+        }
+        with _storage_lock:
+            _storage.update(result=result, measured_at=int(time.time()))
+    finally:
+        with _storage_lock:
+            _storage["measuring"] = False
+
+
 @router.get("s/storage", summary="Disk usage of the downloaded library and exports")
-def novels_storage() -> Dict[str, Any]:
-    novels_dir = ctx.files.resolve("novels")
-    sizes: Dict[str, int] = {}
-    if novels_dir.is_dir():
-        for child in os.scandir(novels_dir):
-            if child.is_dir(follow_symlinks=False):
-                # Allocated blocks, not the apparent byte sum: this view answers
-                # "how full is the disk", and it is the measure the scrubber
-                # decides by when it starts deleting to make room. On a library of
-                # small chapter files the two differ by much more than rounding,
-                # so reporting the other one here invited the obvious complaint —
-                # the cleanup fired while the page still showed plenty of space.
-                sizes[child.name] = dir_size(child.path, allocated=True)
-    largest = sorted(sizes.items(), key=lambda kv: -kv[1])[:15]
-    # Titles for exactly the rows shown. Reading the newest 100 novels instead
-    # left anything outside them labelled with its bare id — and the biggest
-    # novel on disk is rarely the most recently touched one.
-    titles = ctx.novels.titles_by_id([nid for nid, _ in largest])
-    exports_size = dir_size(ctx.files.resolve("exports"), allocated=True)
-    return {
-        "total": sum(sizes.values()),
-        "exports": exports_size,
-        "novel_count": len(sizes),
-        "largest": [
-            {"id": nid, "title": titles.get(nid, nid), "size": size} for nid, size in largest
-        ],
-    }
+def novels_storage(
+    measure: bool = Query(default=False, description="Work it out again, in the background"),
+) -> Dict[str, Any]:
+    """The last measurement, at once; with ``measure`` a new one is started."""
+    with _storage_lock:
+        if measure and not _storage["measuring"]:
+            _storage["measuring"] = True
+            threading.Thread(target=_measure_storage, daemon=True, name="storage").start()
+        result = dict(_storage["result"] or {})
+        result.update(measuring=_storage["measuring"], measured_at=_storage["measured_at"])
+    try:
+        usage = shutil.disk_usage(ctx.config.app.app_dir)
+        result.update(free=usage.free, disk_total=usage.total)
+    except OSError:
+        pass
+    return result
 
 
 @router.delete("s/storage/exports", summary="Delete generated export zips to free disk space")
@@ -243,6 +279,9 @@ def merge_novel(
     novel_id: str = Path(),
     user: User = Security(ensure_user),
 ) -> Dict[str, object]:
+    # merging deletes the other copies: only for someone who may delete them
+    if not ctx.novels.can_delete(novel_id, user):
+        raise ServerErrors.cannot_delete_novel
     return ctx.novels.merge_duplicates(novel_id)
 
 

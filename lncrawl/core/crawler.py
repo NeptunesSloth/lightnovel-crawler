@@ -209,9 +209,12 @@ class Crawler(ABC):
         if not url:
             raise LNException("URL is missing")
 
-        if output_file.is_file():
-            os.utime(output_file)
-            return
+        try:
+            if output_file.stat().st_size > 0:
+                os.utime(output_file)
+                return
+        except OSError:
+            pass  # not there (or an empty one left by a pulled cable): fetched
 
         from PIL import Image
 

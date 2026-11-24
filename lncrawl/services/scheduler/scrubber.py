@@ -17,6 +17,9 @@ _week = 7 * _day
 _month = 30 * _day
 
 
+_last_look = 0  # when cancel_long_jobs last ran
+
+
 class Scrubber:
     @staticmethod
     def run(signal: Event):
@@ -161,7 +164,15 @@ class Scrubber:
         Every change to a job (progress, status, its live details) moves its
         updated_at, so this catches a stuck job, never a long one still working.
         """
+        global _last_look
         now = current_timestamp()
+        # A computer that slept through the night wakes with every job
+        # "untouched for 16 hours". If this has not looked for a long while
+        # itself, nothing says the jobs were stuck: look again next time.
+        asleep = _last_look and now - _last_look > _hour * 2
+        _last_look = now
+        if asleep:
+            return
         with ctx.db.session() as sess:
             job_ids = sess.exec(
                 sq.select(Job.id).where(
@@ -177,6 +188,9 @@ class Scrubber:
                 if self.signal.is_set():
                     return
                 ctx.jobs.cancel(job_id, "the app: no progress for 16 hours")
+                # and told to stop: cancelled only in the database, its thread
+                # kept its site, a runner and an export slot until a restart
+                ctx.scheduler.stop_job(job_id)
 
     def check_reader_updates(self):
         """Readers' daily new-chapter checks, for those who turned them on."""

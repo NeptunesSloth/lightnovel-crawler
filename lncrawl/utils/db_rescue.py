@@ -63,7 +63,7 @@ def unreadable(database: Path, library: Optional[Path] = None) -> Optional[str]:
     one showed an empty library and soon rotated the good copies away.
     """
     if not database.is_file() or database.stat().st_size == 0:
-        if library is not None and snapshots(library):
+        if library is not None and all_snapshots(library):
             return GONE
         return None
     for attempt in range(4):
@@ -562,8 +562,21 @@ def snapshots(library: Path) -> List[Path]:
     return sorted(folder.glob("sqlite-*.db"), key=lambda file: file.name, reverse=True)
 
 
+# Other folders holding automatic copies (see `keep_elsewhere`), set by the app.
+also_look_in: List[Path] = []
+
+
+def all_snapshots(library: Path) -> List[Path]:
+    """The automatic copies in the library and kept elsewhere, newest first."""
+    found = list(snapshots(library))
+    for folder in also_look_in:
+        if folder != library:
+            found.extend(snapshots(folder))
+    return sorted(found, key=lambda file: file.name, reverse=True)
+
+
 def _from_snapshot(library: Path, work: Path, say: Say) -> Optional[Tuple[Path, Path]]:
-    for snapshot in snapshots(library):
+    for snapshot in all_snapshots(library):
         say(f"Trying the automatic copy {snapshot.name}...")
         copy = work / "snapshot.db"
         shutil.copyfile(snapshot, copy)
@@ -697,12 +710,34 @@ def take_snapshot(database: Path, library: Path, keep: int = 2) -> Optional[Path
         copy = sqlite3.connect(str(writing))
         try:
             with copy:
-                source.backup(copy)
+                # in steps, letting writers through: a gigabyte in one step
+                # held the journal open for minutes while downloads committed
+                source.backup(copy, pages=2048, sleep=0.05)
         finally:
             copy.close()
     finally:
         source.close()
     os.replace(writing, target)
     for old in snapshots(library)[keep:]:
+        old.unlink(missing_ok=True)
+    return target
+
+
+def keep_elsewhere(snapshot: Path, folder: Path, keep: int = 1) -> Optional[Path]:
+    """Keep a copy of a snapshot in ``folder`` on another drive; None when it has no room.
+
+    The copies in the library are on the drive whose failure they are for. One
+    more, where the app starts from, survives that drive.
+    """
+    target_dir = folder / SNAPSHOTS
+    target_dir.mkdir(parents=True, exist_ok=True)
+    size = snapshot.stat().st_size
+    if shutil.disk_usage(target_dir).free < size + 2 * 1024 * 1024 * 1024:
+        return None
+    target = target_dir / snapshot.name
+    writing = target.with_name(f"{target.name}.part")
+    shutil.copyfile(snapshot, writing)
+    os.replace(writing, target)
+    for old in snapshots(folder)[keep:]:
         old.unlink(missing_ok=True)
     return target

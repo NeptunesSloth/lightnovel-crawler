@@ -150,10 +150,16 @@ class Novel543(LegacyCrawler):
         next_ = soup.find("a", string="下一章")
         if next_ and next_.has_attr("href"):
             next_url = self.absolute_url(next_["href"])
-            if next_url.count("_") > 1:  # if it has multiple _ it means it's a multi-page chapter
-                next_url = next_url.rsplit("_", 1)[0] + "_2.html"
+            # Multiple _ means the link is a further page of this same chapter.
+            # It is followed as given: working out "_2.html" from it asked for
+            # page 2 again from page 2, without end. Capped all the same.
+            try:
+                page = int(chapter["_page"])
+            except (KeyError, TypeError, ValueError, AttributeError):
+                page = 1
+            if next_url.count("_") > 1 and next_url != chapter["url"] and page < 50:
                 extracted_content += self.download_chapter_body(
-                    {"url": next_url, "title": chapter["title"]}
+                    {"url": next_url, "title": chapter["title"], "_page": page + 1}
                 )
 
         return extracted_content

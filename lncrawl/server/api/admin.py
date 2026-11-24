@@ -48,6 +48,7 @@ def _build_library(
     left_out: List[str],
     progress: Optional[Callable[..., None]] = None,
     stop: Optional[Event] = None,
+    unreadable: Optional[List[str]] = None,
 ) -> int:
     """Write the library zip to ``output``; the number of books in it."""
     from ...dao import Novel
@@ -85,6 +86,7 @@ def _build_library(
         left_out=left_out,
         progress=progress,
         stop=stop,
+        unreadable=unreadable,
     )
 
 
@@ -164,8 +166,9 @@ def _zip_into(
     # written under a temporary name: a half-written zip never looks finished
     writing = output.with_name(f"{output.name}.part")
     left_out: List[str] = []
+    unreadable: List[str] = []
     try:
-        count = _build_library(writing, nsfw, complete_only, left_out, progress, stop)
+        count = _build_library(writing, nsfw, complete_only, left_out, progress, stop, unreadable)
         if not count:
             raise ServerErrors.no_books_to_export
         os.replace(writing, output)
@@ -178,6 +181,8 @@ def _zip_into(
         "books": count,
         "left_out": len(left_out),
         "left_out_titles": sorted(left_out, key=str.lower)[:50],
+        "unreadable": len(unreadable),
+        "unreadable_titles": sorted(unreadable, key=str.lower)[:50],
     }
 
 
@@ -255,6 +260,14 @@ def import_file(
     except OSError:
         free = None
     need = int(size * IMPORT_ROOM) + 1024 * 1024 * 1024
+    books = getattr(ctx, "books", None)
+    drive = books.new_books_folder() if books is not None else None
+    if drive is not None:  # the books go to a drive of their own: that is where room is needed
+        library = drive
+        try:
+            free = shutil.disk_usage(drive).free
+        except OSError:
+            free = None
     if free is not None and free < need:
         raise ServerErrors.invalid_input.with_extra(
             f"The library's drive ({library}) has {format_size(free)} free, and importing "

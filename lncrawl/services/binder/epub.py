@@ -14,6 +14,22 @@ from ...utils.file_tools import move_into_place
 
 logger = logging.getLogger(__name__)
 
+
+class _StoredImage(epub.EpubImage):
+    """An image read from the library when the book is written, not before.
+
+    A manga-sized novel's images were all loaded first and held until the book
+    was saved: gigabytes of memory for one e-book.
+    """
+
+    def __init__(self, stored: str) -> None:
+        super().__init__()
+        self._stored: str = stored
+
+    def get_content(self, default: Optional[bytes] = None) -> bytes:
+        return ctx.files.load(self._stored)
+
+
 STYLE_FILE_NAME = "style.css"
 COVER_IMAGE_NAME = "cover.jpg"
 PROJECT_URL = "https://github.com/lncrawl/lightnovel-crawler"
@@ -238,11 +254,9 @@ def make_epub(working_dir: Path, artifact: Artifact, signal=Event(), **kwargs) -
     for image in ctx.images.list(novel_id=artifact.novel_id):
         if not image.is_available:
             continue
-        image_item = epub.EpubImage(
-            file_name=f"images/{image.id}.jpg",
-            media_type="image/jpeg",
-            content=ctx.files.load(image.image_file),
-        )
+        image_item = _StoredImage(image.image_file)
+        image_item.file_name = f"images/{image.id}.jpg"
+        image_item.media_type = "image/jpeg"
         book.add_item(image_item)
 
     # save file

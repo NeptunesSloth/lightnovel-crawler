@@ -98,6 +98,27 @@ class UnfinishedNovelTests(unittest.TestCase):
         self.assertEqual(found["chapters"], 1)
         self.assertEqual(found["kept"], 2)
 
+    def test_a_downloaded_novel_with_new_chapters_since_is_not_unfinished(self) -> None:
+        day = 24 * 3600 * 1000
+        with Session(self.engine) as sess:
+            sess.add(Novel(id="behind", domain="a.com", url="https://a.com/behind", title="b"))
+            for serial, done, when in ((1, True, 1000), (2, True, 1000), (3, False, 1000 + day)):
+                sess.add(
+                    Chapter(
+                        novel_id="behind",
+                        serial=serial,
+                        url=f"https://a.com/behind/{serial}",
+                        title=f"Chapter {serial}",
+                        is_done=done,
+                        created_at=when,
+                    )
+                )
+            sess.commit()
+        found = unfinished.find()
+        self.assertNotIn("behind", [item["id"] for item in found["novels"]])
+        self.assertEqual(found["behind"], 1)
+        self.assertEqual(found["partial"], 1)  # the one a download stopped in still counts
+
     def test_one_kind_can_be_chosen(self) -> None:
         self.assertEqual(
             sorted(item["id"] for item in unfinished.find("details")["novels"]),

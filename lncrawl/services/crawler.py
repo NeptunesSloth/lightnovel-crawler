@@ -138,13 +138,21 @@ class CrawlerService:
     def pending_image_ids(self, image_ids: List[str]) -> List[str]:
         selected = list(dict.fromkeys(image_ids))
         pending: List[str] = []
+        stored: Dict[str, Set[str]] = {}
         for offset in range(0, len(selected), 500):
             batch = selected[offset : offset + 500]
             images = {image.id: image for image in ctx.images.get_many(batch)}
+            # One listing of each novel's images folder. A stat of each page
+            # was 30,000 of them for a long manga, before its first request;
+            # an empty file (a pulled cable) does not count as downloaded.
+            for novel_id in {image.novel_id for image in images.values()}:
+                if novel_id not in stored:
+                    stored[novel_id] = ctx.files.stored_images(novel_id)
             pending.extend(
                 image_id
                 for image_id in batch
-                if image_id not in images or not images[image_id].is_available
+                if image_id not in images
+                or image_id not in stored.get(images[image_id].novel_id, ())
             )
         return pending
 

@@ -35,6 +35,14 @@ def atomic_write(path: Union[str, Path], mode: str = "wb") -> Iterator:
     try:
         with os.fdopen(fd, mode) as f:
             yield f
+            # On the drive before it takes the file's name: a cable pulled just
+            # after the rename could leave the name on an empty or cut file,
+            # which a page image or a state file was then taken for whole.
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
         _replace(tmp_name, path)
     except BaseException:
         try:

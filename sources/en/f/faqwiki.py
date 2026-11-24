@@ -124,7 +124,9 @@ class FaqWiki(LegacyCrawler):
 
         # loop over all pages via next button and get all novels
         next_page = soup.select_one(next_selector)
-        while next_page:
+        seen_pages = set()  # a "next" link back to a page already read would never end
+        while next_page and next_page["href"] not in seen_pages:
+            seen_pages.add(next_page["href"])
             page_soup = self.get_soup(self.absolute_url(next_page["href"]))
             novels += page_soup.select(novel_selector)
             next_page = page_soup.select_one(next_selector)

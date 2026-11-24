@@ -129,6 +129,24 @@ class FileService:
                     logger.debug(f"Could not keep the chapter checks in {index}: {error}")
         return found
 
+    def stored_images(self, novel_id: str) -> Set[str]:
+        """The ids of a novel's page images that are stored (and not empty), in one listing."""
+        folder = self.resolve(f"novels/{novel_id}/images")
+        found: Set[str] = set()
+        try:
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    if not entry.name.endswith(".jpg"):
+                        continue
+                    try:
+                        if entry.stat().st_size > 0:
+                            found.add(entry.name[:-4])
+                    except OSError:
+                        continue
+        except FileNotFoundError:
+            return set()
+        return found
+
     def has_chapter_content(self, file_path: StrPath) -> bool:
         file = self.resolve(file_path)
         try:

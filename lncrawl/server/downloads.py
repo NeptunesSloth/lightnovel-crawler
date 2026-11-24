@@ -181,6 +181,7 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
       case "discovering": return ["Finding novels", "", (ex.found || 0) + " found so far"];
       case "fetching": return ["Adding novel details", "", ""];
       case "checking-updates": return ["Checking for new chapters", "", ""];
+      case "zipping": return ["Making the ZIP", "", "Putting the books in the ZIP: " + (ex.zip_done || 0) + " of " + (ex.zip_total || 0) + "."];
       case "solving-challenge": return ["Getting past a bot check", "wait", "The site asked for a check; solving it in a browser."];
       case "waiting-between-novels":
         return ["Short pause", "wait", (ex.pause_reason === "polite" ? "Polite mode's pause between novels" : "Easing off after an error") + " (" + (ex.adaptive_delay || 0) + "s)."];

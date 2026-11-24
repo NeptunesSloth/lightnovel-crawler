@@ -42,7 +42,9 @@ class RenovelsCrawler(LegacyCrawler):
             for chapter in chapters:
                 pre_chapters.append(chapter)
 
-            if chapters[-1]["index"] == 1:
+            # an empty page is the end too: a novel with no chapter numbered 1
+            # used to run off the end of the list and fail
+            if not chapters or chapters[-1]["index"] == 1:
                 break
             page += 1
 

@@ -5,7 +5,7 @@ import time
 from ....context import ctx
 from ....enums import JobType
 from ....services.importer import ImportStats, import_archive
-from ._base import BaseHandler, HandlerException
+from ._base import AbortedException, BaseHandler, HandlerException
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,17 @@ class ImportArchiveHandler(BaseHandler):
     @staticmethod
     def can_activate(job) -> bool:
         return job.type == JobType.IMPORT_ARCHIVE
+
+    def _discard(self, path, archive_name: str) -> None:
+        # The novels are in the library now and each file is kept as its own
+        # artifact, so the upload itself is a second copy. Airgapped machines
+        # are usually the ones short of disk, so don't leave it behind. A file
+        # imported where it already was on this computer is the user's own.
+        if not self.job.extra.get("keep_archive"):
+            try:
+                path.unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"Could not remove the uploaded archive {archive_name}: {e}")
 
     def run(self) -> None:
         archive_file = self.job.extra.get("archive_file")
@@ -71,16 +82,21 @@ class ImportArchiveHandler(BaseHandler):
                 signal=self.signal,
                 on_progress=on_progress,
             )
-        finally:
-            # The novels are in the library now and each file is kept as its own
-            # artifact, so the upload itself is a second copy. Airgapped machines
-            # are usually the ones short of disk, so don't leave it behind. A file
-            # imported where it already was on this computer is the user's own.
-            if not self.job.extra.get("keep_archive"):
-                try:
-                    path.unlink(missing_ok=True)
-                except Exception as e:
-                    logger.warning(f"Could not remove the uploaded archive {archive_name}: {e}")
+        except AbortedException:
+            # Stopped part way (the app closing, a library move): the upload is
+            # what the import carries on from at the next start. It used to be
+            # deleted here, and the import then failed as "no longer available".
+            try:
+                if ctx.jobs.get(self.job.id).is_done:  # cancelled for good: nothing to resume
+                    self._discard(path, archive_name)
+            except Exception:
+                pass
+            raise
+        except BaseException:
+            self._discard(path, archive_name)
+            raise
+        else:
+            self._discard(path, archive_name)
 
         if not stats.novels and not stats.updated:
             reason = ", ".join(f"{n}× {r}" for r, n in stats.reasons.items())

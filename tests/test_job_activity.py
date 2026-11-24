@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -22,9 +23,17 @@ class JobActivityTests(unittest.TestCase):
         self.ctx = fixture.ctx
         self.user = fixture.user
         fixture.stack.enter_context(patch.object(scrubber, "ctx", self.ctx))
+        fixture.stack.enter_context(patch.object(scrubber, "_last_look", 0))
+        self.stopped: list = []
+        self.ctx.scheduler = SimpleNamespace(stop_job=self.stopped.append)
 
     def running_job(self, age_hours: float) -> Job:
-        job = self.ctx.jobs._create(self.user, JobType.EXPORT_SOURCE, {"domain": "novelfire.net"})
+        self.made = (
+            getattr(self, "made", 0) + 1
+        )  # each its own: the same one asked twice is one job
+        job = self.ctx.jobs._create(
+            self.user, JobType.EXPORT_SOURCE, {"domain": "novelfire.net", "n": self.made}
+        )
         old = current_timestamp() - int(age_hours * HOUR)
         with self.ctx.db.session() as sess:
             sess.exec(
@@ -68,6 +77,27 @@ class JobActivityTests(unittest.TestCase):
         self.assertEqual(cancelled.status, JobStatus.CANCELED)
         self.assertIn("no progress for 16 hours", cancelled.error or "")
         self.assertNotIn("admin", cancelled.error or "")
+        self.assertEqual(self.stopped, [job.id])  # its thread is told, not only the database
+
+    def test_a_computer_that_slept_does_not_get_its_jobs_cancelled_on_waking(self) -> None:
+        job = self.running_job(17)
+        # the scrubber itself last looked 9 hours ago: the machine was asleep
+        with patch.object(scrubber, "_last_look", current_timestamp() - 9 * HOUR):
+            scrubber.Scrubber().cancel_long_jobs()
+        self.assertEqual(self.status(job), JobStatus.RUNNING)
+        self.assertEqual(self.stopped, [])
+
+    def test_asking_for_the_same_download_twice_gives_one_job(self) -> None:
+        first = self.ctx.jobs._create(self.user, JobType.NOVEL, {"url": "https://a.test/n/1"})
+        again = self.ctx.jobs._create(self.user, JobType.NOVEL, {"url": "https://a.test/n/1"})
+        other = self.ctx.jobs._create(self.user, JobType.NOVEL, {"url": "https://a.test/n/2"})
+        self.assertEqual(again.id, first.id)
+        self.assertNotEqual(other.id, first.id)
+        with self.ctx.db.session() as sess:
+            sess.exec(sq.update(Job).where(sq.col(Job.id) == first.id).values(is_done=True))
+            sess.commit()
+        later = self.ctx.jobs._create(self.user, JobType.NOVEL, {"url": "https://a.test/n/1"})
+        self.assertNotEqual(later.id, first.id)  # once it is over, asking again is a new one
 
 
 if __name__ == "__main__":
