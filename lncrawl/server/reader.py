@@ -2459,8 +2459,21 @@ _READER_HTML = """<!DOCTYPE html>
     msg.textContent = "Making the e-book (a long novel can take a minute)…";
     api("/novel/" + novelId + "/ebook", { method: "POST" }).then(function (artifact) {
       if (current.novel && current.novel.id === novelId) msg.textContent = "Downloading " + artifact.file_name + "…";
-      return fetch("/static/" + artifact.output_file.split("/").map(encodeURIComponent).join("/") +
-        "?token=" + encodeURIComponent(token()), {
+      var fileUrl = "/static/" + artifact.output_file.split("/").map(encodeURIComponent).join("/") +
+        "?token=" + encodeURIComponent(token());
+      // An iPhone or iPad cannot save a file handed to it by the page (it sat on
+      // a blank page, loading for ever): it is sent to the file itself, which
+      // Safari offers to open in Books or save to Files.
+      var apple = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      if (apple) {
+        if (current.novel && current.novel.id === novelId) {
+          msg.textContent = "✓ " + artifact.file_name + " is ready: choose Open in Books, or Download. If nothing happens, open this page in Safari (the compass button) and try again.";
+        }
+        window.location.href = fileUrl;
+        return;
+      }
+      return fetch(fileUrl, {
         headers: { "Authorization": "Bearer " + token() }
       }).then(function (response) {
         if (!response.ok) throw new Error("Download failed: HTTP " + response.status);
@@ -2728,8 +2741,21 @@ _READER_HTML = """<!DOCTYPE html>
     if (!artifactId) return;
     var btn = this; btn.disabled = true;
     api("/artifact/" + artifactId).then(function (artifact) {
-      return fetch("/static/" + artifact.output_file.split("/").map(encodeURIComponent).join("/") +
-        "?token=" + encodeURIComponent(token()), {
+      var fileUrl = "/static/" + artifact.output_file.split("/").map(encodeURIComponent).join("/") +
+        "?token=" + encodeURIComponent(token());
+      // An iPhone or iPad cannot save a file handed to it by the page (it sat on
+      // a blank page, loading for ever): it is sent to the file itself, which
+      // Safari offers to open in Books or save to Files.
+      var apple = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      if (apple) {
+        if (current.novel && current.novel.id === novelId) {
+          msg.textContent = "✓ " + artifact.file_name + " is ready: choose Open in Books, or Download. If nothing happens, open this page in Safari (the compass button) and try again.";
+        }
+        window.location.href = fileUrl;
+        return;
+      }
+      return fetch(fileUrl, {
         headers: { "Authorization": "Bearer " + token() }
       }).then(function (response) {
         if (!response.ok) throw new Error("Download failed: HTTP " + response.status);
