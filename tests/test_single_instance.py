@@ -65,6 +65,26 @@ class UnreadableTests(unittest.TestCase):
         self.assertEqual(back.execute("SELECT id FROM novels").fetchall(), [("a",)])
         back.close()
 
+    def test_a_copy_kept_on_another_drive_brings_it_back_when_the_library_has_none(self) -> None:
+        good = sqlite3.connect(str(self.database))
+        good.execute("CREATE TABLE novels (id TEXT)")
+        good.execute("INSERT INTO novels VALUES ('a')")
+        good.commit()
+        good.close()
+        made = db_rescue.take_snapshot(self.database, self.library)
+        with TemporaryDirectory() as other:
+            self.assertIsNotNone(db_rescue.keep_elsewhere(made, Path(other)))
+            for copy in db_rescue.snapshots(self.library):
+                copy.unlink()  # the library's drive lost its own copies
+            self.database.write_bytes(b"")
+            with patch.object(db_rescue, "also_look_in", [Path(other)]):
+                error = db_rescue.unreadable(self.database, self.library)
+                self.assertEqual(error, db_rescue.GONE)
+                db_rescue.rescue(self.database, self.library, str(error))
+        back = sqlite3.connect(str(self.database))
+        self.assertEqual(back.execute("SELECT id FROM novels").fetchall(), [("a",)])
+        back.close()
+
     def test_a_new_library_with_no_database_yet_is_not_a_damaged_one(self) -> None:
         self.assertIsNone(db_rescue.unreadable(self.database, self.library))
 

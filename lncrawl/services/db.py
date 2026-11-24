@@ -1,5 +1,6 @@
 from functools import cached_property
 import logging
+import os
 from pathlib import Path
 from threading import Condition, Event, Lock, Thread
 import time
@@ -242,11 +243,15 @@ class DB:
 
     def _rescue_if_unreadable(self) -> None:
         """Get a database that cannot be read back before anything opens it (see db_rescue)."""
+        from ..utils import db_rescue
         from ..utils.db_rescue import rescue, unreadable
 
         database = self._database_file()
         if database is None:
             return
+        # the copies kept where the app starts from count too
+        base = getattr(ctx.config.app, "base_dir", None)
+        db_rescue.also_look_in = [Path(base)] if base else []
         error = unreadable(database, ctx.config.app.app_dir)
         if error is None:
             return
@@ -278,9 +283,31 @@ class DB:
         made = take_snapshot(database, ctx.config.app.app_dir)
         if made is not None:
             logger.info(f"Copied the database to {made}")
+            self._snapshot_elsewhere(made)
         else:
             logger.warning("Not enough room on the library's drive for a copy of the database")
         return made
+
+    def _snapshot_elsewhere(self, made: Path) -> None:
+        """A second copy where the app starts from, when the library is on another drive."""
+        from ..utils.db_rescue import keep_elsewhere
+
+        library, base = Path(ctx.config.app.app_dir), Path(ctx.config.app.base_dir)
+        if (
+            os.path.splitdrive(os.path.abspath(library))[0].lower()
+            == (os.path.splitdrive(os.path.abspath(base))[0].lower())
+            and os.name == "nt"
+        ):
+            return  # the same drive: nothing gained
+        if os.path.abspath(library) == os.path.abspath(base):
+            return
+        try:
+            kept = keep_elsewhere(made, base)
+        except OSError as error:
+            logger.warning(f"Could not keep a copy of the database in {base}: {error}")
+            return
+        if kept is not None:
+            logger.info(f"Also kept in {kept}")
 
     def _snapshot_loop(self) -> None:
         from ..utils.db_rescue import snapshots

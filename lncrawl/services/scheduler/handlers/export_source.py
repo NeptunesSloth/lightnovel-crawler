@@ -8,7 +8,7 @@ import re
 import shutil
 import sys
 import threading
-from time import monotonic
+from time import monotonic, strftime
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypedDict
 from urllib.parse import quote, unquote
@@ -309,7 +309,20 @@ def _load_manifest_file(domain: str) -> dict:
         if not isinstance(data, dict):
             raise ValueError("Checkpoint must be a JSON object")
         return data
-    except (OSError, ValueError) as error:
+    except ValueError as error:
+        # A checkpoint cut short (a pulled cable leaves it empty) stopped every
+        # resume until someone deleted it by hand. Set aside, and carried on
+        # without: novels already in the library are found there and skipped.
+        aside = path.with_name(f"{path.name}.unreadable-{strftime('%Y%m%d-%H%M%S')}")
+        try:
+            os.replace(path, aside)
+            ctx.logger.warn(
+                f"Export checkpoint {path} could not be read ({error}); kept as {aside.name}"
+            )
+        except OSError:
+            pass
+        return {}
+    except OSError as error:
         raise HandlerException(f"Could not read export checkpoint {path}: {error}") from error
 
 
@@ -918,7 +931,14 @@ class ExportSourceHandler(BaseHandler):
                 budget = discovery_timeout
             if not urls:
                 self._set_extra(exported=0, failed=0, total_novels=0)
-                return
+                # A site that refused every search answered at once, so the
+                # search ended well inside its time and the job "succeeded" with
+                # nothing, no error and no notice.
+                raise HandlerException(
+                    f"No novels were found on '{domain}'. The site may be refusing automated "
+                    "requests, or its search may have changed. Try again later, turn on "
+                    "polite mode, or give the novels' addresses yourself."
+                )
 
             # Replay copies job extras: persist discovery once so Resume does
             # not enumerate a different catalogue or reset its selection.

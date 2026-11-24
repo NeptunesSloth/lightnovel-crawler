@@ -372,8 +372,11 @@ def build_library_zip(
     progress: Optional[Progress] = None,
     stop: Optional[Event] = None,
     more_novels: Tuple[Path, ...] = (),
+    unreadable: Optional[List[str]] = None,
 ) -> int:
     """Write every book in the library to `output`, with an offline index.
+
+    ``unreadable`` collects the titles of books that could not be opened.
 
     ``more_novels``: other ``novels`` folders to look in (a book drive's).
 
@@ -413,6 +416,7 @@ def build_library_zip(
             while arcname.casefold() in names:
                 arcname = f"books/{stem} ({counter}){book.suffix}"
                 counter += 1
+            writing = False
             try:
                 with ExitStack() as stack:
                     if book.path is not None:
@@ -421,6 +425,7 @@ def build_library_zip(
                         archive = stack.enter_context(zipfile.ZipFile(str(book.archive)))
                         source = stack.enter_context(archive.open(str(book.member)))
                     dest = stack.enter_context(target.open(arcname, "w", force_zip64=True))
+                    writing = True
                     while True:
                         if stop is not None and stop.is_set():
                             raise ZipStopped()
@@ -436,7 +441,17 @@ def build_library_zip(
                             size_done=size_done,
                             size_total=size_total,
                         )
-            except (OSError, KeyError, zipfile.BadZipFile):
+            except (OSError, KeyError, zipfile.BadZipFile) as error:
+                if writing:
+                    # Part of it is in the ZIP already and cannot be taken out:
+                    # a ZIP holding a cut book under the book's name, and
+                    # saying nothing, is worse than none.
+                    raise OSError(
+                        f"{book.title} could not be read to the end ({error}); the ZIP was not made"
+                    ) from error
+                # could not be opened at all (in use, gone): named, not dropped silently
+                if unreadable is not None:
+                    unreadable.append(book.title)
                 continue
             finally:
                 say("writing", done, len(ordered), size_done=size_done, size_total=size_total)
