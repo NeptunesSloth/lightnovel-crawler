@@ -5,7 +5,7 @@ from fastapi.responses import Response
 
 from ...context import ctx
 from ...dao import ActivityType, Chapter, ChapterImage, Job, LanguageCode, User
-from ...exceptions import ServerErrors
+from ...exceptions import ServerError, ServerErrors
 from ..caching import cached_file_response
 from ..models import ReadChapterResponse
 from ..security import ensure_user
@@ -18,11 +18,26 @@ router = APIRouter()
 def serve_chapter_image(
     request: Request,
     image_id: str = Path(),
+    chapter: Optional[str] = Query(default=None, description="The chapter showing it"),
 ) -> Response:
-    image = ctx.images.get(image_id)
-    path = ctx.files.resolve(image.image_file)
-    if not path.is_file():
-        raise ServerErrors.no_such_file
+    path = None
+    try:
+        image = ctx.images.get(image_id)
+        path = ctx.files.resolve(image.image_file)
+    except ServerError:
+        pass
+    if path is None or not path.is_file():
+        # lost from the library, but the novel's own e-book may still hold it
+        from ...services import page_rescue
+
+        books = getattr(ctx, "books", None)
+        path = None
+        if chapter and not (
+            books is not None and books.unavailable(ctx.chapters.get(chapter).novel_id)
+        ):
+            path = page_rescue.restore(image_id, chapter)
+        if path is None:
+            raise ServerErrors.no_such_file
     # Manga pages are re-read often; a 304 skips sending the image again.
     return cached_file_response(request, path, "image/jpeg")
 

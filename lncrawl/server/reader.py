@@ -2967,7 +2967,7 @@ _READER_HTML = """<!DOCTYPE html>
       els["reader-title"].textContent = ch.title || ("Chapter " + ch.serial);
       els["reader-content"].innerHTML = res.content || "<p class='muted'>No content available for this chapter.</p>";
       els["reader-pos"].textContent = "#" + (ch.serial || "");
-      var imgCount = hydrateImages(els["reader-content"]);
+      var imgCount = hydrateImages(els["reader-content"], chapterId);
       els["fit-btn"].classList.toggle("hidden", imgCount < 2);
       applyFit();
       current.chapterId = chapterId;
@@ -3010,7 +3010,7 @@ _READER_HTML = """<!DOCTYPE html>
   // Manga images are stored as <img src="images/<id>.jpg">; fetch each through
   // the authenticated image endpoint (via the shared blob cache, so preloaded
   // chapters render instantly) and swap in an object URL. Returns image count.
-  function hydrateImages(root) {
+  function hydrateImages(root, chapterId) {
     var count = 0;
     var imgs = root.querySelectorAll("img[src]");
     imgs.forEach(function (img) {
@@ -3020,7 +3020,7 @@ _READER_HTML = """<!DOCTYPE html>
       count += 1;
       img.decoding = "async";
       img.removeAttribute("src");
-      cacheImage(m[1])
+      cacheImage(m[1], chapterId)
         .then(function (u) { img.src = u; })
         .catch(function () { img.alt = "(image unavailable)"; });
     });
@@ -3097,9 +3097,9 @@ _READER_HTML = """<!DOCTYPE html>
 
   // Blob-URL cache shared by the visible chapter and the preloaded next one.
   var imgCache = {}, imgCacheOrder = [];
-  function cacheImage(id) {
+  function cacheImage(id, chapterId) {
     if (imgCache[id]) return Promise.resolve(imgCache[id]);
-    return fetch("/api/chapter/image/" + id, { headers: { "Authorization": "Bearer " + token() } })
+    return fetch("/api/chapter/image/" + id + (chapterId ? "?chapter=" + encodeURIComponent(chapterId) : ""), { headers: { "Authorization": "Bearer " + token() } })
       .then(function (r) { if (!r.ok) throw new Error("img"); return r.blob(); })
       .then(function (b) {
         var u = URL.createObjectURL(b);
@@ -3135,7 +3135,7 @@ _READER_HTML = """<!DOCTYPE html>
       var i = 0;
       (function step() {
         if (i >= ids.length) return;
-        cacheImage(ids[i++]).then(step).catch(step);
+        cacheImage(ids[i++], chapterId).then(step).catch(step);
       })();
     }).catch(function () {});
   }
