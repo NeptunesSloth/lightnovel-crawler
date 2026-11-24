@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -22,6 +23,9 @@ class JobActivityTests(unittest.TestCase):
         self.ctx = fixture.ctx
         self.user = fixture.user
         fixture.stack.enter_context(patch.object(scrubber, "ctx", self.ctx))
+        fixture.stack.enter_context(patch.object(scrubber, "_last_look", 0))
+        self.stopped: list = []
+        self.ctx.scheduler = SimpleNamespace(stop_job=self.stopped.append)
 
     def running_job(self, age_hours: float) -> Job:
         job = self.ctx.jobs._create(self.user, JobType.EXPORT_SOURCE, {"domain": "novelfire.net"})
@@ -68,6 +72,15 @@ class JobActivityTests(unittest.TestCase):
         self.assertEqual(cancelled.status, JobStatus.CANCELED)
         self.assertIn("no progress for 16 hours", cancelled.error or "")
         self.assertNotIn("admin", cancelled.error or "")
+        self.assertEqual(self.stopped, [job.id])  # its thread is told, not only the database
+
+    def test_a_computer_that_slept_does_not_get_its_jobs_cancelled_on_waking(self) -> None:
+        job = self.running_job(17)
+        # the scrubber itself last looked 9 hours ago: the machine was asleep
+        with patch.object(scrubber, "_last_look", current_timestamp() - 9 * HOUR):
+            scrubber.Scrubber().cancel_long_jobs()
+        self.assertEqual(self.status(job), JobStatus.RUNNING)
+        self.assertEqual(self.stopped, [])
 
 
 if __name__ == "__main__":
