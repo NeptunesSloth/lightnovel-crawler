@@ -73,6 +73,71 @@ class SchedulerLifecycleTests(unittest.TestCase):
             release.set()
             scheduler.stop()
 
+    def test_startup_does_not_wait_for_the_warmup_and_workers_wait_for_it(self) -> None:
+        warming, warmed = Event(), Event()
+        order = []
+
+        def warmup():
+            warming.set()
+            warmed.wait(2)
+            order.append("warmup")
+
+        def run(signal):
+            order.append("worker")
+            return None
+
+        self.stack.enter_context(patch("lncrawl.webdriver.warmup_nodriver", side_effect=warmup))
+        self.stack.enter_context(patch("lncrawl.webdriver.BROWSER_PAGES_SUPPORTED", True))
+        self.stack.enter_context(patch.object(service, "run_jobs", side_effect=run))
+        self.stack.enter_context(patch.object(service, "run_scrubber", MagicMock()))
+        self.stack.enter_context(patch.object(service, "run_artifact_maker", MagicMock()))
+        config = self.ctx.config.crawler
+        config.runner_concurrency = 1
+        config.runner_cooldown = 0.01
+        config.scrubber_cooldown = 1
+        scheduler = service.JobScheduler()
+        try:
+            scheduler.start()  # returns while the warmup is still going
+            self.assertTrue(warming.wait(1), "The warmup never began")
+            self.assertEqual(order, [])
+            warmed.set()
+            for _ in range(100):
+                if "worker" in order:
+                    break
+                Event().wait(0.01)
+            self.assertEqual(order[:2], ["warmup", "worker"])
+        finally:
+            warmed.set()
+            scheduler.stop()
+        self.assertFalse(any(t.is_alive() for t in scheduler._threads))
+
+    def test_stopped_during_the_warmup_no_worker_starts(self) -> None:
+        warming, warmed = Event(), Event()
+
+        def warmup():
+            warming.set()
+            warmed.wait(2)
+
+        run = MagicMock()
+        self.stack.enter_context(patch("lncrawl.webdriver.warmup_nodriver", side_effect=warmup))
+        self.stack.enter_context(patch("lncrawl.webdriver.BROWSER_PAGES_SUPPORTED", True))
+        self.stack.enter_context(patch.object(service, "run_jobs", run))
+        self.stack.enter_context(patch.object(service, "run_scrubber", run))
+        self.stack.enter_context(patch.object(service, "run_artifact_maker", run))
+        scheduler = service.JobScheduler()
+        scheduler.start()
+        self.assertTrue(warming.wait(1))
+        stopper = Thread(target=scheduler.stop)
+        stopper.start()
+        for _ in range(100):
+            if not scheduler.running:
+                break
+            Event().wait(0.01)
+        warmed.set()
+        stopper.join(2)
+        self.assertFalse(stopper.is_alive())
+        run.assert_not_called()
+
     def test_cancel_keeps_export_lease_until_worker_exits(self) -> None:
         first, second = self.create_export(), self.create_export()
         started, release = Event(), Event()
