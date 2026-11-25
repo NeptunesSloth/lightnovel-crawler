@@ -2079,7 +2079,9 @@ _READER_HTML = """<!DOCTYPE html>
         var o = document.createElement("option"); o.value = d; o.textContent = "on " + d + " only"; sel.appendChild(o);
       });
     }
-    btn.textContent = "🔎 Search the sources for “" + q + "”";
+    var link = /^https?:[/][/][^/]+[/].+/i.test(q);
+    btn.textContent = link ? "⬇ Download this novel" : "🔎 Search the sources for “" + q + "”";
+    els["lib-web-scope"].classList.toggle("hidden", link);
   }
   function stopWebSearch() {
     cancelLater(web.timer);
@@ -2094,6 +2096,19 @@ _READER_HTML = """<!DOCTYPE html>
   els["lib-web-btn"].addEventListener("click", function () {
     var q = els["search"].value.trim();
     if (q.length < 2) return;
+    if (/^https?:[/][/][^/]+[/].+/i.test(q)) {
+      // a novel's link: download just that novel
+      var btn = this; btn.disabled = true;
+      api("/job/create/bulk-download", { method: "POST", body: JSON.stringify({ urls: [q] }) })
+        .then(function () {
+          alert("Downloading this novel into your library. It carries on by itself; it shows up here as soon as its details are in, and chapters arrive as they download.");
+          els["search"].value = ""; renderLibrary();
+          later(loadLibrary, 15000);
+        })
+        .catch(function (e) { alert("Could not download it: " + e.message); })
+        .finally(function () { btn.disabled = false; });
+      return;
+    }
     stopWebSearch();
     web.query = q;
     els["lib-web"].classList.remove("hidden");

@@ -296,7 +296,15 @@ _TOOLS_HTML = """<!DOCTYPE html>
   </section>
 
   <section class="pane" data-pane="download">
-    <h2>Download a whole site</h2>
+    <h2>Download one novel</h2>
+    <p class="hint">Paste a novel's link (its page on the site, not the site's home page) and
+      press Download. Only that novel is downloaded, every chapter, into your library. Paste
+      several links, one per line, to download a few at once.</p>
+    <label for="one-urls">Novel link(s)</label>
+    <textarea id="one-urls" rows="3" placeholder="https://novelsource.example/book/the-novel"></textarea>
+    <button id="one-start">Download</button>
+
+    <h2 style="margin-top:28px">Download a whole site</h2>
     <p class="hint">Paste a site's address and press Start. Every novel on it is found and
       downloaded — manga too. It tunes its speed to the site, waits out blocks and hiccups and
       tries again, carries on after the app or computer restarts, and keeps the computer awake
@@ -2149,6 +2157,28 @@ _TOOLS_HTML = """<!DOCTYPE html>
       loadStorage();
     }).catch(function (e) { log("Cleanup failed: " + e.message, "log-err"); });
   });
+  // ---- Download one novel ----
+  document.getElementById("one-start").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var urls = document.getElementById("one-urls").value.split(/[\\s,]+/).map(function (u) {
+      return u.trim();
+    }).filter(function (u) { return /^https?:[/][/]/i.test(u); });
+    if (!urls.length) { log("Paste a novel's link first (it starts with https://).", "log-err"); return; }
+    var home = urls.filter(function (u) { return /^https?:[/][/][^/]+[/]?$/i.test(u); });
+    if (home.length) {
+      log("That is a site's home page, not a novel: " + home[0] + ". Open the novel on the site and copy its link, or use Download a whole site below.", "log-err");
+      return;
+    }
+    var btn = this; busy(btn, true);
+    api("/job/create/bulk-download", { method: "POST", body: JSON.stringify({ urls: urls }) })
+      .then(function () {
+        log("Downloading " + urls.length + " novel(s) into your library. It carries on by itself; follow it on the Downloads page, and read it in the Reader as chapters arrive.", "log-ok");
+        document.getElementById("one-urls").value = "";
+      })
+      .catch(function (e) { log("Could not start the download: " + e.message, "log-err"); })
+      .finally(function () { busy(btn, false); });
+  });
+
   // ---- Clean up extras ----
   function esc(text) {
     var d = document.createElement("div"); d.textContent = text == null ? "" : String(text); return d.innerHTML;
