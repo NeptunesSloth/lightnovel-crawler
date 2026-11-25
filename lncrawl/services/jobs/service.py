@@ -68,7 +68,7 @@ class JobService:
             if status is not None:
                 conditions.append(Job.status == status)
             if is_done is not None:
-                conditions.append(sq.col(Job.is_done).is_(True))
+                conditions.append(sq.col(Job.is_done).is_(is_done))
             if priority is not None:
                 conditions.append(Job.priority == priority)
             if parent_job_id is not None:

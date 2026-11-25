@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 from sqlmodel import Session, SQLModel, create_engine
 
-from lncrawl.dao import Chapter, ChapterImage, Novel
+from lncrawl.dao import Chapter, ChapterImage, Job, Novel
+from lncrawl.enums import JobType
 from lncrawl.server.api import novels as novels_api
 
 
@@ -115,6 +116,31 @@ class HealFromLibraryTests(unittest.TestCase):
             self.ctx.files.load_text("novels/novel/chapters/000001.zst"),
             "<p>Existing chapter one.</p>",
         )
+
+
+class JobListTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import test_novel_repair
+
+        fixture = test_novel_repair.NovelRepairTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.ctx = fixture.ctx
+        self.engine = fixture.engine
+        with Session(self.engine) as session:
+            for n, done in enumerate([True, False, False]):
+                session.add(
+                    Job(id=f"job-{n}", user_id="user", type=JobType.NOVEL, is_done=done, extra={})
+                )
+            session.commit()
+
+    def ids(self, **filters) -> list:
+        return sorted(job.id for job in self.ctx.jobs.list(limit=10, **filters).items)
+
+    def test_is_done_false_lists_the_unfinished_jobs(self) -> None:
+        self.assertEqual(self.ids(is_done=False), ["job-1", "job-2"])
+        self.assertEqual(self.ids(is_done=True), ["job-0"])
+        self.assertEqual(self.ids(), ["job-0", "job-1", "job-2"])
 
 
 if __name__ == "__main__":
