@@ -108,22 +108,15 @@ def _duplicate_sets() -> List[List[Dict[str, Any]]]:
         # Copies naming different authors are different stories with one title.
         named = {_authors(copy["authors"]) for copy in group if _authors(copy["authors"])}
         if len(named) > 1:
-            for author in named:
-                same = [
-                    c for c in group if _authors(c["authors"]) in (author, "")
-                ]  # a copy naming no author goes with each
-                if len(same) >= 2 and any(_authors(c["authors"]) == author for c in same):
+            # Copies naming no author could be any of these stories: left out.
+            # Only copies naming the same author are one story.
+            for author in sorted(named):
+                same = [c for c in group if _authors(c["authors"]) == author]
+                if len(same) >= 2:
                     sets.append(sorted(same, key=lambda c: -c["downloaded"]))
             continue
         sets.append(sorted(group, key=lambda c: -c["downloaded"]))
-    # a copy naming no author may have been put in two sets: keep it in the first
-    seen: Set[str] = set()
-    unique: List[List[Dict[str, Any]]] = []
-    for copies in sets:
-        copies = [c for c in copies if c["id"] not in seen]
-        if len(copies) >= 2:
-            seen.update(c["id"] for c in copies)
-            unique.append(copies)
+    unique = sets
     unique.sort(key=lambda copies: (copies[0]["title"] or "").lower())
     return unique
 

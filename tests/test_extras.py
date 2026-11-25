@@ -65,11 +65,16 @@ class ExtrasTests(unittest.TestCase):
 
     def test_copies_of_one_story_are_found_and_different_stories_are_not(self) -> None:
         self.novel("a1", "Real", "Takehiko Inoue", manga=True)
-        self.novel("a2", "REAL", "", manga=True)
+        self.novel("a2", "REAL", "takehiko inoue", manga=True)
+        self.novel("x1", "Real", "", manga=True)  # names no author: could be either story
         self.novel("b1", "Real", "Someone Else", manga=True)
         self.novel("c1", "Real")  # a novel, not the manga
-        sets = extras._duplicate_sets()
-        self.assertEqual([sorted(c["id"] for c in copies) for copies in sets], [["a1", "a2"]])
+        self.novel("d1", "Vagabond", manga=True)
+        self.novel("d2", "vagabond", manga=True)
+        for _ in range(5):  # the same answer every time
+            sets = extras._duplicate_sets()
+            found = sorted(sorted(c["id"] for c in copies) for copies in sets)
+            self.assertEqual(found, [["a1", "a2"], ["d1", "d2"]])
 
     def test_merging_keeps_the_pages_and_shelves_of_the_copy_that_goes(self) -> None:
         self.novel("kept", "Real", manga=True)
