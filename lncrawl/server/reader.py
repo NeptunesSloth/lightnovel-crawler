@@ -1014,23 +1014,34 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   // The server hands out at most 100 novels a request, so the library is read a
-  // page at a time until every novel is in, however large it has grown.
+  // page at a time until every novel is in, however large it has grown. The
+  // first page says how many there are; the rest are asked for four at a time
+  // (one after another, 1,900 novels were 19 round trips in a row).
   function fetchAllNovels(q) {
-    var all = [];
     function page(offset) {
-      return api("/novels?limit=100&offset=" + offset + "&search=" + encodeURIComponent(q || ""))
-        .then(function (res) {
-          var items = (res && res.items) || [];
-          all = all.concat(items);
-          var total = (res && res.total) || 0;
-          if (items.length === 100 && all.length < total) {
-            els["lib-status"].textContent = "Loading your library… " + all.length + " of " + total;
-            return page(offset + items.length);
-          }
-          return all;
-        });
+      return api("/novels?limit=100&offset=" + offset + "&search=" + encodeURIComponent(q || ""));
     }
-    return page(0);
+    return page(0).then(function (first) {
+      var items = (first && first.items) || [];
+      var total = (first && first.total) || 0;
+      if (items.length < 100 || items.length >= total) return items;
+      var offsets = [];
+      for (var at = items.length; at < total; at += 100) offsets.push(at);
+      var pages = new Array(offsets.length), next = 0, loaded = items.length;
+      function worker() {
+        if (next >= offsets.length) return Promise.resolve();
+        var i = next++;
+        return page(offsets[i]).then(function (res) {
+          pages[i] = (res && res.items) || [];
+          loaded += pages[i].length;
+          els["lib-status"].textContent = "Loading your library… " + loaded + " of " + total;
+          return worker();
+        });
+      }
+      var workers = [];
+      for (var w = 0; w < Math.min(4, offsets.length); w++) workers.push(worker());
+      return Promise.all(workers).then(function () { return items.concat.apply(items, pages); });
+    });
   }
 
   // The whole library is loaded once and searched here, so a search can look at
