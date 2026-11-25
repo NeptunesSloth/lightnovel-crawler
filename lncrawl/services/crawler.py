@@ -392,8 +392,12 @@ class CrawlerService:
                     sess.commit()
 
             # get chapter content
+            # A chapter the site already answered empty on an earlier pass gets
+            # one try now, not three: in a real library some 3,600 such chapters
+            # cost three paced requests and two sleeps each, on every run.
+            attempts = 1 if chapter.extra.get("download_status") == "empty" else 3
             model: Optional[CrawlerChapter] = None
-            for attempt in range(3):
+            for attempt in range(attempts):
                 if crawler.scraper.signal.is_set():
                     raise AbortedException()
                 model = CrawlerChapter(
@@ -411,7 +415,7 @@ class CrawlerService:
                         raise EmptyChapterError(f"No chapter content: {model.url}")
                     break
                 except EmptyChapterError as error:
-                    if attempt == 2:
+                    if attempt == attempts - 1:
                         self._record_chapter_failure(chapter, error)
                         raise
                     logger.warning(f"Empty chapter response; retrying {chapter.url}")
