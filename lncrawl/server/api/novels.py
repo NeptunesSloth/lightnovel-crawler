@@ -96,19 +96,31 @@ def list_sources() -> Dict[str, int]:
     summary="When each novel last gained a chapter, as {novel_id: timestamp}",
 )
 def latest_chapters() -> Dict[str, int]:
-    """The newest chapter's creation time per novel, in one grouped query.
+    """The newest chapter's creation time per novel.
 
     A chapter row is created when an update first finds it, so this is when the
     novel last got something new to read; the novel's own ``updated_at`` moves
     on every refresh, new chapters or not.
+
+    Asked per novel, done and not done apart, so each is one look into the
+    (novel_id, is_done, created_at) index: grouping every chapter scanned the
+    whole index, a tenth of a second with a million chapters.
     """
+
+    def newest(done: bool) -> Any:
+        return (
+            sq.select(sq.func.max(Chapter.created_at))
+            .where(sq.col(Chapter.novel_id) == sq.col(Novel.id), sq.col(Chapter.is_done).is_(done))
+            .scalar_subquery()
+        )
+
     with ctx.db.session() as sess:
         rows = sess.exec(
-            sq.select(Chapter.novel_id, sq.func.max(Chapter.created_at)).group_by(
-                sq.col(Chapter.novel_id)
+            sq.select(Novel.id, newest(False), newest(True)).where(
+                sq.exists().where(sq.col(Chapter.novel_id) == sq.col(Novel.id))
             )
         ).all()
-    return {novel_id: int(ts or 0) for novel_id, ts in rows}
+    return {novel_id: int(max(pending or 0, done or 0)) for novel_id, pending, done in rows}
 
 
 @router.get(
