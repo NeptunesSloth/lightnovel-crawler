@@ -329,7 +329,10 @@ class NovelService:
                 "message": "No other copy of this novel is in your library yet.",
             }
 
-        missing = [c for c in ctx.chapters.list(novel_id=novel_id) if not c.is_available]
+        # one listing of each folder, not a look at every chapter file
+        rows = ctx.chapters.list(novel_id=novel_id)
+        have = ctx.files.chapters_with_content(novel_id, [c.serial for c in rows])
+        missing = [c for c in rows if c.serial not in have]
         if not missing:
             return {"healed": 0, "sources": [], "message": "Nothing missing — already complete."}
         missing_by_title: Dict[str, Any] = {}
@@ -341,10 +344,20 @@ class NovelService:
         filled: List[Any] = []
         # prefer the most complete other copy first
         for src in sorted(candidates, key=lambda n: -(n.chapter_count or 0)):
-            for sc in ctx.chapters.list(novel_id=src.id):
-                if not sc.is_available:
+            source_rows = ctx.chapters.list(novel_id=src.id)
+            source_have = ctx.files.chapters_with_content(src.id, [sc.serial for sc in source_rows])
+            with ctx.db.session() as sess:
+                with_images = set(
+                    sess.exec(
+                        sq.select(ChapterImage.chapter_id)
+                        .where(ChapterImage.novel_id == src.id)
+                        .distinct()
+                    ).all()
+                )
+            for sc in source_rows:
+                if sc.serial not in source_have:
                     continue
-                if ctx.images.list_ids(chapter_id=sc.id):
+                if sc.id in with_images:
                     continue  # manga chapter — skip (per-source image ids)
                 target = missing_by_title.get(_norm(sc.title))
                 if not target or target.id in filled_ids:
