@@ -52,7 +52,7 @@ def list_jobs(
     parent_job_id: Optional[str] = Query(default=None),
     is_done: Optional[bool] = Query(default=None),
 ) -> Paginated[Job]:
-    return ctx.jobs.list(
+    page = ctx.jobs.list(
         limit=limit,
         offset=offset,
         user_id=user_id,
@@ -62,6 +62,16 @@ def list_jobs(
         priority=priority,
         parent_job_id=parent_job_id,
     )
+    for job in page.items:
+        if _LIST_LEAVES_OUT.intersection(job.extra or {}):
+            job.extra = {k: v for k, v in job.extra.items() if k not in _LIST_LEAVES_OUT}
+    return page
+
+
+# Lists of every address, novel or chapter a job covers: most of the size of a
+# list of jobs (1.1 MB for 75 jobs in a real library, sent on each refresh), and
+# read only from one job at a time, which still has them (GET /job/{id}).
+_LIST_LEAVES_OUT = frozenset({"urls", "discovered", "completeness"})
 
 
 @router.get("s/downloads", summary="Every download: running, paused and queued, then recent")

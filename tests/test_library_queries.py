@@ -125,17 +125,45 @@ class JobListTests(unittest.TestCase):
         fixture = test_novel_repair.NovelRepairTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        self.fixture = fixture
         self.ctx = fixture.ctx
         self.engine = fixture.engine
         with Session(self.engine) as session:
             for n, done in enumerate([True, False, False]):
                 session.add(
-                    Job(id=f"job-{n}", user_id="user", type=JobType.NOVEL, is_done=done, extra={})
+                    Job(
+                        id=f"job-{n}",
+                        user_id="user",
+                        type=JobType.NOVEL,
+                        is_done=done,
+                        extra={"url": f"https://example.com/{n}"},
+                    )
                 )
             session.commit()
 
     def ids(self, **filters) -> list:
         return sorted(job.id for job in self.ctx.jobs.list(limit=10, **filters).items)
+
+    def test_the_list_leaves_out_the_long_lists_one_job_still_has(self) -> None:
+        heavy = {
+            "urls": ["https://example.com/1"],
+            "discovered": ["a"],
+            "completeness": {"total": 1},
+            "domain": "example.com",
+            "url": "https://example.com/novel",
+        }
+        with Session(self.engine) as session:
+            session.add(Job(id="heavy", user_id="user", type=JobType.NOVEL, extra=dict(heavy)))
+            session.commit()
+        client = self.fixture.client
+        listed = client.get("/api/jobs?limit=10").json()["items"]
+        row = next(job for job in listed if job["id"] == "heavy")
+        self.assertEqual(
+            row["extra"], {"domain": "example.com", "url": "https://example.com/novel"}
+        )
+        self.assertEqual(client.get("/api/job/heavy").json()["extra"], heavy)
+        with Session(self.engine) as session:
+            self.assertEqual(session.get(Job, "heavy").extra, heavy)
 
     def test_is_done_false_lists_the_unfinished_jobs(self) -> None:
         self.assertEqual(self.ids(is_done=False), ["job-1", "job-2"])
