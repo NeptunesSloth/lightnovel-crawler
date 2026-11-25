@@ -1,5 +1,6 @@
 """The Reader's per-novel summaries answer the same as one grouped query would."""
 
+import importlib
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -169,6 +170,48 @@ class JobListTests(unittest.TestCase):
         self.assertEqual(self.ids(is_done=False), ["job-1", "job-2"])
         self.assertEqual(self.ids(is_done=True), ["job-0"])
         self.assertEqual(self.ids(), ["job-0", "job-1", "job-2"])
+
+
+class SourceListCachingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        # the package names its router `sources`, so the module is asked for by path
+        sources_api = importlib.import_module("lncrawl.server.api.sources")
+        self.counts = {"example.com": 1}
+
+        class Item(SimpleNamespace):
+            def model_dump(self) -> dict:
+                return dict(vars(self))
+
+        ctx = SimpleNamespace(
+            activity=SimpleNamespace(record=lambda *args: None),
+            novels=SimpleNamespace(list_domains=lambda: dict(self.counts)),
+            sources=SimpleNamespace(
+                list=lambda include_rejected: [Item(domain="example.com", total_novels=0)]
+            ),
+        )
+        patcher = patch.object(sources_api, "ctx", ctx)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        app = FastAPI()
+        app.include_router(sources_api.router, prefix="/api/source")
+        app.dependency_overrides[sources_api.ensure_user] = lambda: SimpleNamespace(id="user")
+        self.client = TestClient(app)
+
+    def test_an_unchanged_list_is_not_sent_again_and_new_counts_are(self) -> None:
+        first = self.client.get("/api/sources")
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()[0]["total_novels"], 1)
+        self.assertNotIn("max-age", first.headers["cache-control"])
+        etag = first.headers["etag"]
+        again = self.client.get("/api/sources", headers={"If-None-Match": etag})
+        self.assertEqual(again.status_code, 304)
+        self.counts["example.com"] = 2  # a novel was downloaded
+        changed = self.client.get("/api/sources", headers={"If-None-Match": etag})
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(changed.json()[0]["total_novels"], 2)
 
 
 if __name__ == "__main__":

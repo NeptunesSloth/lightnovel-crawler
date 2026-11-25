@@ -1,11 +1,13 @@
+import json
 from typing import List
 
-from fastapi import APIRouter, Body, Path, Query, Security
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Body, Path, Query, Request, Security
+from fastapi.responses import StreamingResponse
 
 from ...context import ctx
 from ...dao import ActivityType, User
 from ...exceptions import ServerErrors
+from ..caching import Blob, blob_response, make_blob
 from ..models import (
     CrawlerTestRequest,
     PRCreateRequest,
@@ -23,6 +25,7 @@ router = APIRouter()
     response_model=List[SourceItem],
 )
 def list_sources(
+    request: Request,
     skip_rejected: bool = Query(default=False, help="Send true to skip rejected sources"),
     user: User = Security(ensure_user),
 ):
@@ -33,13 +36,27 @@ def list_sources(
     )
     for item in result:
         item.total_novels = count.get(item.domain, 0)
-    return JSONResponse(
-        content=[item.model_dump() for item in result],
-        headers={
-            "ETag": str(ctx.sources.version),
-            "Cache-Control": "public, max-age=14400",
-        },
-    )
+    # The list holds this library's novel counts, so it is checked with the
+    # server every time (a 304 without the 250 KB when nothing changed); kept
+    # for hours, it showed the counts from before the last downloads.
+    body = json.dumps(
+        [item.model_dump() for item in result],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return blob_response(request, _sources_blob(body), {"Cache-Control": "private, no-cache"})
+
+
+_last_sources: List[Blob] = []
+
+
+def _sources_blob(body: bytes) -> Blob:
+    """The answer as a Blob, compressed once while it stays the same."""
+    last = _last_sources[0] if _last_sources else None
+    if last is None or last.body != body:
+        last = make_blob(body, "application/json")
+        _last_sources[:] = [last]
+    return last
 
 
 @router.get(
