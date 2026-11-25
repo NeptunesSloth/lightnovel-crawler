@@ -21,16 +21,23 @@ class ChapterService:
         The files are looked at with one listing of the novel's folder (and the
         checks kept beside them), not a stat and a read of each: opening a
         5,000-chapter novel read 5,000 files off the drive every time.
+
+        Only the serials are read for every chapter; whole rows only for the
+        gaps. Making a row object of each chapter took most of the time on a
+        novel of 11,000 chapters, all of them downloaded.
         """
         books = getattr(ctx, "books", None)
         if books is not None:
             books.require(novel_id)  # unplugged is not "nothing downloaded"
-        chapters = self.list(novel_id=novel_id)
-        have = ctx.files.chapters_with_content(novel_id, [c.serial for c in chapters])
+        with ctx.db.session() as sess:
+            serials = sess.exec(
+                sq.select(Chapter.serial)
+                .where(Chapter.novel_id == novel_id)
+                .order_by(sq.col(Chapter.serial).asc())
+            ).all()
+        have = ctx.files.chapters_with_content(novel_id, serials)
         gaps: List[ChapterGap] = []
-        for chapter in chapters:
-            if chapter.serial in have:
-                continue
+        for chapter in self._by_serials(novel_id, [s for s in serials if s not in have]):
             status = "missing"
             if (
                 ctx.files.exists(chapter.content_file)
@@ -50,14 +57,30 @@ class ChapterService:
             )
         return NovelCompleteness(
             novel_id=novel_id,
-            total=len(chapters),
-            downloaded=len(chapters) - len(gaps),
+            total=len(serials),
+            downloaded=len(serials) - len(gaps),
             missing=sum(gap.status == "missing" for gap in gaps),
             failed=sum(gap.status == "failed" for gap in gaps),
             empty=sum(gap.status == "empty" for gap in gaps),
-            complete=bool(chapters) and not gaps,
+            complete=bool(serials) and not gaps,
             gaps=gaps,
         )
+
+    def _by_serials(self, novel_id: str, serials: List[int]) -> List[Chapter]:
+        """These chapters of a novel, in serial order (asked a few hundred at a time)."""
+        found: List[Chapter] = []
+        with ctx.db.session() as sess:
+            for start in range(0, len(serials), 500):
+                found.extend(
+                    sess.exec(
+                        sq.select(Chapter).where(
+                            Chapter.novel_id == novel_id,
+                            sq.col(Chapter.serial).in_(serials[start : start + 500]),
+                        )
+                    ).all()
+                )
+        found.sort(key=lambda chapter: chapter.serial)
+        return found
 
     def list(
         self,
