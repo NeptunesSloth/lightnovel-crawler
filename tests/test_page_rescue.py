@@ -22,6 +22,7 @@ class PageRescueTests(unittest.TestCase):
         self.ctx = fixture.ctx
         fixture.stack.enter_context(patch.object(page_rescue, "ctx", self.ctx))
         page_rescue._books.clear()
+        page_rescue._hint.clear()
         body = "".join(f'<p><img src="images/{i}.jpg" alt="{i}"/></p>' for i in (FIRST, SECOND))
         self.ctx.files.save_text("novels/novel/chapters/000001.zst", body)
         book = self.ctx.files.resolve("novels/novel/artifacts/Test Novel.cbz")
@@ -54,6 +55,41 @@ class PageRescueTests(unittest.TestCase):
             "novels/novel/chapters/000001.zst", f'<img src="images/{FIRST}.jpg"/>'
         )
         self.assertIsNone(page_rescue.restore(FIRST, "chapter-1"))
+
+    def test_a_page_filed_under_another_novel_folder_is_copied_back(self) -> None:
+        self.ctx.files.resolve("novels/novel/artifacts/Test Novel.cbz").unlink()
+        other = self.ctx.files.resolve(f"novels/other/images/{FIRST}.jpg")
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_bytes(b"kept elsewhere")
+        path = page_rescue.restore(FIRST, "chapter-1")
+        assert path is not None
+        self.assertEqual(path.read_bytes(), b"kept elsewhere")
+        self.assertIn("novels/novel/images", path.as_posix())
+
+    def test_a_downloaded_page_is_fetched_again_from_its_site(self) -> None:
+        self.ctx.files.resolve("novels/novel/artifacts/Test Novel.cbz").unlink()
+        with self.ctx.db.session() as sess:
+            image = sess.get(ChapterImage, SECOND)
+            assert image is not None
+            image.url = "https://site.test/page-2.jpg"
+            sess.add(image)
+            sess.commit()
+        asked = []
+
+        def fetch(user_id, image_id, signal, refresh=False):
+            asked.append((user_id, image_id))
+            image = self.ctx.images.get(image_id)
+            file = self.ctx.files.resolve(image.image_file)
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(b"from the site")
+            return image
+
+        with patch.object(self.ctx.crawler, "fetch_image", fetch):
+            path = page_rescue.restore(SECOND, "chapter-1", "user")
+            self.assertIsNone(page_rescue.restore(FIRST, "chapter-1", "user"))  # no address
+        assert path is not None
+        self.assertEqual(path.read_bytes(), b"from the site")
+        self.assertEqual(asked, [("user", SECOND)])
 
 
 if __name__ == "__main__":
