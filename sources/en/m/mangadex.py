@@ -115,7 +115,7 @@ class MangaDexCrawler(LegacyCrawler):
         self.novel_alt_titles = [t for t in dict.fromkeys(alt_titles) if t != self.novel_title]
 
         # Fetch the chapter list (paginated), keeping one entry per chapter number
-        seen = set()
+        seen: dict = {}  # chapter number -> (its entry, whether it has pages here)
         volume_map: dict = {}
         offset = 0
         while True:
@@ -129,9 +129,17 @@ class MangaDexCrawler(LegacyCrawler):
                 a = ch.get("attributes", {})
                 number = a.get("chapter")
                 key = number if number is not None else ch["id"]
+                # An upload hosted on another site, or without pages, has no
+                # images here: every download of it came back empty.
+                readable = not a.get("externalUrl") and a.get("pages") != 0
                 if key in seen:
-                    continue  # skip duplicate uploads of the same chapter
-                seen.add(key)
+                    # skip duplicate uploads of the same chapter, but read one
+                    # that has pages here in place of a first one that has not
+                    entry, had_pages = seen[key]
+                    if readable and not had_pages:
+                        entry.url = f"https://mangadex.org/chapter/{ch['id']}"
+                        seen[key] = (entry, True)
+                    continue
 
                 vol = a.get("volume")
                 if vol not in volume_map:
@@ -142,14 +150,14 @@ class MangaDexCrawler(LegacyCrawler):
                 if a.get("title"):
                     label += f": {a['title']}"
 
-                self.chapters.append(
-                    Chapter(
-                        id=1 + len(self.chapters),
-                        volume=volume_map[vol],
-                        title=label,
-                        url=f"https://mangadex.org/chapter/{ch['id']}",
-                    )
+                entry = Chapter(
+                    id=1 + len(self.chapters),
+                    volume=volume_map[vol],
+                    title=label,
+                    url=f"https://mangadex.org/chapter/{ch['id']}",
                 )
+                seen[key] = (entry, readable)
+                self.chapters.append(entry)
 
             total = feed.get("total", 0)
             offset += 500
