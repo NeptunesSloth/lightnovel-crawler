@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import threading
 from threading import Event
 from time import monotonic
-from typing import Iterator, Optional
+from typing import Dict, Iterator, Optional
 
 from ..exceptions import AbortedException
 
@@ -75,6 +75,7 @@ class RequestBudget:
         with self._lock:
             if not self._waiting:
                 self._paused_at = monotonic()
+                _count_waiting(self.signal, 1)
             self._waiting += 1
         try:
             yield
@@ -83,6 +84,30 @@ class RequestBudget:
                 self._waiting -= 1
                 if not self._waiting:
                     self.deadline += monotonic() - self._paused_at
+                    _count_waiting(self.signal, -1)
+
+
+# How many budgets with each cancellation signal have a request waiting its
+# turn right now: what a batch's stall watchdog asks (see waiting_for).
+_waiting_lock = threading.Lock()
+_waiting_by_signal: Dict[Event, int] = {}
+
+
+def _count_waiting(signal: Optional[Event], change: int) -> None:
+    if signal is None:
+        return
+    with _waiting_lock:
+        count = _waiting_by_signal.get(signal, 0) + change
+        if count > 0:
+            _waiting_by_signal[signal] = count
+        else:
+            _waiting_by_signal.pop(signal, None)
+
+
+def waiting_for(signal: Event) -> int:
+    """How many chapters or images cancelled by ``signal`` wait for their turn to be sent."""
+    with _waiting_lock:
+        return _waiting_by_signal.get(signal, 0)
 
 
 _budget: ContextVar[Optional[RequestBudget]] = ContextVar("crawl_request_budget", default=None)
