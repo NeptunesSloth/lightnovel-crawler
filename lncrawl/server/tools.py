@@ -569,6 +569,24 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <button id="storage-clean" class="secondary" title="Deletes the ZIPs made by site downloads (your novels stay). Backups are kept.">Delete old ZIPs</button>
     </div>
 
+    <h3>Clean up extras</h3>
+    <p class="hint">Duplicate novels are merged into their most complete copy (a copy with chapters
+      the other lacks is kept). Older e-books of a novel go once a newer one is made. Leftovers are
+      files nothing uses. Nothing on a drive that is not plugged in is touched.</p>
+    <button id="extras-find" class="secondary" style="margin-top:0">Find extras</button>
+    <div id="extras-box" class="hidden" style="margin-top:12px">
+      <label class="check"><input type="checkbox" id="extras-duplicates" checked /> <span id="extras-duplicates-text">Duplicate novels</span></label>
+      <div id="extras-duplicates-list" class="muted" style="max-height:180px;overflow:auto;margin:4px 0 10px 24px"></div>
+      <label class="check"><input type="checkbox" id="extras-ebooks" checked /> <span id="extras-ebooks-text">Extra e-book copies</span></label>
+      <label class="check"><input type="checkbox" id="extras-leftovers" checked /> <span id="extras-leftovers-text">Leftover files</span></label>
+      <div id="extras-leftovers-list" class="muted" style="max-height:180px;overflow:auto;margin:4px 0 10px 24px"></div>
+      <button id="extras-go">Clean up</button>
+    </div>
+    <div id="extras-progress" class="hidden" style="margin-top:10px">
+      <progress id="extras-bar" max="1" value="0" style="width:100%"></progress>
+      <p class="muted" id="extras-text"></p>
+    </div>
+
     <h3>Backup</h3>
     <p class="hint">One ZIP of the database and every downloaded novel, saved to the library's
       exports folder and your Desktop.</p>
@@ -2130,6 +2148,88 @@ _TOOLS_HTML = """<!DOCTYPE html>
       log("Removed " + r.removed + " zip(s), freed " + (fmtSize(r.freed) || "0 MB") + ".", "log-ok");
       loadStorage();
     }).catch(function (e) { log("Cleanup failed: " + e.message, "log-err"); });
+  });
+  // ---- Clean up extras ----
+  function esc(text) {
+    var d = document.createElement("div"); d.textContent = text == null ? "" : String(text); return d.innerHTML;
+  }
+  function showExtras(r) {
+    var box = document.getElementById("extras-box");
+    box.classList.remove("hidden");
+    var d = r.duplicates, e = r.ebooks, l = r.leftovers;
+    document.getElementById("extras-duplicates-text").textContent = d.sets
+      ? "Duplicate novels: " + d.sets + " title(s) saved more than once (" + d.copies + " extra cop" + (d.copies === 1 ? "y" : "ies") + ")"
+      : "Duplicate novels: none found";
+    document.getElementById("extras-duplicates").disabled = !d.sets;
+    document.getElementById("extras-duplicates").checked = !!d.sets;
+    document.getElementById("extras-duplicates-list").innerHTML = d.list.map(function (copies) {
+      return "<div><b>" + esc(copies[0].title) + "</b>: " + copies.map(function (c) {
+        return esc(c.domain) + " (" + c.downloaded + "/" + c.chapters + ")";
+      }).join(", ") + "</div>";
+    }).join("");
+    var ebooks = e.records + e.files;
+    document.getElementById("extras-ebooks-text").textContent = ebooks
+      ? "Extra e-book copies: " + e.records + " old record(s), " + e.files + " file(s), " + (fmtSize(e.size) || "0 MB")
+      : "Extra e-book copies: none found";
+    document.getElementById("extras-ebooks").disabled = !ebooks;
+    document.getElementById("extras-ebooks").checked = !!ebooks;
+    document.getElementById("extras-leftovers-text").textContent = l.count
+      ? "Leftover files: " + l.count + " item(s), " + (fmtSize(l.size) || "0 MB")
+      : "Leftover files: none found";
+    document.getElementById("extras-leftovers").disabled = !l.count;
+    document.getElementById("extras-leftovers").checked = !!l.count;
+    document.getElementById("extras-leftovers-list").innerHTML = l.list.map(function (item) {
+      return "<div>" + esc(item.path) + " (" + esc(item.why) + ", " + (fmtSize(item.size) || "0 MB") + ")</div>";
+    }).join("");
+    document.getElementById("extras-go").disabled = !(d.sets || ebooks || l.count);
+    if (r.cleaning && r.cleaning.running) watchExtras();
+  }
+  var extrasTimer = null;
+  function showExtrasProgress(s) {
+    var wrap = document.getElementById("extras-progress");
+    wrap.classList.remove("hidden");
+    var bar = document.getElementById("extras-bar");
+    bar.max = Math.max(1, s.total); bar.value = s.done;
+    var text = s.running
+      ? "Cleaning up: " + s.done + " of " + (s.total || "?") + (s.current ? " · " + s.current : "")
+      : "Done: " + s.merged + " duplicate cop" + (s.merged === 1 ? "y" : "ies") + " merged" +
+        (s.kept ? ", " + s.kept + " kept because they have chapters the other lacks" : "") +
+        ", " + (fmtSize(s.freed) || "0 MB") + " freed" + (s.failed ? ", " + s.failed + " could not be cleaned (" + s.error + ")" : "") + ".";
+    document.getElementById("extras-text").textContent = text;
+  }
+  function watchExtras() {
+    if (extrasTimer) return;
+    extrasTimer = setInterval(function () {
+      api("/admin/extras/status").then(function (s) {
+        showExtrasProgress(s);
+        if (!s.running) {
+          clearInterval(extrasTimer); extrasTimer = null;
+          document.getElementById("extras-go").disabled = false;
+          log("Extras cleaned up.", "log-ok");
+          loadStorage();
+        }
+      }).catch(function () {});
+    }, 1500);
+  }
+  document.getElementById("extras-find").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var btn = this; busy(btn, true);
+    log("Looking for extras (a big library can take a minute)…", "log-info");
+    api("/admin/extras").then(showExtras)
+      .catch(function (e) { log("Could not look for extras: " + e.message, "log-err"); })
+      .finally(function () { busy(btn, false); });
+  });
+  document.getElementById("extras-go").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var kinds = ["duplicates", "ebooks", "leftovers"].filter(function (k) {
+      var box = document.getElementById("extras-" + k); return box.checked && !box.disabled;
+    });
+    if (!kinds.length) { log("Tick what to clean up first.", "log-err"); return; }
+    if (!confirm("Clean up the ticked extras? This cannot be undone. Duplicates are merged into their most complete copy; a copy with chapters the other lacks is kept.")) return;
+    this.disabled = true;
+    api("/admin/extras", { method: "POST", body: JSON.stringify({ kinds: kinds }) })
+      .then(function (s) { showExtrasProgress(s); watchExtras(); })
+      .catch(function (e) { log("Could not clean up: " + e.message, "log-err"); document.getElementById("extras-go").disabled = false; });
   });
   document.getElementById("backup-btn").addEventListener("click", function () {
     if (!requireAuth()) return;
