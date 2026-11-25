@@ -57,7 +57,8 @@ class NovelFireTests(unittest.TestCase):
                     '<li><a title="Novel Fire" href="/home">h</a></li>'
                     '<li><a title="Ranking" href="https://novelfire.net/ranking">r</a></li>'
                     '<li><a title="Fantasy" href="/genre-fantasy/sort-popular">g</a></li>'
-                    '<li><a title="Other" href="/book/example-two/chapter-1">o</a></li>'
+                    '<li><a title="Privacy" href="/page/privacy-policy">p</a></li>'
+                    '<li><a title="Contact" href="/contact-us">c</a></li>'
                 )
             return f'<ul class="chapter-list">{items}</ul><div class="pagination">{links}</div>'
 

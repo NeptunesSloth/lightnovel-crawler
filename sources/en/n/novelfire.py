@@ -46,15 +46,19 @@ def _mapping(url: str, final_url: str) -> Optional[_Mapping]:
 def _chapter_anchors(page: Any, absolute_url: Callable[[str], str], novel_url: str) -> List[Any]:
     """The links to this novel's chapters on a page of its chapter list.
 
-    Only those under the novel's own address: a page that answered with the
-    site's menus instead saved "chapters" like /home and /ranking, fetched
-    again (and found empty) on every download of the novel.
+    Only those under the novel's own address, or named as a chapter: a page
+    that answered with the site's menus instead saved "chapters" like /home,
+    /ranking and /contact-us, fetched again (and found empty) on every
+    download of the novel.
     """
     own = urlsplit(novel_url).path.rstrip("/") + "/"
+
+    def is_chapter(href: str) -> bool:
+        path = urlsplit(absolute_url(href)).path
+        return path.startswith(own) or path.rstrip("/").rsplit("/", 1)[-1].startswith("chapter")
+
     return [
-        a
-        for a in page.select("ul.chapter-list li a")
-        if a.get("href") and urlsplit(absolute_url(a["href"])).path.startswith(own)
+        a for a in page.select("ul.chapter-list li a") if a.get("href") and is_chapter(a["href"])
     ]
 
 
