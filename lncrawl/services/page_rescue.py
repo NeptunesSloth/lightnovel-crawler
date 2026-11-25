@@ -10,12 +10,14 @@ taken out of that e-book, stored where it belongs, and served.
 """
 
 import logging
+import os
 from pathlib import Path
 import posixpath
 import re
 import shutil
 import threading
-from typing import Dict, List, Optional, Tuple
+from threading import Event
+from typing import Dict, List, Optional, Set, Tuple
 import zipfile
 
 import sqlmodel as sq
@@ -33,6 +35,10 @@ _lock = threading.Lock()
 # e-book file -> (its size and time, {chapter serial: its pages in order}, {image id: member})
 _books: Dict[str, Tuple[Tuple[int, float], Dict[int, List[str]], Dict[str, str]]] = {}
 _BOOKS_KEPT = 4
+_hint: Dict[str, str] = {}  # the other novel's folder the last page was found in
+_said: Set[str] = set()  # chapters already said to be past saving, so the log says it once
+# Seconds a page may take to download again while the Reader waits for it.
+DOWNLOAD_WAIT = 40.0
 
 
 def _layout(file: Path, name: str) -> Tuple[Dict[int, List[str]], Dict[str, str]]:
@@ -87,8 +93,68 @@ def _file(image_id: str, novel_id: str, chapter_id: str) -> None:
         sess.commit()
 
 
-def restore(image_id: str, chapter_id: str) -> Optional[Path]:
-    """The page's file, put back if the novel's e-book has it; None when it cannot be."""
+def _found_elsewhere(image_id: str, novel_id: str) -> Optional[Path]:
+    """The page's file, filed under another novel's folder (here or on the book drive)."""
+    roots = [ctx.files.resolve("novels")]
+    books = getattr(ctx, "books", None)
+    drive = books.folder() if books is not None and books.plugged() else None
+    if drive is not None:
+        roots.append(drive / "novels")
+    name = f"{image_id}.jpg"
+    hint = _hint.get("folder")
+    if hint:
+        candidate = Path(hint) / "images" / name
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            return candidate
+    for root in roots:
+        try:
+            folders = [entry.path for entry in os.scandir(root) if entry.is_dir()]
+        except OSError:
+            continue
+        for folder in folders:
+            if os.path.basename(folder) == novel_id:
+                continue
+            candidate = Path(folder) / "images" / name
+            try:
+                if candidate.is_file() and candidate.stat().st_size > 0:
+                    _hint["folder"] = folder  # the rest of the chapter is likely there too
+                    return candidate
+            except OSError:
+                continue
+    return None
+
+
+def _download(image_id: str, novel_id: str, chapter_id: str, user_id: str) -> Optional[Path]:
+    """Fetch the page again from the site it came from, when its address is known."""
+    with ctx.db.session() as sess:
+        image = sess.get(ChapterImage, image_id)
+        url = image.url if image is not None else ""
+    if not url.startswith(("http://", "https://")):
+        return None
+    _file(image_id, novel_id, chapter_id)  # its novel may be gone: this one takes it
+    stop = Event()
+    timer = threading.Timer(DOWNLOAD_WAIT, stop.set)
+    timer.start()
+    try:
+        image = ctx.crawler.fetch_image(user_id, image_id, stop, refresh=True)
+    finally:
+        timer.cancel()
+    file = ctx.files.resolve(image.image_file)
+    return file if file.is_file() and file.stat().st_size > 0 else None
+
+
+def _say_once(chapter_id: str, message: str) -> None:
+    if chapter_id not in _said:
+        _said.add(chapter_id)
+        logger.warning(message)
+
+
+def restore(image_id: str, chapter_id: str, user_id: Optional[str] = None) -> Optional[Path]:
+    """The page's file, put back from wherever it can be found; None when it cannot be.
+
+    In order: a file already in the library (under this novel or another),
+    the novel's own e-book, then the site it was downloaded from.
+    """
     image_id = image_id.lower()
     if not _RE_IMAGE_ID.match(image_id):
         return None
@@ -106,6 +172,13 @@ def restore(image_id: str, chapter_id: str) -> Optional[Path]:
     with _lock:
         if target.is_file() and target.stat().st_size > 0:
             _file(image_id, novel_id, chapter_id)  # the file was there; only its row was not
+            return target
+        elsewhere = _found_elsewhere(image_id, novel_id)
+        if elsewhere is not None:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(elsewhere, "rb") as src, atomic_write(target) as dst:
+                shutil.copyfileobj(src, dst, 1024 * 1024)
+            _file(image_id, novel_id, chapter_id)
             return target
         with ctx.db.session() as sess:
             made = sess.exec(
@@ -139,4 +212,20 @@ def restore(image_id: str, chapter_id: str) -> Optional[Path]:
                 return target
             except Exception as error:
                 logger.warning(f"Could not take page {image_id} out of {file}: {error}")
+
+    if user_id:
+        try:
+            found = _download(image_id, novel_id, chapter_id, user_id)
+            if found is not None:
+                return found
+        except Exception as error:
+            _say_once(chapter_id, f"Could not download page {image_id} again: {error}")
+            return None
+    held = "its e-book in the library does not hold them" if made else "it has no e-book"
+    _say_once(
+        chapter_id,
+        f"Pages of chapter {chapter.serial} of novel {novel_id} cannot be found: not in the "
+        f"library, {held}, and the site they came from is not known. "
+        f"Import or download this novel again to get them back.",
+    )
     return None

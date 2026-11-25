@@ -887,14 +887,20 @@ class JobService:
         several novels at once, recovery from stalls and blocks, and resume.
         """
         by_site: dict = {}
+        unknown: List[str] = []
         for url in dict.fromkeys(str(u) for u in urls if u):
             try:
                 site = ctx.sources.get_domain(url)
                 ctx.sources.get_source(site)
             except Exception:
-                continue  # no source for it here; nothing could download it
+                unknown.append(url)  # no source for it here; nothing could download it
+                continue
             by_site.setdefault(site, []).append(url)
         if not by_site:
+            if unknown:
+                raise ServerErrors.no_novels_to_download.with_extra(
+                    f"The app cannot download from {', '.join(unknown[:3])}: no source for that site"
+                )
             raise ServerErrors.no_novels_to_download
         return [
             self.export_source(

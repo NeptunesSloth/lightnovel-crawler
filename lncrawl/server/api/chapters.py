@@ -19,6 +19,7 @@ def serve_chapter_image(
     request: Request,
     image_id: str = Path(),
     chapter: Optional[str] = Query(default=None, description="The chapter showing it"),
+    user: User = Security(ensure_user),
 ) -> Response:
     path = None
     try:
@@ -35,7 +36,7 @@ def serve_chapter_image(
         if chapter and not (
             books is not None and books.unavailable(ctx.chapters.get(chapter).novel_id)
         ):
-            path = page_rescue.restore(image_id, chapter)
+            path = page_rescue.restore(image_id, chapter, user.id)
         if path is None:
             raise ServerErrors.no_such_file
     # Manga pages are re-read often; a 304 skips sending the image again.

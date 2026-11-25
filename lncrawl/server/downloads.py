@@ -87,8 +87,8 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
 
   <div class="card hidden" id="signin">
     <div class="title">Sign in</div>
-    <input id="email" type="text" placeholder="Email" autocomplete="username" />
-    <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
+    <input id="email" autocapitalize="none" autocorrect="off" spellcheck="false" type="text" placeholder="Email" autocomplete="username" />
+    <input id="password" autocapitalize="none" autocorrect="off" spellcheck="false" type="password" placeholder="Password" autocomplete="current-password" />
     <button class="primary" id="login-btn">Sign in</button>
     <div class="line err" id="login-err"></div>
   </div>

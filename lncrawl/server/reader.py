@@ -377,9 +377,9 @@ _READER_HTML = """<!DOCTYPE html>
   <div id="auth" class="hidden">
     <h2>Sign in</h2>
     <label for="email">Email</label>
-    <input id="email" type="text" autocomplete="username" />
+    <input id="email" autocapitalize="none" autocorrect="off" spellcheck="false" type="text" autocomplete="username" />
     <label for="password">Password</label>
-    <input id="password" type="text" autocomplete="current-password" style="-webkit-text-security:disc" />
+    <input id="password" autocapitalize="none" autocorrect="off" spellcheck="false" type="text" autocomplete="current-password" style="-webkit-text-security:disc" />
     <button id="login" class="primary" style="margin-top:14px">Sign in</button>
     <p class="muted" id="auth-msg"></p>
   </div>
@@ -2079,7 +2079,9 @@ _READER_HTML = """<!DOCTYPE html>
         var o = document.createElement("option"); o.value = d; o.textContent = "on " + d + " only"; sel.appendChild(o);
       });
     }
-    btn.textContent = "🔎 Search the sources for “" + q + "”";
+    var link = /^https?:[/][/][^/]+[/].+/i.test(q);
+    btn.textContent = link ? "⬇ Download this novel" : "🔎 Search the sources for “" + q + "”";
+    els["lib-web-scope"].classList.toggle("hidden", link);
   }
   function stopWebSearch() {
     cancelLater(web.timer);
@@ -2094,6 +2096,19 @@ _READER_HTML = """<!DOCTYPE html>
   els["lib-web-btn"].addEventListener("click", function () {
     var q = els["search"].value.trim();
     if (q.length < 2) return;
+    if (/^https?:[/][/][^/]+[/].+/i.test(q)) {
+      // a novel's link: download just that novel
+      var btn = this; btn.disabled = true;
+      api("/job/create/bulk-download", { method: "POST", body: JSON.stringify({ urls: [q] }) })
+        .then(function () {
+          alert("Downloading this novel into your library. It carries on by itself; it shows up here as soon as its details are in, and chapters arrive as they download.");
+          els["search"].value = ""; renderLibrary();
+          later(loadLibrary, 15000);
+        })
+        .catch(function (e) { alert("Could not download it: " + e.message); })
+        .finally(function () { btn.disabled = false; });
+      return;
+    }
     stopWebSearch();
     web.query = q;
     els["lib-web"].classList.remove("hidden");
@@ -2459,8 +2474,21 @@ _READER_HTML = """<!DOCTYPE html>
     msg.textContent = "Making the e-book (a long novel can take a minute)…";
     api("/novel/" + novelId + "/ebook", { method: "POST" }).then(function (artifact) {
       if (current.novel && current.novel.id === novelId) msg.textContent = "Downloading " + artifact.file_name + "…";
-      return fetch("/static/" + artifact.output_file.split("/").map(encodeURIComponent).join("/") +
-        "?token=" + encodeURIComponent(token()), {
+      var fileUrl = "/static/" + artifact.output_file.split("/").map(encodeURIComponent).join("/") +
+        "?token=" + encodeURIComponent(token());
+      // An iPhone or iPad cannot save a file handed to it by the page (it sat on
+      // a blank page, loading for ever): it is sent to the file itself, which
+      // Safari offers to open in Books or save to Files.
+      var apple = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      if (apple) {
+        if (current.novel && current.novel.id === novelId) {
+          msg.textContent = "✓ " + artifact.file_name + " is ready: choose Open in Books, or Download. If nothing happens, open this page in Safari (the compass button) and try again.";
+        }
+        window.location.href = fileUrl;
+        return;
+      }
+      return fetch(fileUrl, {
         headers: { "Authorization": "Bearer " + token() }
       }).then(function (response) {
         if (!response.ok) throw new Error("Download failed: HTTP " + response.status);
@@ -2728,8 +2756,21 @@ _READER_HTML = """<!DOCTYPE html>
     if (!artifactId) return;
     var btn = this; btn.disabled = true;
     api("/artifact/" + artifactId).then(function (artifact) {
-      return fetch("/static/" + artifact.output_file.split("/").map(encodeURIComponent).join("/") +
-        "?token=" + encodeURIComponent(token()), {
+      var fileUrl = "/static/" + artifact.output_file.split("/").map(encodeURIComponent).join("/") +
+        "?token=" + encodeURIComponent(token());
+      // An iPhone or iPad cannot save a file handed to it by the page (it sat on
+      // a blank page, loading for ever): it is sent to the file itself, which
+      // Safari offers to open in Books or save to Files.
+      var apple = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      if (apple) {
+        if (current.novel && current.novel.id === novelId) {
+          msg.textContent = "✓ " + artifact.file_name + " is ready: choose Open in Books, or Download. If nothing happens, open this page in Safari (the compass button) and try again.";
+        }
+        window.location.href = fileUrl;
+        return;
+      }
+      return fetch(fileUrl, {
         headers: { "Authorization": "Bearer " + token() }
       }).then(function (response) {
         if (!response.ok) throw new Error("Download failed: HTTP " + response.status);

@@ -1,7 +1,7 @@
 import logging
 import re
 import shutil
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import sqlmodel as sq
 
@@ -40,6 +40,9 @@ _NOVEL_ROWS: Tuple[Any, ...] = (
     ReadHistory,
     LibraryNovel,
 )
+
+
+_RE_PAGE = re.compile(r"images/([0-9a-fA-F]{32})[.]jpg")
 
 
 def _norm(text: str) -> str:
@@ -244,6 +247,59 @@ class NovelService:
             logger.info(f"Removed {removed} row(s) left behind by deleted novels")
         return removed
 
+    def _take_over(self, kept_id: str, gone_id: str) -> None:
+        """Before a copy is deleted, give the kept one what it uses of it.
+
+        An import of a manga already in the library files its pages under the
+        copy that had them first, so the kept copy's chapters can show pages
+        stored with the copy about to go: deleting it took them, and the kept
+        manga showed "(image unavailable)". Those pages move to the kept copy.
+        The shelves the copy was on get the kept one instead.
+        """
+        with ctx.db.session() as sess:
+            theirs = sess.exec(
+                sq.select(ChapterImage).where(ChapterImage.novel_id == gone_id)
+            ).all()
+            if theirs:
+                ids = {image.id for image in theirs}
+                used: Dict[str, str] = {}  # image id -> the kept chapter showing it
+                for chapter in sess.exec(sq.select(Chapter).where(Chapter.novel_id == kept_id)):
+                    try:
+                        text = ctx.files.load_text(chapter.content_file)
+                    except Exception:
+                        continue
+                    for found in _RE_PAGE.findall(text):
+                        found = found.lower()
+                        if found in ids:
+                            used.setdefault(found, chapter.id)
+                for image in theirs:
+                    if image.id not in used:
+                        continue
+                    source = ctx.files.resolve(f"novels/{gone_id}/images/{image.id}.jpg")
+                    target = ctx.files.resolve(f"novels/{kept_id}/images/{image.id}.jpg")
+                    try:
+                        if source.is_file() and not target.is_file():
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(source, target)
+                    except OSError as error:
+                        logger.warning(f"Could not keep page {image.id}: {error}")
+                        continue
+                    image.novel_id = kept_id
+                    image.chapter_id = used[image.id]
+                    sess.add(image)
+            shelves = set(
+                sess.exec(
+                    sq.select(LibraryNovel.library_id).where(LibraryNovel.novel_id == kept_id)
+                ).all()
+            )
+            for row in sess.exec(
+                sq.select(LibraryNovel).where(LibraryNovel.novel_id == gone_id)
+            ).all():
+                if row.library_id not in shelves:
+                    sess.add(LibraryNovel(library_id=row.library_id, novel_id=kept_id))
+                    shelves.add(row.library_id)
+            sess.commit()
+
     def find_by_url(self, novel_url: str) -> Optional[Novel]:
         with ctx.db.session() as sess:
             return sess.exec(sq.select(Novel).where(Novel.url == novel_url)).first()
@@ -329,7 +385,9 @@ class NovelService:
             "message": f"Filled {healed} missing chapter(s) from your other copies.",
         }
 
-    def merge_duplicates(self, novel_id: str) -> Dict[str, Any]:
+    def merge_duplicates(
+        self, novel_id: str, among: Optional[Iterable[str]] = None
+    ) -> Dict[str, Any]:
         """Merge all same-title copies of a novel into the most complete one.
 
         The copy with the most chapters becomes canonical; matching chapters from
@@ -346,6 +404,9 @@ class NovelService:
         with ctx.db.session() as sess:
             all_novels = sess.exec(sq.select(Novel)).all()
         group = [n for n in all_novels if _norm(n.title) == norm_title]
+        if among is not None:
+            chosen = set(among)  # only these copies (the clean-up found them to be one story)
+            group = [n for n in group if n.id in chosen]
         if len(group) < 2:
             return {"canonical_id": novel_id, "merged": 0, "message": "No other copy found."}
 
@@ -385,6 +446,7 @@ class NovelService:
             if only_there:
                 left.append(f"{other.title} ({len(only_there)} chapter(s) only it has)")
                 continue
+            self._take_over(canonical.id, other.id)
             self.delete(other.id)
             merged += 1
         healed = heal.get("healed", 0)

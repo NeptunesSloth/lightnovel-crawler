@@ -491,3 +491,30 @@ def get_activity_data(
         return ctx.activity.get_admin_type_trend(days)
     else:
         return ctx.activity.get_admin_top_users(days, limit)
+
+
+@router.get("/extras", summary="Duplicate novels, old e-books and leftover files to clean up")
+def find_extras(user: User = Security(ensure_admin)) -> Dict[str, Any]:
+    from ...services import extras
+
+    return extras.find()
+
+
+@router.post("/extras", summary="Clean up the chosen kinds of extras, in the background")
+def clean_extras(
+    kinds: List[str] = Body(embed=True),
+    user: User = Security(ensure_admin),
+) -> Dict[str, Any]:
+    from ...services import extras
+
+    try:
+        return extras.start(kinds)
+    except ValueError as error:
+        raise ServerError(400, str(error)) from error
+
+
+@router.get("/extras/status", summary="How far cleaning up extras has got")
+def extras_status(user: User = Security(ensure_admin)) -> Dict[str, Any]:
+    from ...services import extras
+
+    return extras.status()
