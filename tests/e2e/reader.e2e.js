@@ -369,6 +369,36 @@ async function clearFilters(page) {
   check("no errors deleting unfinished novels", U.errors.length === 0, U.errors);
   await U.close();
 
+  console.log("Offline copies");
+  {
+    // its own context: the others block the service worker (see open())
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const S = await context.newPage();
+    S.errors = [];
+    S.on("pageerror", (e) => S.errors.push(e.message));
+    await S.goto(READER);
+    await S.evaluate((t) => localStorage.setItem("lncrawl_token", t), TOKEN);
+    await S.evaluate(() => navigator.serviceWorker.ready);
+    await S.goto(READER); // now under the service worker's control
+    await S.waitForFunction(() => /novel\(s\)/.test(document.getElementById("lib-status").textContent));
+    const kept = await S.evaluate(async (t) => {
+      const get = (u) => fetch(u, { headers: { Authorization: "Bearer " + t } });
+      await get("/api/jobs?limit=5");
+      await get("/api/novels/unfinished");
+      await get("/api/novels?limit=5");
+      await new Promise((r) => setTimeout(r, 500));
+      const urls = async (name) => (await (await caches.open(name)).keys()).map((r) => new URL(r.url).pathname);
+      return { auto: await urls("lncrawl-reader-auto-v1"), saved: await urls("lncrawl-reader-v1") };
+    }, TOKEN);
+    check("what is read is kept for offline", kept.auto.includes("/api/novels"), kept.auto);
+    check("job and unfinished polls are not kept",
+      !kept.auto.concat(kept.saved).some((p) => p.startsWith("/api/job") || p.startsWith("/api/novels/unfinished")), kept);
+    check("copies on the way past stay out of the saved-for-offline cache",
+      !kept.saved.some((p) => p.startsWith("/api/")), kept.saved);
+    check("no errors with the service worker", S.errors.length === 0, S.errors);
+    await context.close();
+  }
+
   console.log("Phone");
   await A.setViewportSize({ width: 390, height: 800 }); await A.waitForTimeout(300);
   const overflow = await A.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

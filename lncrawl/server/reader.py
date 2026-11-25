@@ -3439,6 +3439,14 @@ _READER_HTML = """<!DOCTYPE html>
 
 _SERVICE_WORKER = """
 const CACHE = "lncrawl-reader-v1";
+// Copies kept on the way past, apart from what "Save for offline" keeps in
+// CACHE, so the oldest can be let go without losing a chapter saved on purpose.
+const AUTO = "lncrawl-reader-auto-v1";
+const AUTO_MAX = 2000;
+// Answers that change by the second and are asked for over and over (job
+// progress, the unfinished-novels count, settings, admin pages): a disk write
+// on every poll, kept for good, and of no use offline.
+const NOT_KEPT = ["/api/job", "/api/novels/unfinished", "/api/settings/", "/api/admin/", "/api/auth/"];
 const SHELL = ["/reader", "/reader/manifest.webmanifest", "/reader/icon.svg"];
 
 self.addEventListener("install", function (e) {
@@ -3449,7 +3457,7 @@ self.addEventListener("install", function (e) {
 self.addEventListener("activate", function (e) {
   e.waitUntil(
     caches.keys().then(function (keys) {
-      return Promise.all(keys.filter(function (k) { return k !== CACHE; }).map(function (k) { return caches.delete(k); }));
+      return Promise.all(keys.filter(function (k) { return k !== CACHE && k !== AUTO; }).map(function (k) { return caches.delete(k); }));
     }).then(function () { return self.clients.claim(); })
   );
 });
@@ -3460,11 +3468,12 @@ self.addEventListener("fetch", function (e) {
   if (req.method !== "GET") return;
   var url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  var keep = !NOT_KEPT.some(function (prefix) { return url.pathname.indexOf(prefix) === 0; });
   e.respondWith(
     fetch(req).then(function (res) {
-      if (res && res.ok) {
+      if (keep && res && res.ok) {
         var copy = res.clone();
-        caches.open(CACHE).then(function (c) { c.put(req, copy); }).catch(function () {});
+        caches.open(AUTO).then(function (c) { return c.put(req, copy).then(function () { trim(c); }); }).catch(function () {});
       }
       return res;
     }).catch(function () {
@@ -3474,6 +3483,16 @@ self.addEventListener("fetch", function (e) {
     })
   );
 });
+
+// Oldest first out once there are more than AUTO_MAX, looked at every 50 copies.
+var sinceTrim = 0;
+function trim(c) {
+  if (++sinceTrim < 50) return;
+  sinceTrim = 0;
+  c.keys().then(function (keys) {
+    return Promise.all(keys.slice(0, Math.max(0, keys.length - AUTO_MAX)).map(function (k) { return c.delete(k); }));
+  }).catch(function () {});
+}
 """
 
 _MANIFEST = """{
