@@ -50,7 +50,7 @@ rows = [
 ]
 ids = {}
 for i in range(70):
-    rows.append((f"Filler {i:02}", "f.com", "Filler", "Filler.", ["Drama"], {"status": "ongoing"}, False))
+    rows.append((f"Filler {i:02}", "f.com", "Filler", "Filler.", ["Drama", "Mature"] if i == 0 else ["Drama"], {"status": "ongoing"}, False))
 for i, (title, dom, author, syn, tags, extra, manga) in enumerate(rows):
     with ctx.db.session() as s:
         n = Novel(url=f"https://{dom}/n/{i}", title=title, domain=dom, authors=author, synopsis=syn,
