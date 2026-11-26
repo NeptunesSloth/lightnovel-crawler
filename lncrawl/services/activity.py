@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 
 import sqlmodel as sq
 
@@ -38,34 +38,6 @@ class UserActivityService:
                 activity.visit_count += 1
                 activity.updated_at = ts
             sess.commit()
-
-    def get_visit_count(self, target_id: str, activity_type: ActivityType) -> int:
-        with ctx.db.session() as sess:
-            stmt = sq.select(
-                sq.func.coalesce(sq.func.sum(UserActivity.visit_count), 0),
-            ).where(
-                UserActivity.target_id == target_id,
-                sq.col(UserActivity.activity_type) == activity_type,
-            )
-            return sess.exec(stmt).one_or_none() or 0
-
-    def get_user_last_activity(self, user_id: str) -> Optional[int]:
-        with ctx.db.session() as sess:
-            stmt = sq.select(
-                sq.func.max(UserActivity.updated_at),
-            ).where(
-                UserActivity.user_id == user_id,
-            )
-            return sess.exec(stmt).one_or_none()
-
-    def get_user_activity_count(self, user_id: str) -> int:
-        with ctx.db.session() as sess:
-            stmt = sq.select(
-                sq.func.coalesce(sq.func.sum(UserActivity.visit_count), 0),
-            ).where(
-                UserActivity.user_id == user_id,
-            )
-            return sess.exec(stmt).one_or_none() or 0
 
     def get_user_stats(self, user_id: str) -> UserActivityStats:
         with ctx.db.session() as sess:

@@ -92,15 +92,6 @@ class VolumeService:
                 .limit(1)
             ).first()
 
-    def get_translated(self, volume_id: str, language: Optional[LanguageCode] = None) -> Volume:
-        volume = self.get(volume_id)
-        if language:
-            translation = self.get_volume_translation(volume, language)
-            if not translation:
-                raise ServerErrors.no_such_volume.with_extra(language)
-            volume.title = translation.volume_title
-        return volume
-
     def sync(self, novel_id: str, volumes: List[CrawlerVolume]):
         with ctx.db.session() as sess:
             wanted = {v.id: v for v in volumes}

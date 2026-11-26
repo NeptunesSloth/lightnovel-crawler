@@ -220,10 +220,6 @@ class Logger:
         return self.is_debug or self.level == logging.INFO
 
     @property
-    def is_warn(self) -> bool:
-        return self.is_info or self.level == logging.WARN
-
-    @property
     def has_exception(self) -> bool:
         try:
             return sys.exc_info()[1] is not None

@@ -54,11 +54,6 @@ def load_offline_source(check_user=True) -> CrawlerIndex:
     return user_index
 
 
-def has_method(crawler: Type[Crawler], method: str):
-    """Checks if crawler has a callable method"""
-    return hasattr(crawler, method) and callable(getattr(crawler, method))
-
-
 def batch_import(*files: Path):
     for file in files:
         yield from import_crawlers(file)

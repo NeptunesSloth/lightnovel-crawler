@@ -1,6 +1,6 @@
 import sqlite3
 from threading import Event
-from typing import Iterable, Mapping, Set, Tuple
+from typing import Iterable, Mapping, Set
 
 from .event_lock import EventLock
 
@@ -29,10 +29,6 @@ _INSERT_SQL = """
 
 _DELETE_SQL = """
     DELETE FROM store WHERE key = ?
-"""
-
-_DELETE_MATCHING_SQL = """
-    DELETE FROM store WHERE key MATCH ?
 """
 
 _PURGE_SQL = """
@@ -99,14 +95,6 @@ class FTSStore:
         """Insert a single item."""
         self.insert_dict({key: value})
 
-    def insert_keys(self, keys: Iterable[str], value: str):
-        """Assign same value to multiple keys"""
-        self.insert_dict({key: value for key in keys})
-
-    def insert_pairs(self, pairs: Iterable[Tuple[str, str]]):
-        """Insert multiple items."""
-        self.insert_dict(dict(pairs))
-
     def delete_many(self, keys: Iterable[str]):
         """Insert multiple items by key."""
         with self._lock, self._db:
@@ -115,8 +103,3 @@ class FTSStore:
     def delete(self, key: str):
         """Delete an item by key."""
         self.delete_many([key])
-
-    def search_and_delete(self, query: str):
-        """Insert multiple items by key."""
-        with self._lock, self._db:
-            self._db.execute(_DELETE_MATCHING_SQL, [_escape_query(query)])

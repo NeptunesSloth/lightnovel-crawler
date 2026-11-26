@@ -1,4 +1,3 @@
-import hashlib
 import html
 import re
 import unicodedata
@@ -29,13 +28,6 @@ def text_compress(plain: bytes) -> bytes:
 
 def text_decompress(compressed: bytes) -> bytes:
     return zstd.decompress(compressed)
-
-
-def generate_md5(*texts) -> str:
-    md5 = hashlib.md5()
-    for text in texts:
-        md5.update(str(text or "").encode())
-    return md5.hexdigest()
 
 
 def generate_uuid() -> str:

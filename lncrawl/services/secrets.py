@@ -131,12 +131,6 @@ class SecretService:
         except Exception:
             return None
 
-    def add_login(self, user_id: str, url: str, login: LoginData) -> None:
-        host = extract_host(url)
-        if not host:
-            raise ServerErrors.invalid_url
-        self.add(user_id, host, login.model_dump_json())
-
     def get_login(self, user_id: str, url: str) -> Optional[LoginData]:
         host = extract_host(url)
         value = self.get_value(user_id, host)
