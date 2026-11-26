@@ -577,6 +577,12 @@ _TOOLS_HTML = """<!DOCTYPE html>
       <button id="storage-clean" class="secondary" title="Deletes the ZIPs made by site downloads (your novels stay). Backups are kept.">Delete old ZIPs</button>
     </div>
 
+    <h3>Covers</h3>
+    <p class="hint">A novel whose cover could not be downloaded gets a pattern of coloured
+      shapes instead. This fetches those covers again from their sites.</p>
+    <button id="covers-find" class="secondary" style="margin-top:0">Fetch missing covers</button>
+    <p class="muted" id="covers-text"></p>
+
     <h3>Clean up extras</h3>
     <p class="hint">Duplicate novels are merged into their most complete copy (a copy with chapters
       the other lacks is kept). Older e-books of a novel go once a newer one is made. Leftovers are
@@ -2192,6 +2198,42 @@ _TOOLS_HTML = """<!DOCTYPE html>
       })
       .catch(function (e) { log("Could not start the download: " + e.message, "log-err"); })
       .finally(function () { busy(btn, false); });
+  });
+
+  // ---- Covers fetched again ----
+  var coversTimer = null;
+  function showCovers(s) {
+    var text = s.running
+      ? "Fetching covers: " + s.done + " of " + (s.total || "?") + (s.current ? " · " + s.current : "")
+      : "Done: " + s.fixed + " cover(s) fetched" + (s.failed ? ", " + s.failed + " still could not be (see the log for why)" : "") + ".";
+    document.getElementById("covers-text").textContent = text;
+  }
+  function watchCovers() {
+    if (coversTimer) return;
+    coversTimer = setInterval(function () {
+      if (document.hidden) return;
+      api("/admin/covers/status").then(function (s) {
+        showCovers(s);
+        if (!s.running) { clearInterval(coversTimer); coversTimer = null; busy(document.getElementById("covers-find"), false); }
+      }).catch(function () {});
+    }, 2000);
+  }
+  document.getElementById("covers-find").addEventListener("click", function () {
+    if (!requireAuth()) return;
+    var btn = this; busy(btn, true);
+    document.getElementById("covers-text").textContent = "Looking for drawn covers…";
+    api("/admin/covers").then(function (r) {
+      if (r.fetching && r.fetching.running) { showCovers(r.fetching); watchCovers(); return; }
+      var none = r.no_address ? " " + r.no_address + " more have no cover address yet: refresh those novels to get one." : "";
+      if (!r.count) {
+        document.getElementById("covers-text").textContent = "No drawn covers to fetch." + none;
+        busy(btn, false); return;
+      }
+      if (!confirm("Fetch " + r.count + " cover(s) again from their sites? It runs in the background." + none)) { busy(btn, false); document.getElementById("covers-text").textContent = ""; return; }
+      return api("/admin/covers", { method: "POST" }).then(function (s) { showCovers(s); watchCovers(); });
+    }).catch(function (e) {
+      document.getElementById("covers-text").textContent = "Could not fetch covers: " + e.message; busy(btn, false);
+    });
   });
 
   // ---- Clean up extras ----
