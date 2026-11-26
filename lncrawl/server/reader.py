@@ -1848,17 +1848,22 @@ _READER_HTML = """<!DOCTYPE html>
       ? "Deleting " + r.done + " of " + r.total + " (" + pct + "%)" + (r.current ? ": " + r.current : "")
       : "Deleted " + (r.done - r.failed) + " of " + r.total + " novel(s)." + (r.failed ? " " + r.failed + " could not be deleted: " + r.error : "");
   }
+  // Only the progress while it runs: counting every unfinished novel again
+  // reads every chapter row, each second, beside the removal it is watching.
   function watchUnfinished() {
     els["lib-unf"].classList.remove("hidden");
-    api("/novels/unfinished").then(function (found) {
-      var r = found.removing || {};
+    api("/novels/unfinished?progress_only=true").then(function (progress) {
+      var r = (progress && progress.removing) || {};
       showUnfProgress(r);
       if (r.running) { setTimeout(watchUnfinished, 1000); return; }
-      unf = found;
-      loadLibrary(els["search"].value.trim());
-      // the choice comes back with the new counts, under what was done
-      els["unf-pick"].classList.remove("hidden");
-      renderUnf();
+      return api("/novels/unfinished").then(function (found) {
+        showUnfProgress(found.removing || {});
+        unf = found;
+        loadLibrary(els["search"].value.trim());
+        // the choice comes back with the new counts, under what was done
+        els["unf-pick"].classList.remove("hidden");
+        renderUnf();
+      });
     }).catch(function () { setTimeout(watchUnfinished, 3000); });
   }
   els["lib-getsel"].addEventListener("click", function () {

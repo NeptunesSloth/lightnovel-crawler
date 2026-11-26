@@ -343,12 +343,15 @@ async function clearFilters(page) {
 
   console.log("Delete unfinished novels");
   const U = await open(browser);
-  let asked = null, unfPolls = 0;
+  let asked = null, unfPolls = 0, recountsWhileRunning = 0;
   const found = { count: 5, details_only: 3, partial: 2, chapters: 40, kept: 1 };
-  await U.route("**/api/novels/unfinished", (r) => {
+  await U.route(/\/api\/novels\/unfinished(\?.*)?$/, (r) => {
     unfPolls++;
-    const removing = asked ? { running: unfPolls < 4, kind: asked, done: Math.min(unfPolls - 1, 2), total: 2, failed: 0, current: "A Novel" } : { running: false };
-    r.fulfill({ json: Object.assign({}, found, { removing }) });
+    const running = asked ? unfPolls < 4 : false;
+    const removing = asked ? { running, kind: asked, done: Math.min(unfPolls - 1, 2), total: 2, failed: 0, current: "A Novel" } : { running: false };
+    const progressOnly = new URL(r.request().url()).searchParams.get("progress_only") === "true";
+    if (!progressOnly && running) recountsWhileRunning++;
+    r.fulfill({ json: progressOnly ? { removing } : Object.assign({}, found, { removing }) });
   });
   await U.route(/\/api\/novels\/unfinished\/remove/, (r) => { asked = new URL(r.request().url()).searchParams.get("kind"); unfPolls = 1; r.fulfill({ json: {} }); });
   await U.evaluate(() => document.getElementById("lib-unfinished").click());
@@ -366,6 +369,7 @@ async function clearFilters(page) {
   check("a bar shows how far it has got", await U.isVisible("#unf-progress") && /Deleting/.test(await U.textContent("#unf-text")), await U.textContent("#unf-text"));
   await U.waitForTimeout(3500);
   check("it says when it is done", /Deleted 2 of 2/.test(await U.textContent("#unf-text")), await U.textContent("#unf-text"));
+  check("while it runs only the progress is asked for, not a recount", recountsWhileRunning === 0, recountsWhileRunning);
   check("no errors deleting unfinished novels", U.errors.length === 0, U.errors);
   await U.close();
 

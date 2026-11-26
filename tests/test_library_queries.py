@@ -57,6 +57,18 @@ class LatestChaptersTests(unittest.TestCase):
             {"waiting": 300, "read": 500, "all-done": 70, "none-done": 40},
         )
 
+    def test_removal_progress_is_answered_without_counting_again(self) -> None:
+        from lncrawl.services import unfinished
+
+        with (
+            patch.object(unfinished, "find", side_effect=AssertionError("counted")),
+            patch.object(unfinished, "status", return_value={"running": True, "done": 1}),
+        ):
+            self.assertEqual(
+                novels_api.unfinished_novels(progress_only=True),
+                {"removing": {"running": True, "done": 1}},
+            )
+
     def test_a_novel_without_chapters_is_left_out(self) -> None:
         self.add("details-only", [])
         self.add("one", [(10, True)])

@@ -148,9 +148,15 @@ def downloaded_counts() -> Dict[str, int]:
     summary="Novels not fully downloaded, and how a removal of them is going",
     dependencies=[Security(ensure_admin)],
 )
-def unfinished_novels() -> Dict[str, Any]:
+def unfinished_novels(
+    progress_only: bool = Query(
+        default=False, description="Only how a removal is going, without counting again"
+    ),
+) -> Dict[str, Any]:
     from ...services import unfinished
 
+    if progress_only:
+        return {"removing": unfinished.status()}
     found = unfinished.find()
     return {
         "count": len(found["novels"]),
