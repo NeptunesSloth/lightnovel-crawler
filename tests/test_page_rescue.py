@@ -23,6 +23,7 @@ class PageRescueTests(unittest.TestCase):
         fixture.stack.enter_context(patch.object(page_rescue, "ctx", self.ctx))
         page_rescue._books.clear()
         page_rescue._hint.clear()
+        page_rescue._given_up.clear()
         body = "".join(f'<p><img src="images/{i}.jpg" alt="{i}"/></p>' for i in (FIRST, SECOND))
         self.ctx.files.save_text("novels/novel/chapters/000001.zst", body)
         book = self.ctx.files.resolve("novels/novel/artifacts/Test Novel.cbz")
@@ -61,6 +62,9 @@ class PageRescueTests(unittest.TestCase):
         other = self.ctx.files.resolve(f"novels/other/images/{FIRST}.jpg")
         other.parent.mkdir(parents=True, exist_ok=True)
         other.write_bytes(b"kept elsewhere")
+        with self.ctx.db.session() as sess:  # filed under that novel, as an import does
+            sess.add(ChapterImage(id=FIRST, url="x", chapter_id="o-1", novel_id="other"))
+            sess.commit()
         path = page_rescue.restore(FIRST, "chapter-1")
         assert path is not None
         self.assertEqual(path.read_bytes(), b"kept elsewhere")
@@ -90,6 +94,20 @@ class PageRescueTests(unittest.TestCase):
         assert path is not None
         self.assertEqual(path.read_bytes(), b"from the site")
         self.assertEqual(asked, [("user", SECOND)])
+
+    def test_a_chapter_that_cannot_be_had_is_not_looked_for_page_by_page(self) -> None:
+        self.ctx.files.resolve("novels/novel/artifacts/Test Novel.cbz").unlink()
+        looks = []
+        real = page_rescue._found_elsewhere
+
+        def counted(image_id: str, novel_id: str):
+            looks.append(image_id)
+            return real(image_id, novel_id)
+
+        with patch.object(page_rescue, "_found_elsewhere", counted):
+            self.assertIsNone(page_rescue.restore(FIRST, "chapter-1", "user"))
+            self.assertIsNone(page_rescue.restore(SECOND, "chapter-1", "user"))
+        self.assertEqual(looks, [FIRST])  # the second page was not searched for again
 
 
 if __name__ == "__main__":

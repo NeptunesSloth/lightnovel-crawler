@@ -309,6 +309,11 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
       var took = j.started_at && j.finished_at ? " · took " + span((j.finished_at - j.started_at) / 1000) : "";
       c.appendChild(el("div", "line", "Ended " + ago(j.finished_at || j.updated_at) + took));
     } else {
+      if (ex.left && ex.left.length) {
+        c.appendChild(el("div", "line", "Left: " + ex.left.map(function (l) {
+          return l.count + " " + l.what + (l.count > 1 && !/s$/.test(l.what) ? "s" : "") + " (" + l.state + ")";
+        }).join(", ")));
+      }
       c.appendChild(el("div", "line", "Started " + ago(j.started_at || j.created_at) +
         " · last activity " + ago(j.updated_at)));
     }

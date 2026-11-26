@@ -10,13 +10,13 @@ taken out of that e-book, stored where it belongs, and served.
 """
 
 import logging
-import os
 from pathlib import Path
 import posixpath
 import re
 import shutil
 import threading
 from threading import Event
+from time import monotonic
 from typing import Dict, List, Optional, Set, Tuple
 import zipfile
 
@@ -35,7 +35,11 @@ _lock = threading.Lock()
 # e-book file -> (its size and time, {chapter serial: its pages in order}, {image id: member})
 _books: Dict[str, Tuple[Tuple[int, float], Dict[int, List[str]], Dict[str, str]]] = {}
 _BOOKS_KEPT = 4
-_hint: Dict[str, str] = {}  # the other novel's folder the last page was found in
+_hint: Dict[str, str] = {}  # (kept for callers that clear it)
+# Chapters none of whose pages could be had, and when: the rest of their pages
+# are not looked for again for a while (each look was the same, slow, miss).
+_given_up: Dict[str, float] = {}
+GIVE_UP_FOR = 600.0
 _said: Set[str] = set()  # chapters already said to be past saving, so the log says it once
 # Seconds a page may take to download again while the Reader waits for it.
 DOWNLOAD_WAIT = 40.0
@@ -94,33 +98,26 @@ def _file(image_id: str, novel_id: str, chapter_id: str) -> None:
 
 
 def _found_elsewhere(image_id: str, novel_id: str) -> Optional[Path]:
-    """The page's file, filed under another novel's folder (here or on the book drive)."""
-    roots = [ctx.files.resolve("novels")]
+    """The page's file, filed under another novel's folder (here or on the book drive).
+
+    Where it is filed is asked of the database. Looking in every novel's folder
+    for each page took minutes a chapter on an external drive with two
+    thousand novels, while the Reader showed empty boxes.
+    """
+    with ctx.db.session() as sess:
+        image = sess.get(ChapterImage, image_id)
+        owner = image.novel_id if image is not None else None
+    if not owner or owner == novel_id:
+        return None
     books = getattr(ctx, "books", None)
-    drive = books.folder() if books is not None and books.plugged() else None
-    if drive is not None:
-        roots.append(drive / "novels")
-    name = f"{image_id}.jpg"
-    hint = _hint.get("folder")
-    if hint:
-        candidate = Path(hint) / "images" / name
-        if candidate.is_file() and candidate.stat().st_size > 0:
-            return candidate
-    for root in roots:
+    folders = books.folders(owner) if books is not None else [ctx.files.resolve(f"novels/{owner}")]
+    for folder in folders:
+        candidate = Path(folder) / "images" / f"{image_id}.jpg"
         try:
-            folders = [entry.path for entry in os.scandir(root) if entry.is_dir()]
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                return candidate
         except OSError:
             continue
-        for folder in folders:
-            if os.path.basename(folder) == novel_id:
-                continue
-            candidate = Path(folder) / "images" / name
-            try:
-                if candidate.is_file() and candidate.stat().st_size > 0:
-                    _hint["folder"] = folder  # the rest of the chapter is likely there too
-                    return candidate
-            except OSError:
-                continue
     return None
 
 
@@ -157,6 +154,8 @@ def restore(image_id: str, chapter_id: str, user_id: Optional[str] = None) -> Op
     """
     image_id = image_id.lower()
     if not _RE_IMAGE_ID.match(image_id):
+        return None
+    if monotonic() - _given_up.get(chapter_id, -GIVE_UP_FOR) < GIVE_UP_FOR:
         return None
     chapter = ctx.chapters.get(chapter_id)
     novel_id = chapter.novel_id
@@ -219,8 +218,12 @@ def restore(image_id: str, chapter_id: str, user_id: Optional[str] = None) -> Op
             if found is not None:
                 return found
         except Exception as error:
+            # the site is not giving it: the chapter's other pages would wait
+            # out the same failure one by one
+            _given_up[chapter_id] = monotonic()
             _say_once(chapter_id, f"Could not download page {image_id} again: {error}")
             return None
+    _given_up[chapter_id] = monotonic()
     held = "its e-book in the library does not hold them" if made else "it has no e-book"
     _say_once(
         chapter_id,
