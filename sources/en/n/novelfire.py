@@ -43,9 +43,28 @@ def _mapping(url: str, final_url: str) -> Optional[_Mapping]:
     return source_prefix, final_prefix, final.query
 
 
-def _chapter_links(page: Any, absolute_url: Callable[[str], str]) -> List[str]:
+def _chapter_anchors(page: Any, absolute_url: Callable[[str], str], novel_url: str) -> List[Any]:
+    """The links to this novel's chapters on a page of its chapter list.
+
+    Only those under the novel's own address, or named as a chapter: a page
+    that answered with the site's menus instead saved "chapters" like /home,
+    /ranking and /contact-us, fetched again (and found empty) on every
+    download of the novel.
+    """
+    own = urlsplit(novel_url).path.rstrip("/") + "/"
+
+    def is_chapter(href: str) -> bool:
+        path = urlsplit(absolute_url(href)).path
+        return path.startswith(own) or path.rstrip("/").rsplit("/", 1)[-1].startswith("chapter")
+
+    return [
+        a for a in page.select("ul.chapter-list li a") if a.get("href") and is_chapter(a["href"])
+    ]
+
+
+def _chapter_links(page: Any, absolute_url: Callable[[str], str], novel_url: str) -> List[str]:
     """The addresses of the chapters a page of the chapter list holds."""
-    return [absolute_url(a["href"]) for a in page.select("ul.chapter-list li a") if a.get("href")]
+    return [absolute_url(a["href"]) for a in _chapter_anchors(page, absolute_url, novel_url)]
 
 
 class _MirrorMap:
@@ -140,7 +159,7 @@ class NovelFireCrawler(LegacyCrawler):
         first_url = self.novel_url + "/chapters"
         pages: Dict[int, Any] = {1: self.get_soup(first_url)}
         fetched = {self.absolute_url(first_url)}
-        seen: Set[str] = set(_chapter_links(pages[1], self.absolute_url))
+        seen: Set[str] = set(_chapter_links(pages[1], self.absolute_url, self.novel_url))
         while len(pages) < _MOST_PAGES:
             last = max(pages)
             next_a = pages[last].select_one("a.page-link[rel='next']")
@@ -165,7 +184,7 @@ class NovelFireCrawler(LegacyCrawler):
             fresh = False
             for number, future in futures.items():
                 page = future.result()
-                links = set(_chapter_links(page, self.absolute_url)) - seen
+                links = set(_chapter_links(page, self.absolute_url, self.novel_url)) - seen
                 if links:
                     fresh = True
                     seen.update(links)
@@ -176,7 +195,7 @@ class NovelFireCrawler(LegacyCrawler):
 
         listed: Set[str] = set()
         for vol_id, number in enumerate(sorted(pages), start=1):
-            for a in pages[number].select("ul.chapter-list li a"):
+            for a in _chapter_anchors(pages[number], self.absolute_url, self.novel_url):
                 url = self.absolute_url(a["href"])
                 if url in listed:
                     continue  # a page that repeats part of another

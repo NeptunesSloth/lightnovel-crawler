@@ -387,17 +387,22 @@ _DOWNLOADS_HTML = r"""<!DOCTYPE html>
     if (show) done.forEach(function (j) { $("done").appendChild(card(j)); });
   }
 
-  var timer = null;
+  var timer = null, drawn = "", drawnAt = 0, busy = true;
   function refresh() {
     clearTimeout(timer);
     api("/jobs/downloads").then(function (rows) {
       rows = rows || [];
       notifyEnds(rows);
-      draw(rows);
+      busy = rows.some(function (j) { return !j.is_done; });
+      // every card was built again every 4 s, nothing changed or not
+      // (still every half minute, for the "5 min ago" times on them)
+      var now = JSON.stringify(rows);
+      if (now !== drawn || Date.now() - drawnAt > 30000) { drawn = now; drawnAt = Date.now(); draw(rows); }
     }).catch(function (e) {
       $("summary").textContent = "Couldn't load downloads: " + e.message + " — retrying…";
     }).finally(function () {
-      timer = setTimeout(refresh, document.hidden ? 20000 : 4000);
+      // nothing running: looked at every 15 s, not 4
+      timer = setTimeout(refresh, document.hidden ? 20000 : busy ? 4000 : 15000);
     });
   }
   document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });

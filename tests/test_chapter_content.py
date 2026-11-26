@@ -145,6 +145,21 @@ class ChapterDownloadTests(unittest.TestCase):
         self.assertEqual(self.chapter.extra["download_status"], "empty")
         self.ctx.db.session.return_value.__enter__.return_value.commit.assert_called_once()
 
+    def test_a_chapter_empty_on_an_earlier_pass_gets_one_try(self) -> None:
+        self.chapter.extra = {**self.chapter.extra, "download_status": "empty"}
+        self.responses("", "<p>Would have come on a retry.</p>")
+        with self.assertRaises(EmptyChapterError):
+            self.fetch()
+        self.crawler.download_chapter.assert_called_once()
+        self.assertEqual(self.chapter.extra["download_status"], "empty")
+
+    def test_a_chapter_empty_before_is_saved_when_the_text_comes(self) -> None:
+        self.chapter.extra = {**self.chapter.extra, "download_status": "empty"}
+        self.responses("<p>Finally published.</p>")
+        self.fetch()
+        self.assertTrue(self.chapter.is_done)
+        self.assertNotIn("download_status", self.chapter.extra)
+
     def test_old_blank_cache_is_repaired(self) -> None:
         self.files.save_text(self.chapter.content_file, "<p>&nbsp;</p>")
         self.chapter.is_done = True

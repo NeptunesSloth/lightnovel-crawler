@@ -31,8 +31,16 @@ def crawl_items(
     idle_timeout: float = 120,
     max_consecutive_failures: int = 10,
     on_progress: Optional[Callable[[int], None]] = None,
+    waiting: Optional[Callable[[], int]] = None,
+    wall: Optional[float] = None,
 ) -> Iterator[CrawlOutcome[T]]:
-    """Keep a small rolling queue; one chapter failure never cancels its peers."""
+    """Keep a small rolling queue; one chapter failure never cancels its peers.
+
+    ``waiting`` says how many requests are queued for this program's own
+    throttles (the site's slots and gap). Nothing finishing for ``idle_timeout``
+    while some are queued is the site's pace, not a hang: the timer starts over.
+    ``wall`` is the longest wait for a completion that the queueing may cover.
+    """
     if max_inflight < 1 or idle_timeout <= 0:
         raise ValueError("Worker count and idle timeout must be positive")
     items = iter(item_ids)
@@ -41,6 +49,7 @@ def crawl_items(
     failures = 0
     accepting = True
     deadline = monotonic() + idle_timeout
+    wall_deadline = monotonic() + wall if wall else None
 
     def fill() -> None:
         while len(pending) < max_inflight:
@@ -62,12 +71,22 @@ def crawl_items(
                 return_when=FIRST_COMPLETED,
             )
             if not finished:
-                if monotonic() >= deadline:
+                now = monotonic()
+                if wall_deadline is not None and now >= wall_deadline:
+                    raise CrawlStalledError(
+                        f"No crawl worker completed for {(wall or 0) / 60:g} minutes"
+                    )
+                if now >= deadline:
+                    if waiting is not None and waiting() > 0:
+                        deadline = now + idle_timeout  # queued behind the site's pace
+                        continue
                     raise CrawlStalledError(
                         f"No crawl worker completed for {idle_timeout:g} seconds"
                     )
                 continue
             deadline = monotonic() + idle_timeout
+            if wall:
+                wall_deadline = monotonic() + wall
             for future in finished:
                 item = pending.pop(future)
                 try:

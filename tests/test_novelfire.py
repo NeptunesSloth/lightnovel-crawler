@@ -28,7 +28,12 @@ class NovelFireTests(unittest.TestCase):
         # the last one again): read for hours, the novel was "loading" all night.
         self._read_chapter_list(endless=True)
 
-    def _read_chapter_list(self, endless: bool) -> None:
+    def test_links_to_the_sites_own_pages_are_not_chapters(self) -> None:
+        # A chapter list that came with the site's menus saved /home, /ranking
+        # and the genre pages as chapters, each fetched empty on every run.
+        self._read_chapter_list(endless=False, menus=True)
+
+    def _read_chapter_list(self, endless: bool, menus: bool = False) -> None:
         novel_url = "https://novelfire.net/book/example"
         last_page = 9
         fetched: Counter = Counter()
@@ -47,6 +52,14 @@ class NovelFireTests(unittest.TestCase):
                 for i in (1, 2)
                 if number <= last_page or number % 2  # past the end: empty, or the last again
             )
+            if menus:
+                items += (
+                    '<li><a title="Novel Fire" href="/home">h</a></li>'
+                    '<li><a title="Ranking" href="https://novelfire.net/ranking">r</a></li>'
+                    '<li><a title="Fantasy" href="/genre-fantasy/sort-popular">g</a></li>'
+                    '<li><a title="Privacy" href="/page/privacy-policy">p</a></li>'
+                    '<li><a title="Contact" href="/contact-us">c</a></li>'
+                )
             return f'<ul class="chapter-list">{items}</ul><div class="pagination">{links}</div>'
 
         def get_soup(url: str) -> BeautifulSoup:

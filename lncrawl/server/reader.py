@@ -587,6 +587,12 @@ _READER_HTML = """<!DOCTYPE html>
     <div id="shelf-box" class="tags hidden"></div>
     <span class="muted hidden" id="heal-msg" style="margin-left:8px"></span>
     <div id="bmk-list"></div>
+    <div id="chap-jump-wrap" class="hidden" style="margin:10px 0">
+      <input id="chap-jump" type="number" min="1" inputmode="numeric" placeholder="Go to chapter #" style="width:150px" />
+      <button id="chap-jump-go" class="secondary">Go</button>
+      <button id="chap-jump-here" class="secondary hidden">Where I am</button>
+      <button id="chap-jump-start" class="secondary hidden">From the start</button>
+    </div>
     <div id="chap-list"></div>
     <div id="chap-more-wrap" class="hidden" style="text-align:center;margin-top:12px">
       <button id="chap-more">Load more chapters</button>
@@ -953,7 +959,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
+  ["nav-back","search","chap-jump-wrap","chap-jump","chap-jump-go","chap-jump-here","chap-jump-start","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -1014,23 +1020,34 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   // The server hands out at most 100 novels a request, so the library is read a
-  // page at a time until every novel is in, however large it has grown.
+  // page at a time until every novel is in, however large it has grown. The
+  // first page says how many there are; the rest are asked for four at a time
+  // (one after another, 1,900 novels were 19 round trips in a row).
   function fetchAllNovels(q) {
-    var all = [];
     function page(offset) {
-      return api("/novels?limit=100&offset=" + offset + "&search=" + encodeURIComponent(q || ""))
-        .then(function (res) {
-          var items = (res && res.items) || [];
-          all = all.concat(items);
-          var total = (res && res.total) || 0;
-          if (items.length === 100 && all.length < total) {
-            els["lib-status"].textContent = "Loading your library… " + all.length + " of " + total;
-            return page(offset + items.length);
-          }
-          return all;
-        });
+      return api("/novels?limit=100&offset=" + offset + "&search=" + encodeURIComponent(q || ""));
     }
-    return page(0);
+    return page(0).then(function (first) {
+      var items = (first && first.items) || [];
+      var total = (first && first.total) || 0;
+      if (items.length < 100 || items.length >= total) return items;
+      var offsets = [];
+      for (var at = items.length; at < total; at += 100) offsets.push(at);
+      var pages = new Array(offsets.length), next = 0, loaded = items.length;
+      function worker() {
+        if (next >= offsets.length) return Promise.resolve();
+        var i = next++;
+        return page(offsets[i]).then(function (res) {
+          pages[i] = (res && res.items) || [];
+          loaded += pages[i].length;
+          els["lib-status"].textContent = "Loading your library… " + loaded + " of " + total;
+          return worker();
+        });
+      }
+      var workers = [];
+      for (var w = 0; w < Math.min(4, offsets.length); w++) workers.push(worker());
+      return Promise.all(workers).then(function () { return items.concat.apply(items, pages); });
+    });
   }
 
   // The whole library is loaded once and searched here, so a search can look at
@@ -1728,8 +1745,10 @@ _READER_HTML = """<!DOCTYPE html>
   // lib.got is {novel_id: chapters downloaded}; until it loads nothing is marked.
   function loadDownloadedCounts() {
     return api("/novels/downloaded-counts").then(function (m) {
-      lib.got = m || {};
-      if (lib.all.length) renderLibrary();
+      m = m || {};
+      var same = lib.got && JSON.stringify(lib.got) === JSON.stringify(m);
+      lib.got = m;
+      if (!same && lib.all.length) renderLibrary();  // nothing new: not drawn again
       renderGetChapters();
     }).catch(function () { lib.got = null; });
   }
@@ -1765,12 +1784,27 @@ _READER_HTML = """<!DOCTYPE html>
       .catch(function (e) { alert("Couldn't start the download: " + e.message); if (done) done(null); });
   }
   // refresh the marks while the download runs, so novels lose "details only" as they fill
+  // One timer for all of them (one job per site used to mean one loop each, every
+  // loop redrawing the whole library), quiet while the page is hidden.
+  var getchWatch = { ids: {}, timer: null };
   function watchGetChapters(jobId) {
-    api("/job/" + jobId).then(function (job) {
+    getchWatch.ids[jobId] = 1;
+    if (!getchWatch.timer) getchWatch.timer = later(tickGetChapters, 15000);
+  }
+  function tickGetChapters() {
+    getchWatch.timer = null;
+    var ids = Object.keys(getchWatch.ids);
+    if (!ids.length) return;
+    if (document.visibilityState === "hidden") { getchWatch.timer = later(tickGetChapters, 15000); return; }
+    Promise.all(ids.map(function (id) {
+      return api("/job/" + id + "?light=true").then(function (job) {
+        var st = job ? statusName(job.status) : "";
+        if (st !== "PENDING" && st !== "RUNNING") delete getchWatch.ids[id];
+      }).catch(function (e) { if (/No such job/.test((e && e.message) || "")) delete getchWatch.ids[id]; });
+    })).then(function () {
       loadDownloadedCounts();
-      var st = job ? statusName(job.status) : "";
-      if (st === "PENDING" || st === "RUNNING") later(function () { watchGetChapters(jobId); }, 15000);
-    }).catch(function () {});
+      if (Object.keys(getchWatch.ids).length) getchWatch.timer = later(tickGetChapters, 15000);
+    });
   }
   els["lib-getch"].addEventListener("click", function () {
     var todo = (lib.everything || []).filter(detailsOnly);
@@ -1837,17 +1871,22 @@ _READER_HTML = """<!DOCTYPE html>
       ? "Deleting " + r.done + " of " + r.total + " (" + pct + "%)" + (r.current ? ": " + r.current : "")
       : "Deleted " + (r.done - r.failed) + " of " + r.total + " novel(s)." + (r.failed ? " " + r.failed + " could not be deleted: " + r.error : "");
   }
+  // Only the progress while it runs: counting every unfinished novel again
+  // reads every chapter row, each second, beside the removal it is watching.
   function watchUnfinished() {
     els["lib-unf"].classList.remove("hidden");
-    api("/novels/unfinished").then(function (found) {
-      var r = found.removing || {};
+    api("/novels/unfinished?progress_only=true").then(function (progress) {
+      var r = (progress && progress.removing) || {};
       showUnfProgress(r);
       if (r.running) { setTimeout(watchUnfinished, 1000); return; }
-      unf = found;
-      loadLibrary(els["search"].value.trim());
-      // the choice comes back with the new counts, under what was done
-      els["unf-pick"].classList.remove("hidden");
-      renderUnf();
+      return api("/novels/unfinished").then(function (found) {
+        showUnfProgress(found.removing || {});
+        unf = found;
+        loadLibrary(els["search"].value.trim());
+        // the choice comes back with the new counts, under what was done
+        els["unf-pick"].classList.remove("hidden");
+        renderUnf();
+      });
     }).catch(function () { setTimeout(watchUnfinished, 3000); });
   }
   els["lib-getsel"].addEventListener("click", function () {
@@ -2135,7 +2174,7 @@ _READER_HTML = """<!DOCTYPE html>
   function pollWeb() {
     var id = web.job;
     if (!id) return;
-    api("/job/" + id).then(function (job) {
+    api("/job/" + id + "?light=true").then(function (job) {
       if (web.job !== id) return;
       renderWebResults((job.extra && job.extra.search_results) || []);
       var running = statusName(job.status) === "PENDING" || statusName(job.status) === "RUNNING";
@@ -2144,8 +2183,19 @@ _READER_HTML = """<!DOCTYPE html>
         (running ? " — searching " + (job.done || 0) + "/" + (job.total || "?") + " sources…" : "");
       if (running) web.timer = later(pollWeb, 2000);
       else { web.job = null; els["lib-web-stop"].classList.add("hidden"); }
-    }).catch(function () { web.timer = later(pollWeb, 4000); });
+    }).catch(function (e) {
+      if (web.job !== id) return;
+      if (jobGone(e)) {
+        web.job = null;
+        els["lib-web-stop"].classList.add("hidden");
+        els["lib-web-status"].textContent = "· " + els["lib-web-list"].children.length + " found — the search is no longer there";
+        return;
+      }
+      web.timer = later(pollWeb, 4000);
+    });
   }
+  // The server's answer for a job that was deleted.
+  function jobGone(e) { return /No such job/.test((e && e.message) || ""); }
   function renderWebResults(results) {
     var have = {};
     (lib.everything || lib.all).forEach(function (n) { have[n.url] = n; });
@@ -2183,7 +2233,7 @@ _READER_HTML = """<!DOCTYPE html>
     api("/job/create/fetch-novels", { method: "POST", body: JSON.stringify({ urls: [url], full: full }) })
       .then(function (job) {
         (function wait() {
-          api("/job/" + job.id).then(function (j) {
+          api("/job/" + job.id + "?light=true").then(function (j) {
             var st = statusName(j.status);
             if (st === "PENDING" || st === "RUNNING") {
               note.textContent = full ? "downloading… " + (j.done || 0) + "/" + (j.total || "?") : "adding…";
@@ -2626,8 +2676,16 @@ _READER_HTML = """<!DOCTYPE html>
     e.chapters += chapters; e.ms += ms; e.ts = Date.now();
     it.stats[key] = e;
     localStorage.setItem(ITEMS, JSON.stringify(it));
-    schedulePush();
+    // Reading time ticks every 30 s; sending the whole reading state that often
+    // was most of the Reader's traffic. Time alone is sent every few minutes,
+    // and when the page is left; a chapter read is sent at once.
+    if (chapters || Date.now() - statPushed > STAT_PUSH_EVERY) { statPushed = Date.now(); schedulePush(); }
+    else statPending = true;
   }
+  var STAT_PUSH_EVERY = 5 * 60 * 1000, statPushed = 0, statPending = false;
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden" && statPending) { statPending = false; statPushed = Date.now(); schedulePush(); }
+  });
   setInterval(function () {
     if (document.visibilityState === "visible" && !els["view-reader"].classList.contains("hidden")) addStat(0, 30000);
   }, 30000);
@@ -2699,7 +2757,7 @@ _READER_HTML = """<!DOCTYPE html>
     });
   }
   function pollRepair(novelId, jobId) {
-    api("/job/" + jobId).then(function (job) {
+    api("/job/" + jobId + "?light=true").then(function (job) {
       var active = job.status === 0 || job.status === 1 || job.status === 5 ||
         job.status === "PENDING" || job.status === "RUNNING" || job.status === "PAUSED";
       var visible = current.novel && current.novel.id === novelId;
@@ -2719,9 +2777,18 @@ _READER_HTML = """<!DOCTYPE html>
         : "Repair did not finish: " + (job.error || "Some downloads failed. Retry to continue.");
       els["repair-download"].classList.toggle("hidden", !repairedArtifacts[novelId]);
       refreshCompleteness(novelId);
-      current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
+      current.chapters = []; current.offset = 0; current.listFrom = 0; els["chap-list"].innerHTML = "";
       loadChapters();
-    }).catch(function () {
+    }).catch(function (e) {
+      if (jobGone(e)) {
+        // deleted (or the library moved): asking again would never end
+        delete repairJobs[novelId];
+        if (current.novel && current.novel.id === novelId) {
+          els["repair-btn"].disabled = false;
+          els["repair-status"].textContent = "The repair job is no longer there. Repair again to continue.";
+        }
+        return;
+      }
       later(function () { pollRepair(novelId, jobId); }, 5000);
     });
   }
@@ -2823,7 +2890,7 @@ _READER_HTML = """<!DOCTYPE html>
       current.novel = n;
       renderNovelHeader(n);
       if (moreChapters) {
-        current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
+        current.chapters = []; current.offset = 0; current.listFrom = 0; els["chap-list"].innerHTML = "";
         loadChapters();
       }
     }).catch(function () { /* refresh is best-effort */ });
@@ -2898,6 +2965,12 @@ _READER_HTML = """<!DOCTYPE html>
       current.offset += items.length;
       var total = (res && res.total) || current.offset;
       els["chap-more-wrap"].classList.toggle("hidden", current.offset >= total);
+      // a long list opens anywhere, not only from chapter 1
+      current.total = total;
+      els["chap-jump-wrap"].classList.toggle("hidden", total <= 100);
+      els["chap-jump"].max = total;
+      els["chap-jump-here"].classList.toggle("hidden", !(here && here.serial));
+      els["chap-jump-start"].classList.toggle("hidden", !current.listFrom);
       // offer cross-source healing only when there are gaps to fill
       if (gaps) {
         els["heal-btn"].classList.remove("hidden");  // deep-btn stays hidden: this runs it
@@ -2905,6 +2978,30 @@ _READER_HTML = """<!DOCTYPE html>
       }
     }).catch(function (e) { els["chap-list"].innerHTML = "<p class='muted'>Couldn't load chapters: " + e.message + "</p>"; });
   }
+  // Show the chapter list from this position (1 = the first chapter) on.
+  function listChaptersFrom(position) {
+    var total = current.total || (current.novel && current.novel.chapter_count) || position;
+    var at = Math.max(1, Math.min(position, total));
+    current.listFrom = Math.max(0, at - 6);  // a few before it, for context
+    current.offset = current.listFrom;
+    current.chapters = [];
+    els["chap-list"].innerHTML = "";
+    loadChapters();
+    els["chap-list"].scrollIntoView({ block: "start" });
+  }
+  els["chap-jump-go"].addEventListener("click", function () {
+    var n = parseInt(els["chap-jump"].value, 10);
+    if (n > 0) listChaptersFrom(n);
+  });
+  els["chap-jump"].addEventListener("keydown", function (e) {
+    if (e.key === "Enter") els["chap-jump-go"].click();
+  });
+  els["chap-jump-here"].addEventListener("click", function () {
+    var here = current.novel && posOf(current.novel.id);
+    if (here && here.serial) listChaptersFrom(here.serial);
+  });
+  els["chap-jump-start"].addEventListener("click", function () { listChaptersFrom(1); });
+
   // Auto-heal: when a novel with gaps is opened and another copy of the same
   // title exists in the library, quietly fill what can be filled (at most one
   // attempt per novel per day). The button stays as a manual retry.
@@ -2920,7 +3017,7 @@ _READER_HTML = """<!DOCTYPE html>
       if (!res || !res.healed || !current.novel || current.novel.id !== novel.id) return;
       els["heal-msg"].textContent = "✨ " + (res.message || "Filled missing chapters.");
       els["heal-msg"].classList.remove("hidden");
-      current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
+      current.chapters = []; current.offset = 0; current.listFrom = 0; els["chap-list"].innerHTML = "";
       loadChapters();
     }).catch(function () { /* auto-heal is best-effort */ });
   }
@@ -2940,7 +3037,7 @@ _READER_HTML = """<!DOCTYPE html>
     els["heal-msg"].classList.remove("hidden");
     api("/novel/" + novelId + "/heal-deep", { method: "POST" }).then(function (job) {
       (function poll() {
-        api("/job/" + job.id).then(function (j) {
+        api("/job/" + job.id + "?light=true").then(function (j) {
           if (!current.novel || current.novel.id !== novelId) { btn.disabled = false; els["heal-btn"].disabled = false; return; }
           var ex = j.extra || {};
           var active = j.status === 0 || j.status === 1 || j.status === "PENDING" || j.status === "RUNNING";
@@ -2955,7 +3052,7 @@ _READER_HTML = """<!DOCTYPE html>
           btn.disabled = false; els["heal-btn"].disabled = false;
           els["heal-msg"].textContent = ex.message || (j.error ? ("Failed: " + j.error) : "Done.");
           if (ex.healed) {
-            current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
+            current.chapters = []; current.offset = 0; current.listFrom = 0; els["chap-list"].innerHTML = "";
             loadChapters();
           }
         }).catch(function () { later(poll, 5000); });
@@ -2994,7 +3091,9 @@ _READER_HTML = """<!DOCTYPE html>
   });
 
   // ---- Reader ----
+  var opening = 0;
   function openChapter(chapterId, scrollTo) {
+    var mine = ++opening;  // a page-turn pressed again before this one came back wins
     show("view-reader");
     els["reader-title"].textContent = "Loading…";
     els["reader-content"].innerHTML = "";
@@ -3002,6 +3101,7 @@ _READER_HTML = """<!DOCTYPE html>
     hideTransPop();
     window.scrollTo(0, 0);
     readChapter(chapterId).then(function (res) {
+      if (mine !== opening) return;
       var ch = res.chapter || {};
       var novel = res.novel || current.novel || {};
       current.novel = novel;
@@ -3036,13 +3136,13 @@ _READER_HTML = """<!DOCTYPE html>
           }
         }, 800);
       }
-      // warm the next chapter's images so page-turns are instant (manga)
-      if (res.next_id && imgCount >= 2) preloadNext(res.next_id);
+      if (res.next_id) preloadNext(res.next_id);
       els["prev-btn"].disabled = !res.previous_id;
       els["next-btn"].disabled = !res.next_id;
       els["prev-btn"].onclick = function () { if (res.previous_id) openChapter(res.previous_id); };
       els["next-btn"].onclick = function () { if (res.next_id) openChapter(res.next_id); };
     }).catch(function (e) {
+      if (mine !== opening) return;
       els["reader-title"].textContent = "Error";
       els["reader-content"].innerHTML = "<p class='muted'>Couldn't load chapter: " + e.message + "</p>";
     });
@@ -3164,12 +3264,18 @@ _READER_HTML = """<!DOCTYPE html>
     var hit = preloaded;
     preloaded = null;
     if (hit && hit.id === chapterId && Date.now() - hit.at < 300000) {
-      return hit.req.catch(function () { return api("/chapter/" + chapterId + "/read?auto_fetch=false"); });
+      return hit.req.then(function (res) {
+        // fetched ahead without counting as read: it is read now
+        api("/read-history/add/" + chapterId, { method: "POST" }).catch(function () {});
+        return res;
+      }, function () { return api("/chapter/" + chapterId + "/read?auto_fetch=false"); });
     }
     return api("/chapter/" + chapterId + "/read?auto_fetch=false");
   }
+  // The next chapter is fetched while this one is read, so turning the page
+  // shows it at once: the text, and a manga chapter's pages.
   function preloadNext(chapterId) {
-    var req = api("/chapter/" + chapterId + "/read?auto_fetch=false");
+    var req = api("/chapter/" + chapterId + "/read?auto_fetch=false&preload=true");
     preloaded = { id: chapterId, at: Date.now(), req: req };
     req.then(function (res) {
       var ids = imageIdsIn(res && res.content);
@@ -3439,6 +3545,14 @@ _READER_HTML = """<!DOCTYPE html>
 
 _SERVICE_WORKER = """
 const CACHE = "lncrawl-reader-v1";
+// Copies kept on the way past, apart from what "Save for offline" keeps in
+// CACHE, so the oldest can be let go without losing a chapter saved on purpose.
+const AUTO = "lncrawl-reader-auto-v1";
+const AUTO_MAX = 2000;
+// Answers that change by the second and are asked for over and over (job
+// progress, the unfinished-novels count, settings, admin pages): a disk write
+// on every poll, kept for good, and of no use offline.
+const NOT_KEPT = ["/api/job", "/api/novels/unfinished", "/api/settings/", "/api/admin/", "/api/auth/"];
 const SHELL = ["/reader", "/reader/manifest.webmanifest", "/reader/icon.svg"];
 
 self.addEventListener("install", function (e) {
@@ -3449,7 +3563,7 @@ self.addEventListener("install", function (e) {
 self.addEventListener("activate", function (e) {
   e.waitUntil(
     caches.keys().then(function (keys) {
-      return Promise.all(keys.filter(function (k) { return k !== CACHE; }).map(function (k) { return caches.delete(k); }));
+      return Promise.all(keys.filter(function (k) { return k !== CACHE && k !== AUTO; }).map(function (k) { return caches.delete(k); }));
     }).then(function () { return self.clients.claim(); })
   );
 });
@@ -3460,11 +3574,16 @@ self.addEventListener("fetch", function (e) {
   if (req.method !== "GET") return;
   var url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  var keep = !NOT_KEPT.some(function (prefix) { return url.pathname.indexOf(prefix) === 0; });
   e.respondWith(
     fetch(req).then(function (res) {
-      if (res && res.ok) {
+      if (keep && res && res.ok) {
         var copy = res.clone();
-        caches.open(CACHE).then(function (c) { c.put(req, copy); }).catch(function () {});
+        // a chapter fetched ahead (preload=true) is kept as the chapter itself,
+        // the address it is asked for by when opened again with no connection
+        var key = new URL(url.href);
+        key.searchParams.delete("preload");
+        caches.open(AUTO).then(function (c) { return c.put(key.href, copy).then(function () { trim(c); }); }).catch(function () {});
       }
       return res;
     }).catch(function () {
@@ -3474,6 +3593,16 @@ self.addEventListener("fetch", function (e) {
     })
   );
 });
+
+// Oldest first out once there are more than AUTO_MAX, looked at every 50 copies.
+var sinceTrim = 0;
+function trim(c) {
+  if (++sinceTrim < 50) return;
+  sinceTrim = 0;
+  c.keys().then(function (keys) {
+    return Promise.all(keys.slice(0, Math.max(0, keys.length - AUTO_MAX)).map(function (k) { return c.delete(k); }));
+  }).catch(function () {});
+}
 """
 
 _MANIFEST = """{

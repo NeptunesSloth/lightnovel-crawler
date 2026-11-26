@@ -12,6 +12,7 @@ import threading
 from typing import Any, Dict, List, Set, Tuple
 from urllib.parse import urlsplit
 
+import sqlalchemy as sa
 import sqlmodel as sq
 
 from ..context import ctx
@@ -93,28 +94,25 @@ def find(kind: str = "all") -> Dict[str, Any]:
     The counts of each kind are always given; ``novels`` holds only ``kind``.
     """
     with ctx.db.session() as sess:
-        counted = sess.exec(
-            sq.select(
-                Chapter.novel_id,
+        # One pass over the chapters for both the counts and the dates: two
+        # grouped queries read all of them twice.
+        listed = sess.execute(
+            sa.select(
+                sq.col(Chapter.novel_id),
+                sq.col(Chapter.is_done),
                 sq.func.count(),
-                sq.func.sum(sq.case((sq.col(Chapter.is_done).is_(True), 1), else_=0)),
-            ).group_by(sq.col(Chapter.novel_id))
-        ).all()
-        listed = sess.exec(
-            sq.select(
-                Chapter.novel_id,
-                Chapter.is_done,
                 sq.func.min(Chapter.created_at),
                 sq.func.max(Chapter.created_at),
             ).group_by(sq.col(Chapter.novel_id), sq.col(Chapter.is_done))
         ).all()
         novels = sess.exec(sq.select(Novel.id, Novel.title, Novel.url)).all()
-    chapters: Dict[str, Tuple[int, int]] = {
-        novel_id: (int(total or 0), int(done or 0)) for novel_id, total, done in counted
-    }
+    chapters: Dict[str, Tuple[int, int]] = {}
     newest_done: Dict[str, int] = {}
     oldest_missing: Dict[str, int] = {}
-    for novel_id, is_done, first, last in listed:
+    for novel_id, is_done, count, first, last in listed:
+        total, done = chapters.get(novel_id, (0, 0))
+        count = int(count or 0)
+        chapters[novel_id] = (total + count, done + count if is_done else done)
         if is_done:
             newest_done[novel_id] = int(last or 0)
         else:

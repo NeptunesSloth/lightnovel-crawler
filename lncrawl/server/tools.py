@@ -875,10 +875,13 @@ _TOOLS_HTML = """<!DOCTYPE html>
       });
   }
 
-  function pollJob(id, label, onEnd) {
-    api("/job/" + id, { method: "GET" })
+  function pollJob(id, label, onEnd, fails, full) {
+    // asked without its long lists while it runs; once more with them when it ends
+    api("/job/" + id + (full ? "" : "?light=true"), { method: "GET" })
       .then(function (job) {
+        fails = 0;
         var status = statusName(job.status);
+        if (!full && !isActive(status)) { pollJob(id, label, onEnd, 0, true); return; }
         var ex = job.extra || {};
         if (status === "PENDING") {
           explainWaiting(id, label);
@@ -908,7 +911,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
             " downloaded, " + c.missing + " missing, " + c.failed + " failed, " + c.empty + " empty.", "log-info");
         }
         if (isActive(status)) {
-          later(function () { pollJob(id, label, onEnd); }, 3000);
+          later(function () { pollJob(id, label, onEnd, fails); }, 3000);
           return;
         }
         if (status === "FAILED" && job.error) {
@@ -921,7 +924,19 @@ _TOOLS_HTML = """<!DOCTYPE html>
         }
         if (onEnd) onEnd(status);
       })
-      .catch(function (e) { log("Status check failed: " + e.message, "log-err"); });
+      .catch(function (e) {
+        if (/No such job/.test(e.message)) {
+          log(label + " · the job is no longer there.", "log-err");
+          if (onEnd) onEnd("GONE");
+          return;
+        }
+        // A dropped connection or a restart is not the end of the job: ask
+        // again, less often each time, instead of leaving Stop and the
+        // progress stuck where they were.
+        fails = (fails || 0) + 1;
+        if (fails === 1) log("Status check failed: " + e.message + " — trying again.", "log-err");
+        later(function () { pollJob(id, label, onEnd, fails); }, Math.min(30000, 3000 * Math.pow(2, fails - 1)));
+      });
   }
 
   // Discovery jobs that are still going, so Stop can end them (and the novel
@@ -1123,7 +1138,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
 
   function pollExport(id, fails) {
     fails = fails || 0;
-    api("/job/" + id, { method: "GET" })
+    api("/job/" + id + "?light=true", { method: "GET" })
       .then(function (job) {
         var status = statusName(job.status);
         var ex = job.extra || {};
@@ -1463,7 +1478,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
   });
 
   function pollImport(id, name, fails) {
-    api("/job/" + id, { method: "GET" })
+    api("/job/" + id + "?light=true", { method: "GET" })
       .then(function (job) {
         var ex = job.extra || {};
         var status = statusName(job.status);  // a number from the API, a name here
@@ -1632,7 +1647,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     document.getElementById("library-zip-stop").classList.toggle("hidden", !running);
     line.classList.toggle("hidden", !running);
     if (running) line.textContent = zipLine(z);
-    if (running && !zipTimer) zipTimer = setInterval(loadZip, 1500);
+    if (running && !zipTimer) zipTimer = setInterval(function () { if (!document.hidden) loadZip(); }, 1500);
     if (!running && zipTimer) { clearInterval(zipTimer); zipTimer = null; }
     // say how it ended, once, for a ZIP this page saw being made
     if (zipSeen === z.started_at && !running) {
@@ -1799,7 +1814,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
       button.disabled = busyNow || waiting;
     });
     var watching = busyNow || (old && old.state === "removing");
-    if (watching && !moveTimer) moveTimer = setInterval(loadMove, 2000);
+    if (watching && !moveTimer) moveTimer = setInterval(function () { if (!document.hidden) loadMove(); }, 2000);
     if (!watching && moveTimer) { clearInterval(moveTimer); moveTimer = null; }
   }
   // ---- a folder picker for every folder box: walk the drives instead of typing ----
@@ -2230,6 +2245,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
   function watchExtras() {
     if (extrasTimer) return;
     extrasTimer = setInterval(function () {
+      if (document.hidden) return;
       api("/admin/extras/status").then(function (s) {
         showExtrasProgress(s);
         if (!s.running) {
@@ -2348,7 +2364,13 @@ _TOOLS_HTML = """<!DOCTYPE html>
     showPane("library"); window.scrollTo(0, 0);
   });
   // the free space is looked at again every minute, whichever screen is open
-  setInterval(function () { if (token() && !moveTimer) loadMove(); }, 60000);
+  setInterval(function () { if (token() && !moveTimer && !document.hidden) loadMove(); }, 60000);
+  // a page shown again catches up at once instead of at its next tick
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden || !token()) return;
+    if (zipTimer) loadZip();
+    if (moveTimer) loadMove();
+  });
   showPane((location.hash || "").replace("#", ""));
 })();
 </script>

@@ -19,6 +19,7 @@ from typing_extensions import NotRequired
 
 from ....context import ctx
 from ....core.crawler import is_own_host
+from ....core.request_budget import waiting_for
 from ....core.scraping import IMAGE_CONNECTIONS
 from ....enums import JobStatus, JobType, OutputFormat
 from ....utils.file_tools import atomic_write, safe_filename, writable_folder
@@ -95,6 +96,12 @@ MAX_PARALLEL_NOVELS = 4
 # The engine drains only a bounded number of requests and stops scheduling a
 # novel after repeated failures; partial content remains resumable.
 STALL_TIMEOUT = 120.0  # seconds with no completion before giving up on a novel
+# ...unless its requests are queued for the site's slots and gap, which a busy
+# site stretches to minutes (its gap alone grows to 120 s, and a dozen threads
+# share two slots). That was 23 "stopped responding" in one log, each followed
+# by a 5 minute cooldown, with every thread waiting its turn and none on the
+# network. Queued like that, a novel is given up on after this long instead.
+STALL_WALL = 900.0
 
 # "Until done" mode, for a job left alone for days. Instead of stopping when a
 # site blocks it or its downloads hang, it waits and tries again, longer each
@@ -1946,6 +1953,8 @@ def _download_novel(
             max_inflight=EXPORT_WORKERS,
             idle_timeout=STALL_TIMEOUT,
             on_progress=_tick,
+            waiting=lambda: waiting_for(signal),
+            wall=STALL_WALL,
         ):
             if on_result:
                 on_result(outcome.error)
@@ -2005,6 +2014,8 @@ def _download_novel(
                 max_inflight=IMAGE_CONNECTIONS if images_unpaced else EXPORT_WORKERS,
                 idle_timeout=STALL_TIMEOUT,
                 on_progress=_image_tick,
+                waiting=lambda: waiting_for(signal),
+                wall=STALL_WALL,
             ):
                 if on_result and outcome.item_id in own:
                     on_result(outcome.error, count=False)

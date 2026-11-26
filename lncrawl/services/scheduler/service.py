@@ -61,6 +61,19 @@ class JobScheduler:
                 logger.warning("Could not remove rows of deleted novels", exc_info=True)
 
         Thread(target=sweep, daemon=True, name="orphan-rows").start()
+        # The warmup below takes about a second, and the server answers nothing
+        # until its startup returns: so it and the workers start on a thread of
+        # their own, the workers only once the warmup is done.
+        starter = Thread(
+            target=self._start_workers,
+            args=[self._signal],
+            daemon=True,
+            name="scheduler-start",
+        )
+        starter.start()
+        self._threads.append(starter)
+
+    def _start_workers(self, signal: Event) -> None:
         # Force nodriver + its CDP submodules to import now, in this single thread,
         # before any worker can race the first import. nodriver.cdp is a web of
         # circular submodule imports that is only safe to use once fully loaded; a
@@ -80,6 +93,8 @@ class JobScheduler:
                 logger.warning(BROWSER_PAGES_UNSUPPORTED)
         except Exception:
             logger.warning("nodriver warmup failed; will retry on first browser use", exc_info=True)
+        if signal.is_set():
+            return  # stopped while warming up
         for _ in range(ctx.config.crawler.runner_concurrency):
             self._thread(run_jobs, ctx.config.crawler.runner_cooldown, job_wakeup)
         self._thread(run_scrubber, ctx.config.crawler.scrubber_cooldown)

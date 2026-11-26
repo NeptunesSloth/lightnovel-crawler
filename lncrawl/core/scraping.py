@@ -132,6 +132,23 @@ def _extract_visible_text(html: str, parser: str) -> str:
 
 scraper_session._visible_text = _visible_text
 
+# The same check read API answers (JSON) as page text: an answer listing image
+# files shares no words with one describing a manga, so each of MangaDex's page
+# lists was "may be decoy" (1,062 warnings in one log), and parsed as HTML to
+# find that out. A block or challenge page comes back as HTML, not JSON.
+_inspect_content = scraper_session.Scraper._inspect_content
+
+
+def _inspect_content_unless_json(
+    self: Any, url: str, key: str, profile: Any, response: Any
+) -> None:
+    if "json" in response.headers.get("content-type", "").lower():
+        return
+    _inspect_content(self, url, key, profile, response)
+
+
+scraper_session.Scraper._inspect_content = _inspect_content_unless_json  # type: ignore[method-assign]
+
 # The longest gap a slowdown remembered from an earlier run may impose on the
 # first requests of this one. A site that really needs longer refuses again
 # and the gap grows from here, so this costs a refusal or two at most.

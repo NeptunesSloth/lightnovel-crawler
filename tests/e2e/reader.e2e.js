@@ -78,7 +78,7 @@ async function clearFilters(page) {
   // the "sources in my library" search sends only those domains
   let sent = null, polls = 0;
   await A.route("**/api/job/create/search-sources", (r) => { sent = JSON.parse(r.request().postData()); r.fulfill({ json: { id: "job1", status: 0, extra: {} } }); });
-  await A.route("**/api/job/job1", (r) => { polls++; r.fulfill({ json: { id: "job1", status: polls > 1 ? 2 : 1, done: 1, total: 1, extra: { search_results: [
+  await A.route(/\/api\/job\/job1(\?.*)?$/, (r) => { polls++; r.fulfill({ json: { id: "job1", status: polls > 1 ? 2 : 1, done: 1, total: 1, extra: { search_results: [
     { title: "Zzzz Novel", url: "https://x.org/zzzz", info: "Ch 3" },
     { title: "Omniscient Reader", url: "https://c.com/n/4", info: "" }] } } }); });
   await A.click("#lib-web-btn");
@@ -89,6 +89,18 @@ async function clearFilters(page) {
   check("results list, owned ones marked", rows.length === 2 && /In library/.test(rows[1]),
     { rows, polls, note: await A.textContent("#lib-web-status"), hidden: await A.isHidden("#lib-web") });
   await A.click("#lib-web-stop").catch(() => {});
+  // a search whose job was deleted meanwhile ends, instead of being asked after for ever
+  let gonePolls = 0;
+  await A.unroute("**/api/job/create/search-sources");
+  await A.route("**/api/job/create/search-sources", (r) => r.fulfill({ json: { id: "gone1", status: 0, extra: {} } }));
+  await A.route(/\/api\/job\/gone1(\?.*)?$/, (r) => { gonePolls++; r.fulfill({ status: 404, json: { error: "No such job" } }); });
+  await search(A, "zzzy");
+  await A.click("#lib-web-btn");
+  await A.waitForFunction(() => /no longer there/.test(document.getElementById("lib-web-status").textContent), null, { timeout: 15000 }).catch(() => {});
+  await A.waitForTimeout(5000);
+  check("a search whose job is gone says so and stops asking",
+    /no longer there/.test(await A.textContent("#lib-web-status")) && gonePolls === 1,
+    { gonePolls, note: await A.textContent("#lib-web-status") });
   await search(A, "");
 
   console.log("Filters, tags and views");
@@ -133,7 +145,7 @@ async function clearFilters(page) {
   check("a details-only novel is marked", /details only/.test(await A.$eval("#lib-list .libcard", (c) => c.innerText)));
   let fetchBody = null;
   await A.route("**/api/job/create/bulk-download", (r) => { fetchBody = JSON.parse(r.request().postData()); r.fulfill({ json: [{ id: "job2", status: 2, extra: {} }] }); });
-  await A.route("**/api/job/job2", (r) => r.fulfill({ json: { id: "job2", status: 2, extra: {} } }));
+  await A.route(/\/api\/job\/job2(\?.*)?$/, (r) => r.fulfill({ json: { id: "job2", status: 2, extra: {} } }));
   await A.click("#lib-more summary"); await A.click("#lib-select");
   await A.click("#lib-list .libcard >> nth=0");
   A.once("dialog", (d) => d.accept());
@@ -221,7 +233,7 @@ async function clearFilters(page) {
   await T.waitForTimeout(800);
   let started = null;
   await T.route("**/api/job/create/export-source", (r) => { started = JSON.parse(r.request().postData()); r.fulfill({ json: { id: "job3", status: 0, extra: {} } }); });
-  await T.route("**/api/job/job3", (r) => r.fulfill({ json: { id: "job3", status: 1, done: 0, total: 1, extra: { domain: "a.com", phase: "cooling-down", cool_reason: "stalled", resume_at: Date.now() + 300000 } } }));
+  await T.route(/\/api\/job\/job3(\?.*)?$/, (r) => r.fulfill({ json: { id: "job3", status: 1, done: 0, total: 1, extra: { domain: "a.com", phase: "cooling-down", cool_reason: "stalled", resume_at: Date.now() + 300000 } } }));
   check("the e-book format stays out of the way", await T.isHidden("#exp-zip-opts"));
   check("advanced options are folded away", await T.isHidden("#exp-retries"));
   await T.fill("#exp-url", "https://a.com/");
@@ -338,17 +350,45 @@ async function clearFilters(page) {
   check("Download e-book makes it and saves the file", made === "POST" && file && file.suggestedFilename() === "Reading Now.epub",
     [made, file && file.suggestedFilename()]);
   check("it says where it went", /Saved Reading Now\.epub/.test(await E.textContent("#offline-msg")), await E.textContent("#offline-msg"));
+  check("a short chapter list has no Go to chapter", await E.isHidden("#chap-jump-wrap"));
   check("no errors downloading an e-book", E.errors.length === 0, E.errors);
   await E.close();
 
+  console.log("Going to a chapter in a long novel");
+  const J = await open(browser);
+  const asks = [];
+  await J.route(/\/api\/novel\/[^/]+\/chapters\?limit=100&offset=\d+$/, (r) => {
+    const offset = +new URL(r.request().url()).searchParams.get("offset");
+    asks.push(offset);
+    const items = [];
+    for (let i = offset; i < Math.min(offset + 100, 11000); i++) {
+      items.push({ id: "c" + (i + 1), serial: i + 1, title: "Chapter " + (i + 1), is_available: true });
+    }
+    r.fulfill({ json: { items: items, total: 11000, offset: offset, limit: 100 } });
+  });
+  await search(J, "reading now");
+  await J.click("#lib-list .libcard h3"); await J.waitForTimeout(600);
+  check("a long chapter list offers Go to chapter", await J.isVisible("#chap-jump-wrap"));
+  await J.fill("#chap-jump", "9000"); await J.click("#chap-jump-go"); await J.waitForTimeout(500);
+  const firstShown = await J.$eval("#chap-list .chap .n", (n) => n.textContent);
+  check("Go to chapter lists from there", asks[asks.length - 1] === 8994 && firstShown === "#8995", { asks, firstShown });
+  check("and offers the start again", await J.isVisible("#chap-jump-start"));
+  await J.click("#chap-jump-start"); await J.waitForTimeout(500);
+  check("From the start lists chapter 1 first", (await J.$eval("#chap-list .chap .n", (n) => n.textContent)) === "#1");
+  check("no errors going to a chapter", J.errors.length === 0, J.errors);
+  await J.close();
+
   console.log("Delete unfinished novels");
   const U = await open(browser);
-  let asked = null, unfPolls = 0;
+  let asked = null, unfPolls = 0, recountsWhileRunning = 0;
   const found = { count: 5, details_only: 3, partial: 2, chapters: 40, kept: 1 };
-  await U.route("**/api/novels/unfinished", (r) => {
+  await U.route(/\/api\/novels\/unfinished(\?.*)?$/, (r) => {
     unfPolls++;
-    const removing = asked ? { running: unfPolls < 4, kind: asked, done: Math.min(unfPolls - 1, 2), total: 2, failed: 0, current: "A Novel" } : { running: false };
-    r.fulfill({ json: Object.assign({}, found, { removing }) });
+    const running = asked ? unfPolls < 4 : false;
+    const removing = asked ? { running, kind: asked, done: Math.min(unfPolls - 1, 2), total: 2, failed: 0, current: "A Novel" } : { running: false };
+    const progressOnly = new URL(r.request().url()).searchParams.get("progress_only") === "true";
+    if (!progressOnly && running) recountsWhileRunning++;
+    r.fulfill({ json: progressOnly ? { removing } : Object.assign({}, found, { removing }) });
   });
   await U.route(/\/api\/novels\/unfinished\/remove/, (r) => { asked = new URL(r.request().url()).searchParams.get("kind"); unfPolls = 1; r.fulfill({ json: {} }); });
   await U.evaluate(() => document.getElementById("lib-unfinished").click());
@@ -366,8 +406,75 @@ async function clearFilters(page) {
   check("a bar shows how far it has got", await U.isVisible("#unf-progress") && /Deleting/.test(await U.textContent("#unf-text")), await U.textContent("#unf-text"));
   await U.waitForTimeout(3500);
   check("it says when it is done", /Deleted 2 of 2/.test(await U.textContent("#unf-text")), await U.textContent("#unf-text"));
+  check("while it runs only the progress is asked for, not a recount", recountsWhileRunning === 0, recountsWhileRunning);
   check("no errors deleting unfinished novels", U.errors.length === 0, U.errors);
   await U.close();
+
+  console.log("Turning pages");
+  {
+    const R = await open(browser);
+    const reads = [], marked = [];
+    R.on("request", (r) => {
+      if (/\/api\/chapter\/[^/]+\/read/.test(r.url())) reads.push(r.url());
+      if (r.method() === "POST" && /\/api\/read-history\/add\//.test(r.url())) marked.push(r.url());
+    });
+    const chapters = await R.evaluate(async ([t, id]) => (await (await fetch(
+      "/api/novel/" + id + "/chapters?limit=10", { headers: { Authorization: "Bearer " + t } })).json()).items, [TOKEN, IDS["Reading Now"]]);
+    const second = chapters.find((c) => c.serial === 2).id;
+    await search(R, "reading now");
+    await R.click("#lib-list .libcard >> nth=0"); await R.waitForSelector(".chap");
+    await R.click(".chap >> nth=0");
+    await R.waitForFunction(() => document.getElementById("reader-title").textContent === "Chapter 1");
+    await R.waitForTimeout(500);
+    const ofSecond = () => reads.filter((u) => u.includes(second));
+    check("the next chapter is fetched while this one is read, not as read",
+      ofSecond().length === 1 && /preload=true/.test(ofSecond()[0]) && marked.length === 0, { reads, marked });
+    await R.click("#next-btn");
+    await R.waitForFunction(() => document.getElementById("reader-title").textContent === "Chapter 2", null, { timeout: 2000 });
+    await R.waitForTimeout(500);
+    check("Next shows it without asking for it again", ofSecond().length === 1, ofSecond());
+    check("opened, it is counted as read", marked.length === 1 && marked[0].includes(second), marked);
+    check("and the one after is fetched ahead in turn",
+      reads.some((u) => u.includes(chapters.find((c) => c.serial === 3).id) && /preload=true/.test(u)), reads);
+    check("no errors turning pages", R.errors.length === 0, R.errors);
+    await R.close();
+  }
+
+  console.log("Offline copies");
+  {
+    // its own context: the others block the service worker (see open())
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const S = await context.newPage();
+    S.errors = [];
+    S.on("pageerror", (e) => S.errors.push(e.message));
+    await S.goto(READER);
+    await S.evaluate((t) => localStorage.setItem("lncrawl_token", t), TOKEN);
+    await S.evaluate(() => navigator.serviceWorker.ready);
+    await S.goto(READER); // now under the service worker's control
+    await S.waitForFunction(() => /novel\(s\)/.test(document.getElementById("lib-status").textContent));
+    const kept = await S.evaluate(async ([t, novel]) => {
+      const get = (u) => fetch(u, { headers: { Authorization: "Bearer " + t } });
+      await get("/api/jobs?limit=5");
+      await get("/api/novels/unfinished");
+      await get("/api/novels?limit=5");
+      const chapter = (await (await get("/api/novel/" + novel + "/chapters?limit=1")).json()).items[0].id;
+      await get("/api/chapter/" + chapter + "/read?auto_fetch=false&preload=true");
+      await new Promise((r) => setTimeout(r, 500));
+      const urls = async (name) => (await (await caches.open(name)).keys()).map((r) => new URL(r.url).pathname);
+      const auto = await (await caches.open("lncrawl-reader-auto-v1")).keys();
+      const reads = auto.map((r) => new URL(r.url)).filter((u) => u.pathname.includes(chapter)).map((u) => u.search);
+      return { auto: await urls("lncrawl-reader-auto-v1"), saved: await urls("lncrawl-reader-v1"), reads };
+    }, [TOKEN, IDS["Reading Now"]]);
+    check("a chapter fetched ahead is kept as itself, to open again offline",
+      JSON.stringify(kept.reads) === '["?auto_fetch=false"]', kept.reads);
+    check("what is read is kept for offline", kept.auto.includes("/api/novels"), kept.auto);
+    check("job and unfinished polls are not kept",
+      !kept.auto.concat(kept.saved).some((p) => p.startsWith("/api/job") || p.startsWith("/api/novels/unfinished")), kept);
+    check("copies on the way past stay out of the saved-for-offline cache",
+      !kept.saved.some((p) => p.startsWith("/api/")), kept.saved);
+    check("no errors with the service worker", S.errors.length === 0, S.errors);
+    await context.close();
+  }
 
   console.log("Phone");
   await A.setViewportSize({ width: 390, height: 800 }); await A.waitForTimeout(300);
