@@ -1109,8 +1109,11 @@ class JobService:
                 .limit(recent)
             ).all()
         rows = []
+        left = self._what_is_left([job for job in active if job.type != JobType.EXPORT_SOURCE])
         for job in list(active) + list(finished):
             extra = dict(job.extra or {})
+            if job.id in left:
+                extra["left"] = left[job.id]
             for key in self._BULKY_EXTRA:
                 value = extra.pop(key, None)
                 if isinstance(value, list):
@@ -1133,6 +1136,66 @@ class JobService:
                 }
             )
         return rows
+
+    _LEFT_NAMES = {
+        JobType.CHAPTER: "chapter",
+        JobType.CHAPTER_BATCH: "chapter download",
+        JobType.IMAGE: "image",
+        JobType.IMAGE_BATCH: "image download",
+        JobType.ARTIFACT: "e-book",
+        JobType.ARTIFACT_BATCH: "e-books",
+    }
+
+    def _what_is_left(self, jobs: List[Job]) -> dict:
+        """What each of these downloads is still waiting for, by kind and state.
+
+        "705 of 707" said nothing of what the last two were: an e-book waiting
+        its turn behind others reads very differently from a chapter that hangs.
+        """
+        found: dict = {}
+        if not jobs:
+            return found
+        with ctx.db.session() as sess:
+            # e-books are made one at a time, oldest first: how many are ahead
+            queued_books = sess.exec(
+                sq.select(Job.id, Job.created_at, Job.status).where(
+                    Job.type == JobType.ARTIFACT, sq.col(Job.is_done).is_(False)
+                )
+            ).all()
+            for job in jobs[:40]:
+                rows = [
+                    (child.id, child.type, child.status, child.created_at, child.depends_on)
+                    for child in sess.exec(
+                        sq.select(Job).where(
+                            sq.col(Job.id).in_(select_descendants(job.id)),
+                            sq.col(Job.id) != job.id,
+                            sq.col(Job.is_done).is_(False),
+                        )
+                    ).all()
+                ]
+                counts: dict = {}
+                for child_id, kind, status, created, depends_on in rows:
+                    what = self._LEFT_NAMES.get(kind, kind.name.lower().replace("_", " "))
+                    state = status.name.lower()
+                    if kind == JobType.ARTIFACT and status == JobStatus.PENDING:
+                        waiting_on = depends_on and any(r[0] == depends_on for r in rows)
+                        if waiting_on:
+                            state = "waiting for the chapters"
+                        else:
+                            ahead = sum(
+                                1
+                                for other, at, st in queued_books
+                                if other != child_id
+                                and (st == JobStatus.RUNNING or (at or 0) < (created or 0))
+                            )
+                            state = f"queued, {ahead} ahead" if ahead else "queued"
+                    key = (what, state)
+                    counts[key] = counts.get(key, 0) + 1
+                found[job.id] = [
+                    {"what": what, "state": state, "count": n}
+                    for (what, state), n in counts.items()
+                ]
+        return found
 
     def pause(self, job_id: str) -> None:
         """Hold a bulk download where it is; resume() picks it up from its checkpoint.

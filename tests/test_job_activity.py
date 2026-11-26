@@ -99,6 +99,47 @@ class JobActivityTests(unittest.TestCase):
         later = self.ctx.jobs._create(self.user, JobType.NOVEL, {"url": "https://a.test/n/1"})
         self.assertNotEqual(later.id, first.id)  # once it is over, asking again is a new one
 
+    def test_the_downloads_page_says_what_a_download_still_waits_for(self) -> None:
+        jobs = self.ctx.jobs
+        other = jobs._create(
+            self.user, JobType.FETCH_MISSING, {"novel_id": "x", "novel_title": "X", "n": 1}
+        )
+        older_book = jobs._create(
+            self.user, JobType.ARTIFACT, {"novel_id": "x"}, parent_id=other.id
+        )
+        repair = jobs._create(
+            self.user, JobType.FETCH_MISSING, {"novel_id": "y", "novel_title": "Y", "n": 2}
+        )
+        batch = jobs._create(
+            self.user, JobType.CHAPTER_BATCH, {"novel_id": "y"}, parent_id=repair.id
+        )
+        chapter = jobs._create(self.user, JobType.CHAPTER, {"chapter_id": "c"}, parent_id=batch.id)
+        jobs._create(
+            self.user, JobType.ARTIFACT, {"novel_id": "y"}, parent_id=repair.id, depends_on=batch.id
+        )
+        with self.ctx.db.session() as sess:
+            sess.exec(
+                sq.update(Job)
+                .where(sq.col(Job.id).in_([batch.id, repair.id]))
+                .values(status=JobStatus.RUNNING)
+            )
+            sess.exec(sq.update(Job).where(sq.col(Job.id) == chapter.id).values(is_done=True))
+            sess.commit()
+
+        def left(job_id: str) -> list:
+            rows = {row["id"]: row for row in jobs.list_downloads(self.user)}
+            return sorted((x["what"], x["state"]) for x in rows[job_id]["extra"]["left"])
+
+        self.assertEqual(
+            left(repair.id),
+            [("chapter download", "running"), ("e-book", "waiting for the chapters")],
+        )
+        with self.ctx.db.session() as sess:
+            sess.exec(sq.update(Job).where(sq.col(Job.id) == batch.id).values(is_done=True))
+            sess.commit()
+        self.assertEqual(left(repair.id), [("e-book", "queued, 1 ahead")])  # behind older_book
+        self.assertTrue(older_book.id)
+
 
 if __name__ == "__main__":
     unittest.main()
