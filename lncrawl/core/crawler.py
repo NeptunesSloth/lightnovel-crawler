@@ -86,9 +86,7 @@ def is_stand_in_cover(cover_file: Path) -> bool:
                 return False
             small = img.convert("RGB").resize((80, 103))
         flat = small.quantize(colors=64).convert("RGB")
-        diff = sum(
-            abs(a - b) for pa, pb in zip(small.getdata(), flat.getdata()) for a, b in zip(pa, pb)
-        ) / (80 * 103 * 3)
+        diff = sum(abs(a - b) for a, b in zip(small.tobytes(), flat.tobytes())) / (80 * 103 * 3)
         return diff < 3.0
     except Exception:
         return False
