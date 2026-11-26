@@ -62,6 +62,36 @@ def is_own_host(crawler: Any, url: str) -> bool:
     return False
 
 
+def stand_in_marker(cover_file: Path) -> Path:
+    """The file that says a novel's cover was drawn by the app, not downloaded."""
+    return cover_file.with_name("cover.generated")
+
+
+def is_stand_in_cover(cover_file: Path) -> bool:
+    """Whether this cover is one the app drew because the real one failed.
+
+    Marked since covers were drawn with a marker beside them; one drawn before
+    that is told by its look: the app's size, and nothing but a few flat colours.
+    A real cover taken for one is only downloaded again, and kept if that fails.
+    """
+    if stand_in_marker(cover_file).is_file():
+        return True
+    try:
+        if not cover_file.is_file() or cover_file.stat().st_size > 120_000:
+            return False
+        from PIL import Image
+
+        with Image.open(cover_file) as img:
+            if img.size != (800, 1032):
+                return False
+            small = img.convert("RGB").resize((80, 103))
+        flat = small.quantize(colors=64).convert("RGB")
+        diff = sum(abs(a - b) for a, b in zip(small.tobytes(), flat.tobytes())) / (80 * 103 * 3)
+        return diff < 3.0
+    except Exception:
+        return False
+
+
 class Crawler(ABC):
     base_url: Union[str, List[str]]
 
@@ -252,8 +282,19 @@ class Crawler(ABC):
         return response.content
 
     def download_cover(self, cover_url: str, cover_file: Path) -> None:
+        # A stand-in cover (drawn when the real one could not be had) is replaced
+        # as soon as the real one downloads. It used to count as "already there",
+        # so a novel kept its stand-in for good, however often it was refreshed.
+        stand_in = is_stand_in_cover(cover_file)
         try:
-            self.download_image(cover_url, cover_file)
+            if stand_in and cover_url:
+                fresh = cover_file.with_name("cover.download.jpg")
+                fresh.unlink(missing_ok=True)
+                self.download_image(cover_url, fresh)
+                os.replace(fresh, cover_file)
+                stand_in_marker(cover_file).unlink(missing_ok=True)
+            else:
+                self.download_image(cover_url, cover_file)
             ctx.logger.debug(f"Cover saved: {cover_url} -> {cover_file}")
             return
         except Exception as e:
@@ -277,6 +318,7 @@ class Crawler(ABC):
         img = generate_cover_image()
         with atomic_write(cover_file) as tmp:
             img.save(tmp, "JPEG", optimized=True)
+        stand_in_marker(cover_file).touch()
         ctx.logger.debug(f"Cover generated: {cover_file}")
 
     def format_novel(self, novel: Novel) -> None:

@@ -257,6 +257,20 @@ _READER_HTML = """<!DOCTYPE html>
     backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 12px 30px -16px var(--shade);
   }
   .reader-nav button { border-radius: 999px; margin: 0; }
+  #reader-content.sp-compact { line-height: 1.55; }
+  #reader-content.sp-airy { line-height: 2.05; }
+  #reader-content.sp-airy p { margin-bottom: 1.4em; }
+  /* a manga page keeps its place while it loads, so the strip does not jump */
+  #reader-content img.pending { min-height: 60vh; width: 100%; background: var(--panel); }
+  /* how far through the chapter, along the very top */
+  #read-progress {
+    position: fixed; top: 0; left: 0; height: 3px; width: 0; z-index: 20;
+    background: var(--lamp); pointer-events: none; transition: width .12s linear;
+  }
+  /* while reading, the bars step aside going down and come back going up */
+  body.reading .topbar, body.reading .reader-nav { transition: transform .25s ease, opacity .25s ease; }
+  body.reading.bars-off .topbar { transform: translateY(-100%); }
+  body.reading.bars-off .reader-nav { transform: translateY(170%); opacity: 0; pointer-events: none; }
   #reader-pos { font-size: 13px; font-variant-numeric: tabular-nums; }
 
   #auth { max-width: 380px; margin: 70px auto; }
@@ -362,6 +376,7 @@ _READER_HTML = """<!DOCTYPE html>
   <button id="aa-btn" class="hidden" title="Reading settings">Aa</button>
 </div>
 
+<div id="read-progress" class="hidden"></div>
 <div id="aa-panel" class="hidden">
   <div class="aa-row"><span class="aa-label">Size</span>
     <button id="font-dn">A-</button><button id="font-up">A+</button>
@@ -369,6 +384,9 @@ _READER_HTML = """<!DOCTYPE html>
   <div class="aa-row"><span class="aa-label">Theme</span><span class="tags" id="aa-theme"></span></div>
   <div class="aa-row"><span class="aa-label">Font</span><span class="tags" id="aa-font"></span></div>
   <div class="aa-row"><span class="aa-label">Width</span><span class="tags" id="aa-width"></span></div>
+  <div class="aa-row"><span class="aa-label">Spacing</span><span class="tags" id="aa-spacing"></span></div>
+  <div class="aa-row" title="How manga pages are shown"><span class="aa-label">Pages</span><span class="tags" id="aa-fit"></span></div>
+  <div class="aa-row" title="A tap near the left or right edge scrolls a screen up or down; past the end, the next chapter"><span class="aa-label">Tap edges</span><span class="tags" id="aa-tap"></span></div>
   <div class="aa-row"><span class="aa-label">Tap translate <small class="muted">(to English)</small></span><span class="tags" id="aa-trans"></span></div>
 </div>
 <div id="trans-pop" class="hidden"></div>
@@ -407,28 +425,13 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="status">Status: ongoing first</option>
         <option value="status-done">Status: completed first</option>
       </select>
-      <select id="lib-kind" title="Media type">
-        <option value="">All media</option>
-        <option value="novel">Novels</option>
-        <option value="comic">All comics</option>
-        <option value="manga">Manga (Japanese)</option>
-        <option value="manhwa">Manhwa (Korean)</option>
-        <option value="manhua">Manhua (Chinese)</option>
-      </select>
-      <select id="lib-dl" title="Show novels by how much of them is downloaded">
-        <option value="">Any downloads</option>
-        <option value="complete">Fully downloaded</option>
-        <option value="started">Hide details-only</option>
-        <option value="partial">Partly downloaded</option>
-        <option value="none">Details only</option>
-      </select>
       <button id="lib-layout" title="Show the library as covers or as a list">☰ List</button>
       <button id="lib-filters-btn" title="Show or hide the filters">Filters</button>
-      <button id="lib-auto-btn" title="New chapters: automatic checks and notifications">🔔 New chapters</button>
-      <button id="lib-bmks-btn" title="Every bookmark, across all novels">🔖 Bookmarks</button>
       <details class="more-menu" id="lib-more">
         <summary title="More actions">⋯ More</summary>
         <div class="more-list">
+          <button id="lib-auto-btn" title="New chapters: automatic checks and notifications">🔔 New chapters</button>
+          <button id="lib-bmks-btn" title="Every bookmark, across all novels">🔖 Bookmarks</button>
           <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
           <button id="lib-fill" class="hidden" title="Re-read the details (status, genres, description) of novels that are missing them">✚ Fill in details</button>
           <button id="lib-stats-btn" title="How much you have been reading">📊 Reading stats</button>
@@ -448,6 +451,21 @@ _READER_HTML = """<!DOCTYPE html>
       <div id="lib-cats" class="tags"></div>
     </div>
     <div class="toolbar filters hidden" id="lib-filters">
+      <select id="lib-kind" title="Media type">
+        <option value="">All media</option>
+        <option value="novel">Novels</option>
+        <option value="comic">All comics</option>
+        <option value="manga">Manga (Japanese)</option>
+        <option value="manhwa">Manhwa (Korean)</option>
+        <option value="manhua">Manhua (Chinese)</option>
+      </select>
+      <select id="lib-dl" title="Show novels by how much of them is downloaded">
+        <option value="">Any downloads</option>
+        <option value="complete">Fully downloaded</option>
+        <option value="started">Hide details-only</option>
+        <option value="partial">Partly downloaded</option>
+        <option value="none">Details only</option>
+      </select>
       <input id="lib-tag" type="text" list="lib-tag-list" autocomplete="off"
              placeholder="Tags: romance, fantasy, -harem" title="Show novels with every tag listed; put - before a tag to hide it" />
       <datalist id="lib-tag-list"></datalist>
@@ -486,6 +504,7 @@ _READER_HTML = """<!DOCTYPE html>
       </span>
       <label class="check" title="Show only titles that appear more than once (the same story from different sources); open one and press Merge to combine them"><input id="lib-dupes" type="checkbox" /> Possible duplicates</label>
       <label class="check" title="Hide Boys' Love novels and comics (BL, Yaoi, Shounen Ai, Danmei)"><input id="lib-nobl" type="checkbox" /> Hide BL</label>
+      <label class="check" title="Hide adult novels and comics (tagged Adult, Mature, Smut, Ecchi, Hentai, Erotica…) everywhere in the Reader. Kept on this and your other devices until you untick it."><input id="lib-nonsfw" type="checkbox" /> Hide NSFW</label>
       <label class="check" title="Hide machine-translated (MTL) novels"><input id="lib-nomtl" type="checkbox" /> Hide MTL</label>
       <label class="check" title="Show only novels with no chapters downloaded yet, such as ones a discovery added with just their details"><input id="lib-noch" type="checkbox" /> No chapters yet</label>
       <button id="lib-clear" class="hidden" title="Clear every filter">✕ Clear filters</button>
@@ -959,7 +978,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","chap-jump-wrap","chap-jump","chap-jump-go","chap-jump-here","chap-jump-start","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
+  ["nav-back","search","read-progress","aa-spacing","aa-fit","aa-tap","chap-jump-wrap","chap-jump","chap-jump-go","chap-jump-here","chap-jump-start","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-nonsfw","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -977,6 +996,9 @@ _READER_HTML = """<!DOCTYPE html>
     els["nav-back"].classList.toggle("hidden", view === "view-library" || view === "auth");
     els["search-wrap"].classList.toggle("hidden", view !== "view-library");
     var inReader = view === "view-reader";
+    document.body.classList.toggle("reading", inReader);
+    document.body.classList.remove("bars-off");
+    els["read-progress"].classList.toggle("hidden", !inReader);
     els["aa-btn"].classList.toggle("hidden", !inReader);
     if (!inReader) {
       els["aa-panel"].classList.add("hidden");
@@ -1094,7 +1116,7 @@ _READER_HTML = """<!DOCTYPE html>
     var posMap = loadPos();
     Object.keys(posMap).forEach(function (id) {
       var n = byId[id]; var pe = posOf(id);
-      if (n && pe && progressOf(n) !== "finished") recent.push({ n: n, pe: pe });
+      if (n && pe && progressOf(n) !== "finished" && !(hideNSFW() && isNSFW(n))) recent.push({ n: n, pe: pe });
     });
     recent.sort(function (a, b) { return (b.pe.ts || 0) - (a.pe.ts || 0); });
     var total = recent.length;
@@ -1345,6 +1367,21 @@ _READER_HTML = """<!DOCTYPE html>
     });
   }
 
+  // Adult content goes by many names across sources (MangaDex adds its own
+  // content rating as a tag). Compared whole, letters and digits only, so
+  // "Mature" matches but "Maturing" does not.
+  var NSFW_TAGS = ["adult", "adultcontent", "mature", "smut", "ecchi", "hentai", "erotica", "erotic",
+    "pornographic", "porn", "nsfw", "r18", "18", "sexualcontent", "sexualviolence", "lolicon", "shotacon"];
+  function isNSFW(n) {
+    return (n.tags || []).some(function (t) {
+      return NSFW_TAGS.indexOf(String(t).toLowerCase().replace(/[^a-z0-9]/g, "")) >= 0;
+    });
+  }
+  // An option, not a filter: kept with the reading settings (synced between
+  // devices), and Clear filters leaves it on.
+  function hideNSFW() { return (prefs || loadPrefs()).nsfw === "hide"; }
+  function sfw(list) { return hideNSFW() ? list.filter(function (n) { return !isNSFW(n); }) : list; }
+
   // [min, max] chapters from the Length filter, or null when it is off
   function chapterRange() {
     var v = els["lib-len"].value;
@@ -1360,7 +1397,7 @@ _READER_HTML = """<!DOCTYPE html>
 
   // How many filters are on, for the Filters button.
   function activeFilterCount() {
-    return [els["lib-tag"].value.trim(), els["lib-source"].value, els["lib-lang"].value,
+    return [els["lib-kind"].value, els["lib-dl"].value, els["lib-tag"].value.trim(), els["lib-source"].value, els["lib-lang"].value,
       els["lib-progress"].value, els["lib-shelf"].value, els["lib-state"].value,
       els["lib-favonly"].checked, !!chapterRange(), els["lib-dupes"].checked,
       els["lib-nobl"].checked, els["lib-nomtl"].checked, els["lib-noch"].checked, lib.cat].filter(Boolean).length;
@@ -1485,6 +1522,9 @@ _READER_HTML = """<!DOCTYPE html>
       });
     }
     if (els["lib-nobl"].checked) items = items.filter(function (n) { return !isBL(n); });
+    var beforeNSFW = items.length;
+    items = sfw(items);
+    lib.nsfwHidden = beforeNSFW - items.length;
     if (els["lib-nomtl"].checked) items = items.filter(function (n) { return !n.mtl; });
     if (els["lib-noch"].checked) items = items.filter(detailsOnly);
     var dl = els["lib-dl"].value;
@@ -1530,6 +1570,7 @@ _READER_HTML = """<!DOCTYPE html>
       els["lib-status"].textContent = lib.all.length
         ? (words.length ? "Nothing in your library matches “" + q.trim() + "”." : "No matches.")
         : "Your library is empty — download something first (Tools).";
+      if (lib.nsfwHidden && lib.all.length) els["lib-status"].textContent += " (" + lib.nsfwHidden + " NSFW hidden)";
       return;
     }
     els["lib-status"].textContent = items.length + " novel(s)" +
@@ -1541,6 +1582,7 @@ _READER_HTML = """<!DOCTYPE html>
       (progress ? " · " + els["lib-progress"].selectedOptions[0].textContent : "") +
       (range ? " · " + (range[1] === Infinity ? range[0] + "+" : range[0] + "–" + range[1]) + " chapters" : "") +
       (els["lib-favonly"].checked ? " · ★ Favorites" : "") +
+      (lib.nsfwHidden ? " · " + lib.nsfwHidden + " NSFW hidden" : "") +
       (lib.cat ? " · " + lib.cat : "");
     // Cards are made a batch at a time as the list is scrolled, so a library of
     // thousands stays quick to filter.
@@ -1968,6 +2010,12 @@ _READER_HTML = """<!DOCTYPE html>
   els["lib-dupes"].addEventListener("change", renderLibrary);
   els["lib-shelf"].addEventListener("change", renderLibrary);
   els["lib-nobl"].addEventListener("change", renderLibrary);
+  els["lib-nonsfw"].checked = hideNSFW();
+  els["lib-nonsfw"].addEventListener("change", function () {
+    prefs.nsfw = els["lib-nonsfw"].checked ? "hide" : "";
+    savePrefs(prefs);
+    renderContinue(); renderLibrary();
+  });
   els["lib-len"].addEventListener("change", function () {
     els["lib-len-custom"].classList.toggle("hidden", this.value !== "custom");
     renderLibrary();
@@ -3108,10 +3156,10 @@ _READER_HTML = """<!DOCTYPE html>
       els["reader-title"].textContent = ch.title || ("Chapter " + ch.serial);
       els["reader-content"].innerHTML = res.content || "<p class='muted'>No content available for this chapter.</p>";
       els["reader-pos"].textContent = "#" + (ch.serial || "");
+      current.chapterId = chapterId;  // before the pages load: they stop if the chapter changes
       var imgCount = hydrateImages(els["reader-content"], chapterId);
       els["fit-btn"].classList.toggle("hidden", imgCount < 2);
       applyFit();
-      current.chapterId = chapterId;
       savePos(novel.id, chapterId, ch.serial);
       addStat(1, 0);
       // resume mid-chapter where reading stopped (savePos keeps the saved
@@ -3152,20 +3200,32 @@ _READER_HTML = """<!DOCTYPE html>
   // the authenticated image endpoint (via the shared blob cache, so preloaded
   // chapters render instantly) and swap in an object URL. Returns image count.
   function hydrateImages(root, chapterId) {
-    var count = 0;
-    var imgs = root.querySelectorAll("img[src]");
-    imgs.forEach(function (img) {
+    // in page order, four at a time: all of them at once made the first pages
+    // wait behind the last, and each page that arrived pushed the rest down
+    var todo = [];
+    root.querySelectorAll("img[src]").forEach(function (img) {
       var src = img.getAttribute("src") || "";
       var m = src.match(/images\\/([0-9a-fA-F]+)\\.jpg/);
       if (!m) return;
-      count += 1;
       img.decoding = "async";
       img.removeAttribute("src");
-      cacheImage(m[1], chapterId)
-        .then(function (u) { img.src = u; })
-        .catch(function () { img.alt = "(image unavailable)"; });
+      img.classList.add("pending");
+      todo.push({ img: img, id: m[1] });
     });
-    return count;
+    var next = 0, shown = chapterId;
+    function one() {
+      if (next >= todo.length || current.chapterId !== shown) return;
+      var item = todo[next++];
+      cacheImage(item.id, chapterId)
+        .then(function (u) {
+          item.img.onload = function () { item.img.classList.remove("pending"); };
+          item.img.src = u;
+        })
+        .catch(function () { item.img.classList.remove("pending"); item.img.alt = "(image unavailable)"; })
+        .then(one);
+    }
+    for (var i = 0; i < 4; i++) one();
+    return todo.length;
   }
 
   // ---- Font size ----
@@ -3188,7 +3248,10 @@ _READER_HTML = """<!DOCTYPE html>
     document.body.classList.toggle("t-light", prefs.theme === "light");
     document.body.classList.toggle("t-sepia", prefs.theme === "sepia");
     els["reader-content"].classList.toggle("f-serif", prefs.font !== "system");
+    els["reader-content"].classList.toggle("sp-compact", prefs.spacing === "compact");
+    els["reader-content"].classList.toggle("sp-airy", prefs.spacing === "airy");
     els["view-reader"].style.maxWidth = prefs.width === "narrow" ? "600px" : (prefs.width === "wide" ? "980px" : "720px");
+    els["lib-nonsfw"].checked = hideNSFW();  // set on another device, synced here
     applyFit();
   }
   function chipRow(el, options, key, def) {
@@ -3209,6 +3272,9 @@ _READER_HTML = """<!DOCTYPE html>
     chipRow(els["aa-font"], [{v:"serif",t:"Book"},{v:"system",t:"Plain"}], "font", "serif");
     chipRow(els["aa-width"], [{v:"narrow",t:"Narrow"},{v:"normal",t:"Normal"},{v:"wide",t:"Wide"}], "width", "normal");
     chipRow(els["aa-trans"], [{v:"",t:"Off"},{v:"on",t:"On"}], "translate", "");
+    chipRow(els["aa-spacing"], [{v:"compact",t:"Compact"},{v:"normal",t:"Normal"},{v:"airy",t:"Airy"}], "spacing", "normal");
+    chipRow(els["aa-fit"], [{v:"width",t:"Fit width"},{v:"height",t:"Fit height"},{v:"strip",t:"Strip"}], "fit", "width");
+    chipRow(els["aa-tap"], [{v:"",t:"Off"},{v:"on",t:"On"}], "tapturn", "");
   }
   els["aa-btn"].addEventListener("click", function (e) {
     e.stopPropagation();
@@ -3216,7 +3282,9 @@ _READER_HTML = """<!DOCTYPE html>
     els["aa-panel"].classList.toggle("hidden");
   });
   document.addEventListener("click", function (e) {
-    if (!els["aa-panel"].classList.contains("hidden") &&
+    // a chip picked in the panel is drawn again, so it is no longer in the page
+    // by the time this runs: that is still a click inside the panel
+    if (!els["aa-panel"].classList.contains("hidden") && e.target.isConnected &&
         !els["aa-panel"].contains(e.target) && e.target !== els["aa-btn"]) {
       els["aa-panel"].classList.add("hidden");
     }
@@ -3314,6 +3382,7 @@ _READER_HTML = """<!DOCTYPE html>
     var byId = {}; lib.all.forEach(function (n) { byId[n.id] = n; });
     var rows = [];
     Object.keys(m).forEach(function (novelId) {
+      if (hideNSFW() && byId[novelId] && isNSFW(byId[novelId])) return;
       (m[novelId] || []).forEach(function (b, idx) { rows.push({ novelId: novelId, b: b, idx: idx }); });
     });
     rows.sort(function (x, y) { return (y.b.ts || 0) - (x.b.ts || 0); });
@@ -3482,14 +3551,55 @@ _READER_HTML = """<!DOCTYPE html>
   });
   document.addEventListener("keydown", function (e) {
     if (els["view-reader"].classList.contains("hidden")) return;
+    if (e.key === "Escape") { els["aa-panel"].classList.add("hidden"); document.body.classList.remove("bars-off"); }
     if (e.key === "ArrowRight" && !els["next-btn"].disabled) els["next-btn"].click();
     if (e.key === "ArrowLeft" && !els["prev-btn"].disabled) els["prev-btn"].click();
   });
 
+  // A tap on the page brings the bars back (or tucks them away); with Tap to
+  // turn on, a tap near either edge scrolls a screen, and past the end opens
+  // the next chapter. Left alone while tap-translate is on: it uses the taps.
+  // (anywhere on the page, not only the text column: on a wide screen the
+  // edges are beside it)
+  document.addEventListener("click", function (e) {
+    if (!document.body.classList.contains("reading") || prefs.translate === "on") return;
+    if (!e.target.isConnected || (e.target.closest &&
+        e.target.closest("a, button, input, select, .topbar, .reader-nav, #aa-panel, #trans-pop, #reader-title"))) return;
+    var sel = window.getSelection && window.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    var x = e.clientX / window.innerWidth;
+    if (prefs.tapturn === "on" && (x < 0.3 || x > 0.7)) {
+      var room = document.documentElement.scrollHeight - window.innerHeight;
+      if (x > 0.7 && window.scrollY >= room - 4) {
+        if (!els["next-btn"].disabled) els["next-btn"].click();
+        return;
+      }
+      window.scrollBy({ top: (x > 0.7 ? 1 : -1) * window.innerHeight * 0.85, behavior: "smooth" });
+      return;
+    }
+    // a finger's tap toggles the bars; a mouse click on the text does not
+    if (lastPointer === "touch") document.body.classList.toggle("bars-off");
+  });
+  var lastPointer = "";
+  document.addEventListener("pointerdown", function (e) { lastPointer = e.pointerType || ""; }, { passive: true });
+  // with a mouse, the bars come back when it goes to the top or bottom edge
+  document.addEventListener("mousemove", function (e) {
+    if (document.body.classList.contains("bars-off") &&
+        (e.clientY < 70 || e.clientY > window.innerHeight - 90)) document.body.classList.remove("bars-off");
+  }, { passive: true });
+
   // remember the in-chapter position while reading (throttled)
   var scrollTimer = null;
+  var lastY = 0;
   window.addEventListener("scroll", function () {
     if (els["view-reader"].classList.contains("hidden")) return;
+    var y = window.scrollY, room = document.documentElement.scrollHeight - window.innerHeight;
+    els["read-progress"].style.width = (room > 0 ? Math.min(100, 100 * y / room) : 100) + "%";
+    var panelOpen = !els["aa-panel"].classList.contains("hidden");
+    if (room - y < 90 || y < 60 || panelOpen) document.body.classList.remove("bars-off");  // the top, or Next in reach
+    else if (y > lastY + 14) document.body.classList.add("bars-off");
+    else if (y < lastY - 14) document.body.classList.remove("bars-off");
+    if (Math.abs(y - lastY) > 14) lastY = y;
     if (!current.novel || !current.chapterId) return;
     clearTimeout(scrollTimer);
     scrollTimer = setTimeout(function () {

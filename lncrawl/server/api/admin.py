@@ -518,3 +518,24 @@ def extras_status(user: User = Security(ensure_admin)) -> Dict[str, Any]:
     from ...services import extras
 
     return extras.status()
+
+
+@router.get("/covers", summary="Novels whose cover the app drew because the real one failed")
+def find_stand_in_covers(user: User = Security(ensure_admin)) -> Dict[str, Any]:
+    from ...services import covers
+
+    return covers.find()
+
+
+@router.post("/covers", summary="Fetch those covers again from their sites, in the background")
+def fetch_stand_in_covers(user: User = Security(ensure_admin)) -> Dict[str, Any]:
+    from ...services import covers
+
+    return covers.start(user.id)
+
+
+@router.get("/covers/status", summary="How far fetching covers again has got")
+def stand_in_covers_status(user: User = Security(ensure_admin)) -> Dict[str, Any]:
+    from ...services import covers
+
+    return covers.status()

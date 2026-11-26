@@ -61,6 +61,7 @@ async function clearFilters(page) {
   check("the rest appear on scrolling", (await A.$$eval("#lib-list .libcard", (c) => c.length)) === 76);
   await A.evaluate(() => window.scrollTo(0, 0));
   check("filters start folded away", await A.isHidden("#lib-filters"));
+  check("the bar keeps only sort, filters, layout and More", await A.isHidden("#lib-kind") && await A.isHidden("#lib-auto-btn"));
   await A.click("#lib-filters-btn");
   check("the Filters button opens them", await A.isVisible("#lib-filters"));
 
@@ -409,6 +410,58 @@ async function clearFilters(page) {
   check("while it runs only the progress is asked for, not a recount", recountsWhileRunning === 0, recountsWhileRunning);
   check("no errors deleting unfinished novels", U.errors.length === 0, U.errors);
   await U.close();
+
+  console.log("Hide NSFW");
+  {
+    const N = await open(browser);
+    if (process.env.SHOTS) await N.screenshot({ path: process.env.SHOTS + "/library-bar.png" });
+    await N.click("#lib-filters-btn");
+    await N.check("#lib-nonsfw"); await N.waitForTimeout(400);
+    if (process.env.SHOTS) await N.screenshot({ path: process.env.SHOTS + "/library-filters.png" });
+    const st = await N.textContent("#lib-status");
+    check("Hide NSFW leaves out adult-tagged novels and says so", /1 NSFW hidden/.test(st), st);
+    await search(N, "filler 00");
+    check("they are not found by searching either", !/Filler 00/.test(await N.textContent("#lib-list")));
+    await N.reload(); await N.waitForFunction(() => /novel\(s\)/.test(document.getElementById("lib-status").textContent));
+    check("it stays on after a reload", await N.$eval("#lib-nonsfw", (c) => c.checked));
+    await N.click("#lib-filters-btn").catch(() => {});
+    if (await N.isHidden("#lib-nonsfw")) await N.click("#lib-filters-btn");
+    await N.click("#lib-clear").catch(() => {});
+    check("Clear filters leaves it on", await N.$eval("#lib-nonsfw", (c) => c.checked));
+    await N.uncheck("#lib-nonsfw");
+    check("no errors hiding NSFW", N.errors.length === 0, N.errors);
+    await N.close();
+  }
+
+  console.log("Reading screen");
+  {
+    const S = await open(browser);
+    await search(S, "reading now");
+    await S.click("#lib-list .libcard >> nth=0"); await S.waitForSelector(".chap");
+    await S.click(".chap >> nth=0");
+    await S.waitForFunction(() => document.getElementById("reader-title").textContent === "Chapter 1");
+    check("a progress line shows while reading", !(await S.$eval("#read-progress", (b) => b.classList.contains("hidden"))));
+    // a long chapter, to scroll in
+    await S.evaluate(() => { const c = document.getElementById("reader-content"); c.innerHTML += c.innerHTML.repeat(6); });
+    await S.evaluate(() => window.scrollTo(0, 200)); await S.waitForTimeout(150);
+    await S.evaluate(() => window.scrollTo(0, 900)); await S.waitForTimeout(300);
+    check("scrolling down tucks the bars away", await S.evaluate(() => document.body.classList.contains("bars-off")));
+    await S.evaluate(() => window.scrollTo(0, 500)); await S.waitForTimeout(300);
+    check("scrolling up brings them back", !(await S.evaluate(() => document.body.classList.contains("bars-off"))));
+    await S.click("#aa-btn");
+    await S.click("#aa-spacing .chip >> text=Airy");
+    check("line spacing is a reading setting", await S.$eval("#reader-content", (c) => c.classList.contains("sp-airy")));
+    check("the settings stay open while one is picked", await S.isVisible("#aa-panel"));
+    if (process.env.SHOTS) await S.screenshot({ path: process.env.SHOTS + "/reading-settings.png" });
+    await S.click("#aa-tap .chip >> text=On");
+    await S.keyboard.press("Escape");
+    const before = await S.evaluate(() => window.scrollY);
+    await S.mouse.click(Math.round(S.viewportSize().width * 0.9), 400); await S.waitForTimeout(700);
+    check("with Tap to turn, a tap on the right edge scrolls a screen", (await S.evaluate(() => window.scrollY)) > before + 200,
+      [before, await S.evaluate(() => window.scrollY)]);
+    check("no errors on the reading screen", S.errors.length === 0, S.errors);
+    await S.close();
+  }
 
   console.log("Turning pages");
   {
