@@ -3518,7 +3518,11 @@ self.addEventListener("fetch", function (e) {
     fetch(req).then(function (res) {
       if (keep && res && res.ok) {
         var copy = res.clone();
-        caches.open(AUTO).then(function (c) { return c.put(req, copy).then(function () { trim(c); }); }).catch(function () {});
+        // a chapter fetched ahead (preload=true) is kept as the chapter itself,
+        // the address it is asked for by when opened again with no connection
+        var key = new URL(url.href);
+        key.searchParams.delete("preload");
+        caches.open(AUTO).then(function (c) { return c.put(key.href, copy).then(function () { trim(c); }); }).catch(function () {});
       }
       return res;
     }).catch(function () {

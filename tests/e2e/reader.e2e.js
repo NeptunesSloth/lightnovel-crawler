@@ -427,15 +427,21 @@ async function clearFilters(page) {
     await S.evaluate(() => navigator.serviceWorker.ready);
     await S.goto(READER); // now under the service worker's control
     await S.waitForFunction(() => /novel\(s\)/.test(document.getElementById("lib-status").textContent));
-    const kept = await S.evaluate(async (t) => {
+    const kept = await S.evaluate(async ([t, novel]) => {
       const get = (u) => fetch(u, { headers: { Authorization: "Bearer " + t } });
       await get("/api/jobs?limit=5");
       await get("/api/novels/unfinished");
       await get("/api/novels?limit=5");
+      const chapter = (await (await get("/api/novel/" + novel + "/chapters?limit=1")).json()).items[0].id;
+      await get("/api/chapter/" + chapter + "/read?auto_fetch=false&preload=true");
       await new Promise((r) => setTimeout(r, 500));
       const urls = async (name) => (await (await caches.open(name)).keys()).map((r) => new URL(r.url).pathname);
-      return { auto: await urls("lncrawl-reader-auto-v1"), saved: await urls("lncrawl-reader-v1") };
-    }, TOKEN);
+      const auto = await (await caches.open("lncrawl-reader-auto-v1")).keys();
+      const reads = auto.map((r) => new URL(r.url)).filter((u) => u.pathname.includes(chapter)).map((u) => u.search);
+      return { auto: await urls("lncrawl-reader-auto-v1"), saved: await urls("lncrawl-reader-v1"), reads };
+    }, [TOKEN, IDS["Reading Now"]]);
+    check("a chapter fetched ahead is kept as itself, to open again offline",
+      JSON.stringify(kept.reads) === '["?auto_fetch=false"]', kept.reads);
     check("what is read is kept for offline", kept.auto.includes("/api/novels"), kept.auto);
     check("job and unfinished polls are not kept",
       !kept.auto.concat(kept.saved).some((p) => p.startsWith("/api/job") || p.startsWith("/api/novels/unfinished")), kept);
