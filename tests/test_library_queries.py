@@ -177,6 +177,11 @@ class JobListTests(unittest.TestCase):
         self.assertEqual(client.get("/api/job/heavy").json()["extra"], heavy)
         with Session(self.engine) as session:
             self.assertEqual(session.get(Job, "heavy").extra, heavy)
+        # a page polling it asks without them; the job itself keeps them
+        light = client.get("/api/job/heavy?light=true").json()["extra"]
+        self.assertEqual(light, {"domain": "example.com", "url": "https://example.com/novel"})
+        with Session(self.engine) as session:
+            self.assertEqual(session.get(Job, "heavy").extra, heavy)
 
     def test_is_done_false_lists_the_unfinished_jobs(self) -> None:
         self.assertEqual(self.ids(is_done=False), ["job-1", "job-2"])

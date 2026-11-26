@@ -161,8 +161,18 @@ def delete_job(
 @router.get("/{job_id}", summary="Gets job details")
 def get_job(
     job_id: str = Path(),
+    light: bool = Query(
+        default=False,
+        description="Leave out the long lists (every address, novel found, chapter checked)",
+    ),
 ) -> Job:
-    return ctx.jobs.get(job_id)
+    job = ctx.jobs.get(job_id)
+    if light and _LIST_LEAVES_OUT.intersection(job.extra or {}):
+        # A page asking every few seconds how a job is going: a site download's
+        # lists made each answer up to 318 KB. A page that needs them asks once,
+        # without light, when the job has ended.
+        job.extra = {k: v for k, v in job.extra.items() if k not in _LIST_LEAVES_OUT}
+    return job
 
 
 @router.get(

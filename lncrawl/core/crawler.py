@@ -257,8 +257,12 @@ class Crawler(ABC):
             ctx.logger.debug(f"Cover saved: {cover_url} -> {cover_file}")
             return
         except Exception as e:
+            # the reason in the line itself: 163 failures in one log said nothing
+            # of why without debug logging on
+            reason = str(e).strip().splitlines()[0][:200] if str(e).strip() else ""
             ctx.logger.warn(
-                f"Cover download failed: {cover_url} -> {cover_file}",
+                f"Cover download failed: {cover_url} ({type(e).__name__}"
+                f"{': ' + reason if reason else ''})",
                 exc_info=ctx.logger.is_debug,
             )
             if not self.auto_generate_cover:
