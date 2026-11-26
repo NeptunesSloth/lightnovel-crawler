@@ -89,6 +89,18 @@ async function clearFilters(page) {
   check("results list, owned ones marked", rows.length === 2 && /In library/.test(rows[1]),
     { rows, polls, note: await A.textContent("#lib-web-status"), hidden: await A.isHidden("#lib-web") });
   await A.click("#lib-web-stop").catch(() => {});
+  // a search whose job was deleted meanwhile ends, instead of being asked after for ever
+  let gonePolls = 0;
+  await A.unroute("**/api/job/create/search-sources");
+  await A.route("**/api/job/create/search-sources", (r) => r.fulfill({ json: { id: "gone1", status: 0, extra: {} } }));
+  await A.route("**/api/job/gone1", (r) => { gonePolls++; r.fulfill({ status: 404, json: { error: "No such job" } }); });
+  await search(A, "zzzy");
+  await A.click("#lib-web-btn");
+  await A.waitForFunction(() => /no longer there/.test(document.getElementById("lib-web-status").textContent), null, { timeout: 15000 }).catch(() => {});
+  await A.waitForTimeout(5000);
+  check("a search whose job is gone says so and stops asking",
+    /no longer there/.test(await A.textContent("#lib-web-status")) && gonePolls === 1,
+    { gonePolls, note: await A.textContent("#lib-web-status") });
   await search(A, "");
 
   console.log("Filters, tags and views");

@@ -875,9 +875,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
       });
   }
 
-  function pollJob(id, label, onEnd) {
+  function pollJob(id, label, onEnd, fails) {
     api("/job/" + id, { method: "GET" })
       .then(function (job) {
+        fails = 0;
         var status = statusName(job.status);
         var ex = job.extra || {};
         if (status === "PENDING") {
@@ -908,7 +909,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
             " downloaded, " + c.missing + " missing, " + c.failed + " failed, " + c.empty + " empty.", "log-info");
         }
         if (isActive(status)) {
-          later(function () { pollJob(id, label, onEnd); }, 3000);
+          later(function () { pollJob(id, label, onEnd, fails); }, 3000);
           return;
         }
         if (status === "FAILED" && job.error) {
@@ -921,7 +922,19 @@ _TOOLS_HTML = """<!DOCTYPE html>
         }
         if (onEnd) onEnd(status);
       })
-      .catch(function (e) { log("Status check failed: " + e.message, "log-err"); });
+      .catch(function (e) {
+        if (/No such job/.test(e.message)) {
+          log(label + " · the job is no longer there.", "log-err");
+          if (onEnd) onEnd("GONE");
+          return;
+        }
+        // A dropped connection or a restart is not the end of the job: ask
+        // again, less often each time, instead of leaving Stop and the
+        // progress stuck where they were.
+        fails = (fails || 0) + 1;
+        if (fails === 1) log("Status check failed: " + e.message + " — trying again.", "log-err");
+        later(function () { pollJob(id, label, onEnd, fails); }, Math.min(30000, 3000 * Math.pow(2, fails - 1)));
+      });
   }
 
   // Discovery jobs that are still going, so Stop can end them (and the novel

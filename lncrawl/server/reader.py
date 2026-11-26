@@ -2160,8 +2160,19 @@ _READER_HTML = """<!DOCTYPE html>
         (running ? " — searching " + (job.done || 0) + "/" + (job.total || "?") + " sources…" : "");
       if (running) web.timer = later(pollWeb, 2000);
       else { web.job = null; els["lib-web-stop"].classList.add("hidden"); }
-    }).catch(function () { web.timer = later(pollWeb, 4000); });
+    }).catch(function (e) {
+      if (web.job !== id) return;
+      if (jobGone(e)) {
+        web.job = null;
+        els["lib-web-stop"].classList.add("hidden");
+        els["lib-web-status"].textContent = "· " + els["lib-web-list"].children.length + " found — the search is no longer there";
+        return;
+      }
+      web.timer = later(pollWeb, 4000);
+    });
   }
+  // The server's answer for a job that was deleted.
+  function jobGone(e) { return /No such job/.test((e && e.message) || ""); }
   function renderWebResults(results) {
     var have = {};
     (lib.everything || lib.all).forEach(function (n) { have[n.url] = n; });
@@ -2737,7 +2748,16 @@ _READER_HTML = """<!DOCTYPE html>
       refreshCompleteness(novelId);
       current.chapters = []; current.offset = 0; els["chap-list"].innerHTML = "";
       loadChapters();
-    }).catch(function () {
+    }).catch(function (e) {
+      if (jobGone(e)) {
+        // deleted (or the library moved): asking again would never end
+        delete repairJobs[novelId];
+        if (current.novel && current.novel.id === novelId) {
+          els["repair-btn"].disabled = false;
+          els["repair-status"].textContent = "The repair job is no longer there. Repair again to continue.";
+        }
+        return;
+      }
       later(function () { pollRepair(novelId, jobId); }, 5000);
     });
   }
