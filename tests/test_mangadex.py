@@ -85,5 +85,33 @@ class ImageHeaderTests(unittest.TestCase):
         self.assertIn("image/", headers["accept"])
 
 
+class NotReadableHereTests(unittest.TestCase):
+    def download(self, chapter: dict) -> list:
+        asked: list = []
+
+        def get_json(url: str, headers: dict) -> dict:
+            asked.append(url)
+            return {
+                "baseUrl": "https://x.mangadex.network",
+                "chapter": {"hash": "h", "data": ["1.jpg"]},
+            }
+
+        MangaDexCrawler.download_chapter_body(SimpleNamespace(get_json=get_json), chapter)
+        return asked
+
+    def test_a_chapter_only_on_another_site_fails_without_asking_mangadex(self) -> None:
+        chapters = ChapterListTests.read(
+            ChapterListTests(), [upload("aaaaaaaa", "1", external="https://kmanga.example/1")]
+        )
+        chapter = {"url": chapters[0].url, **chapters[0].get_extras()}
+        with self.assertRaisesRegex(Exception, "only at https://kmanga.example/1"):
+            self.download(chapter)
+
+    def test_an_upload_with_pages_that_took_its_place_is_downloaded(self) -> None:
+        stale = {"upload": "aaaaaaaa-0000-0000-0000-000000000000", "at": "https://k.example"}
+        chapter = {"url": "https://mangadex.org/chapter/bbbbbbbb-0000-0000-0000-000000000000"}
+        self.assertEqual(len(self.download({**chapter, "not_here": stale})), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

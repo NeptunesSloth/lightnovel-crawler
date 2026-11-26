@@ -9,6 +9,7 @@ from typing import Dict
 from urllib.parse import quote_plus
 
 from lncrawl.core import Chapter, LegacyCrawler, Volume
+from lncrawl.exceptions import LNException
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,13 @@ class MangaDexCrawler(LegacyCrawler):
                     title=label,
                     url=f"https://mangadex.org/chapter/{ch['id']}",
                 )
+                if not readable:
+                    # Kept with the chapter, so its download fails at once with
+                    # the reason instead of asking for pages there are none of
+                    # (three requests and two sleeps a chapter, on every run).
+                    # Tied to this upload: one with pages that takes its place
+                    # later has another address, and is asked for as usual.
+                    entry["not_here"] = {"upload": ch["id"], "at": a.get("externalUrl") or ""}
                 seen[key] = (entry, readable)
                 self.chapters.append(entry)
 
@@ -181,6 +189,12 @@ class MangaDexCrawler(LegacyCrawler):
         match = UUID_RE.search(chapter["url"])
         if not match:
             return ""
+        not_here = chapter.get("not_here") or {}
+        if not_here.get("upload") == match.group(1):
+            where = not_here.get("at")
+            raise LNException(
+                f"Not readable on MangaDex: {'only at ' + where if where else 'no pages uploaded'}"
+            )
         data = self.get_json(f"{API}/at-home/server/{match.group(1)}", headers=API_HEADERS)
         base = (data.get("baseUrl") or "").rstrip("/")
         info = data.get("chapter") or {}
