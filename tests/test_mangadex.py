@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 import unittest
 
-from sources.en.m.mangadex import MangaDexCrawler
+from sources.en.m.mangadex import API_HEADERS, MangaDexCrawler
 
 MANGA = "11111111-2222-3333-4444-555555555555"
 
@@ -67,6 +67,22 @@ class ChapterListTests(unittest.TestCase):
         )
         self.assertEqual([c.id for c in chapters], [1, 2, 3])
         self.assertIn("aaaaaaaa-0003", chapters[2].url)
+
+
+class ImageHeaderTests(unittest.TestCase):
+    def headers(self, url: str) -> dict:
+        return MangaDexCrawler.image_headers(MangaDexCrawler.__new__(MangaDexCrawler), url)
+
+    def test_a_cover_is_asked_for_as_a_plain_client(self) -> None:
+        # uploads.mangadex.org sends a browser to a challenge page, not the cover
+        headers = self.headers(f"https://uploads.mangadex.org/covers/{MANGA}/x.jpg")
+        self.assertEqual(headers["User-Agent"], API_HEADERS["User-Agent"])
+        self.assertIn("image/", headers["accept"])
+
+    def test_pages_from_mangadex_at_home_keep_the_usual_headers(self) -> None:
+        headers = self.headers("https://abc.def.mangadex.network/data/hash/1.jpg")
+        self.assertNotIn("User-Agent", headers)
+        self.assertIn("image/", headers["accept"])
 
 
 if __name__ == "__main__":

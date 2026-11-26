@@ -23,6 +23,7 @@ class ImageDownloadTests(unittest.TestCase):
             scraper=SimpleNamespace(fetch=lambda *a, **k: SimpleNamespace(content=data))
         )
         crawler._image_bytes = lambda url: Crawler._image_bytes(crawler, url)
+        crawler.image_headers = lambda url: Crawler.image_headers(crawler, url)
         with TemporaryDirectory() as folder:
             target = Path(folder) / "image.jpg"
             Crawler.download_image(crawler, "https://example.com/a", target)
@@ -60,6 +61,7 @@ class ImageDownloadTests(unittest.TestCase):
             scraper=SimpleNamespace(fetch=fetch),
             base_url=["https://www.example.com/", "https://example.org/"],
         )
+        crawler.image_headers = lambda url: Crawler.image_headers(crawler, url)
         for url in (
             "https://images.example.net/a.jpg",  # an image host
             "https://example.com/a.jpg",  # the site

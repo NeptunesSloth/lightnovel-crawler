@@ -5,6 +5,7 @@ downloads and embeds them like any other manga source."""
 
 import logging
 import re
+from typing import Dict
 from urllib.parse import quote_plus
 
 from lncrawl.core import Chapter, LegacyCrawler, Volume
@@ -45,6 +46,16 @@ class MangaDexCrawler(LegacyCrawler):
     def initialize(self) -> None:
         # MangaDex enforces a global rate limit; keep requests modest
         self.init_executor(ratelimit=3)
+
+    def image_headers(self, url: str) -> Dict[str, str]:
+        headers = super().image_headers(url)
+        # Covers live on uploads.mangadex.org, which answers a browser's
+        # User-Agent with a 302 to a challenge page instead of the image, so
+        # every MangaDex cover failed and was drawn instead. The pages
+        # themselves come from MangaDex@Home servers, which take either.
+        if url.startswith(UPLOADS + "/"):
+            headers.update(API_HEADERS)
+        return headers
 
     def search_novel(self, query):
         url = f"{API}/manga?title={quote_plus(query)}&limit=20&{RATINGS}&includes[]=cover_art"
