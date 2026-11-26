@@ -278,12 +278,14 @@ class ChapterService:
         *,
         auto_fetch: Optional[bool] = None,
         language: Optional[LanguageCode] = None,
+        add_to_history: bool = True,
     ) -> ReadChapterResponse:
         if auto_fetch is None:
             auto_fetch = ctx.tier.auto_fetch_enabled(user)
 
         chapter = self.get(chapter_id)
-        ctx.history.add(user.id, chapter.id, chapter)
+        if add_to_history:
+            ctx.history.add(user.id, chapter.id, chapter)
 
         job: Optional[Job] = None
         content: Optional[str] = None

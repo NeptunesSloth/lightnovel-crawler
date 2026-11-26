@@ -3,7 +3,7 @@
 import importlib
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -212,6 +212,28 @@ class SourceListCachingTests(unittest.TestCase):
         changed = self.client.get("/api/sources", headers={"If-None-Match": etag})
         self.assertEqual(changed.status_code, 200)
         self.assertEqual(changed.json()[0]["total_novels"], 2)
+
+
+class ReadAheadTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import test_novel_repair
+
+        fixture = test_novel_repair.NovelRepairTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.ctx = fixture.ctx
+        self.user = fixture.user
+        self.ctx.history = SimpleNamespace(add=MagicMock())
+        self.ctx.tier.auto_fetch_enabled = lambda user: False
+
+    def test_a_chapter_fetched_ahead_is_not_read_yet(self) -> None:
+        response = self.ctx.chapters.read(self.user, "chapter-1", add_to_history=False)
+        self.assertEqual(response.content, "<p>Existing chapter one.</p>")
+        self.ctx.history.add.assert_not_called()
+
+    def test_a_chapter_opened_is_read(self) -> None:
+        self.ctx.chapters.read(self.user, "chapter-1")
+        self.ctx.history.add.assert_called_once()
 
 
 if __name__ == "__main__":

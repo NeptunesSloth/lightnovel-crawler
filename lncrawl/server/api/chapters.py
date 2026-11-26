@@ -74,6 +74,10 @@ def read_chapter(
         default=None,
         description="Fetch content automatically if not available",
     ),
+    preload: bool = Query(
+        default=False,
+        description="Fetched ahead of being read: not added to the read history",
+    ),
 ) -> ReadChapterResponse:
     ctx.activity.record(user.id, ActivityType.CHAPTER, chapter_id)
     if language:
@@ -83,6 +87,7 @@ def read_chapter(
         chapter_id,
         language=language,
         auto_fetch=auto_fetch,
+        add_to_history=not preload,
     )
 
 

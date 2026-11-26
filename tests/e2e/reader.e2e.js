@@ -369,6 +369,36 @@ async function clearFilters(page) {
   check("no errors deleting unfinished novels", U.errors.length === 0, U.errors);
   await U.close();
 
+  console.log("Turning pages");
+  {
+    const R = await open(browser);
+    const reads = [], marked = [];
+    R.on("request", (r) => {
+      if (/\/api\/chapter\/[^/]+\/read/.test(r.url())) reads.push(r.url());
+      if (r.method() === "POST" && /\/api\/read-history\/add\//.test(r.url())) marked.push(r.url());
+    });
+    const chapters = await R.evaluate(async ([t, id]) => (await (await fetch(
+      "/api/novel/" + id + "/chapters?limit=10", { headers: { Authorization: "Bearer " + t } })).json()).items, [TOKEN, IDS["Reading Now"]]);
+    const second = chapters.find((c) => c.serial === 2).id;
+    await search(R, "reading now");
+    await R.click("#lib-list .libcard >> nth=0"); await R.waitForSelector(".chap");
+    await R.click(".chap >> nth=0");
+    await R.waitForFunction(() => document.getElementById("reader-title").textContent === "Chapter 1");
+    await R.waitForTimeout(500);
+    const ofSecond = () => reads.filter((u) => u.includes(second));
+    check("the next chapter is fetched while this one is read, not as read",
+      ofSecond().length === 1 && /preload=true/.test(ofSecond()[0]) && marked.length === 0, { reads, marked });
+    await R.click("#next-btn");
+    await R.waitForFunction(() => document.getElementById("reader-title").textContent === "Chapter 2", null, { timeout: 2000 });
+    await R.waitForTimeout(500);
+    check("Next shows it without asking for it again", ofSecond().length === 1, ofSecond());
+    check("opened, it is counted as read", marked.length === 1 && marked[0].includes(second), marked);
+    check("and the one after is fetched ahead in turn",
+      reads.some((u) => u.includes(chapters.find((c) => c.serial === 3).id) && /preload=true/.test(u)), reads);
+    check("no errors turning pages", R.errors.length === 0, R.errors);
+    await R.close();
+  }
+
   console.log("Offline copies");
   {
     // its own context: the others block the service worker (see open())

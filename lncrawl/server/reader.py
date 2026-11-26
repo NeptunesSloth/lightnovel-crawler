@@ -3005,7 +3005,9 @@ _READER_HTML = """<!DOCTYPE html>
   });
 
   // ---- Reader ----
+  var opening = 0;
   function openChapter(chapterId, scrollTo) {
+    var mine = ++opening;  // a page-turn pressed again before this one came back wins
     show("view-reader");
     els["reader-title"].textContent = "Loading…";
     els["reader-content"].innerHTML = "";
@@ -3013,6 +3015,7 @@ _READER_HTML = """<!DOCTYPE html>
     hideTransPop();
     window.scrollTo(0, 0);
     readChapter(chapterId).then(function (res) {
+      if (mine !== opening) return;
       var ch = res.chapter || {};
       var novel = res.novel || current.novel || {};
       current.novel = novel;
@@ -3047,13 +3050,13 @@ _READER_HTML = """<!DOCTYPE html>
           }
         }, 800);
       }
-      // warm the next chapter's images so page-turns are instant (manga)
-      if (res.next_id && imgCount >= 2) preloadNext(res.next_id);
+      if (res.next_id) preloadNext(res.next_id);
       els["prev-btn"].disabled = !res.previous_id;
       els["next-btn"].disabled = !res.next_id;
       els["prev-btn"].onclick = function () { if (res.previous_id) openChapter(res.previous_id); };
       els["next-btn"].onclick = function () { if (res.next_id) openChapter(res.next_id); };
     }).catch(function (e) {
+      if (mine !== opening) return;
       els["reader-title"].textContent = "Error";
       els["reader-content"].innerHTML = "<p class='muted'>Couldn't load chapter: " + e.message + "</p>";
     });
@@ -3175,12 +3178,18 @@ _READER_HTML = """<!DOCTYPE html>
     var hit = preloaded;
     preloaded = null;
     if (hit && hit.id === chapterId && Date.now() - hit.at < 300000) {
-      return hit.req.catch(function () { return api("/chapter/" + chapterId + "/read?auto_fetch=false"); });
+      return hit.req.then(function (res) {
+        // fetched ahead without counting as read: it is read now
+        api("/read-history/add/" + chapterId, { method: "POST" }).catch(function () {});
+        return res;
+      }, function () { return api("/chapter/" + chapterId + "/read?auto_fetch=false"); });
     }
     return api("/chapter/" + chapterId + "/read?auto_fetch=false");
   }
+  // The next chapter is fetched while this one is read, so turning the page
+  // shows it at once: the text, and a manga chapter's pages.
   function preloadNext(chapterId) {
-    var req = api("/chapter/" + chapterId + "/read?auto_fetch=false");
+    var req = api("/chapter/" + chapterId + "/read?auto_fetch=false&preload=true");
     preloaded = { id: chapterId, at: Date.now(), req: req };
     req.then(function (res) {
       var ids = imageIdsIn(res && res.content);
