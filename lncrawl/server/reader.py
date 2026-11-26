@@ -3209,6 +3209,7 @@ _READER_HTML = """<!DOCTYPE html>
       if (!m) return;
       img.decoding = "async";
       img.removeAttribute("src");
+      img.alt = "";  // not the page's id while it loads
       img.classList.add("pending");
       todo.push({ img: img, id: m[1] });
     });
