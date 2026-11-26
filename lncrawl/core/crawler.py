@@ -273,13 +273,20 @@ class Crawler(ABC):
             return base64.b64decode(url.split("base64,")[-1])
         from .scraping import fetching_image
 
-        headers = {"accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"}
+        headers = self.image_headers(url)
         # An image host of its own may get a few more connections; the site's
         # own host keeps the two every request to it gets.
         marked = nullcontext() if is_own_host(self, url) else fetching_image()
         with marked:
             response = self.scraper.fetch("GET", url, headers=headers, navigation=False)
         return response.content
+
+    def image_headers(self, url: str) -> Dict[str, str]:
+        """The headers an image (a cover or a manga page) is asked for with.
+
+        A source whose image host wants something else sent overrides this.
+        """
+        return {"accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"}
 
     def download_cover(self, cover_url: str, cover_file: Path) -> None:
         # A stand-in cover (drawn when the real one could not be had) is replaced

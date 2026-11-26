@@ -39,10 +39,6 @@ class LogSink:
         with self._lock:
             self._listeners.add(ref)
 
-    def detach(self, listener: _Listener):
-        with self._lock:
-            self._listeners = {ref for ref in self._listeners if ref() is not listener}
-
     @contextlib.contextmanager
     def pipe(self, listener: _Listener):
         ref = self._make_ref(listener)

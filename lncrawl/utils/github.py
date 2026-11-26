@@ -44,10 +44,6 @@ class GithubClient:
         return f"https://github.com/{_GITHUB_REPO}/blob/{branch}/{file_path.strip('/')}"
 
     @staticmethod
-    def get_remote_edit_link(file_path: str, branch: str = _DEFAULT_BRANCH):
-        return f"https://github.com/{_GITHUB_REPO}/edit/{branch}/{file_path.strip('/')}"
-
-    @staticmethod
     def get_remote_raw_link(file_path: str, branch: str = _DEFAULT_BRANCH) -> str:
         return f"https://raw.githubusercontent.com/{_GITHUB_REPO}/{branch}/{file_path.strip('/')}"
 

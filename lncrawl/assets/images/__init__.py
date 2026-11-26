@@ -10,13 +10,6 @@ def favicon_icon() -> Path:
     return IMAGES_DIR / "favicon.ico"
 
 
-def lncrawl_icon() -> Path:
-    """
-    Returns the path to the lncrawl.ico image file.
-    """
-    return IMAGES_DIR / "lncrawl.ico"
-
-
 def default_cover_image() -> Path:
     """
     Returns the path to the default-cover.jpg image file.

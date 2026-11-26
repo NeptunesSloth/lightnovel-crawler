@@ -156,28 +156,53 @@ class _InvertedIndex:
     def __init__(self) -> None:
         self._word_ids: Dict[str, Set[str]] = {}  # word → set of novel IDs
         self._total: int = 0
+        self._ids: Set[str] = set()  # every novel in the index
+        self._newest: int = 0  # the created_at of the newest novel in it
         self._lock = threading.Lock()  # guards write operations only
 
     def build(self) -> None:
         """Load all (id, title) pairs from the DB and build the index."""
         with ctx.db.session() as sess:
-            rows = sess.exec(sq.select(Novel.id, Novel.title)).all()
+            rows = sess.exec(sq.select(Novel.id, Novel.title, Novel.created_at)).all()
         word_ids: Dict[str, Set[str]] = {}
-        for nid, title in rows:
+        for nid, title, _ in rows:
             for w in _words(title):
                 word_ids.setdefault(w, set()).add(nid)
         with self._lock:
             self._word_ids = word_ids
             self._total = len(rows)
+            self._ids = {nid for nid, _, _ in rows}
+            self._newest = max((created or 0 for _, _, created in rows), default=0)
 
-    def add(self, novel_id: str, title: str) -> None:
+    def catch_up(self) -> None:
+        """Add the novels made since the index was built.
+
+        Novels are made by download worker processes as well as this one, so
+        nothing here is told of them: they are looked for, by the created_at
+        index, which finds none at all most of the time. (Without this a novel
+        downloaded while the app ran was never recommended until a restart.)
+        """
+        with ctx.db.session() as sess:
+            rows = sess.exec(
+                sq.select(Novel.id, Novel.title, Novel.created_at).where(
+                    sq.col(Novel.created_at) >= self._newest
+                )
+            ).all()
         with self._lock:
-            for w in _words(title):
-                self._word_ids.setdefault(w, set()).add(novel_id)
-            self._total += 1
+            for nid, title, created in rows:
+                self._newest = max(self._newest, created or 0)
+                if nid in self._ids:
+                    continue
+                for w in _words(title):
+                    self._word_ids.setdefault(w, set()).add(nid)
+                self._ids.add(nid)
+                self._total += 1
 
     def remove(self, novel_id: str, title: str) -> None:
         with self._lock:
+            if novel_id not in self._ids:
+                return
+            self._ids.discard(novel_id)
             for w in _words(title):
                 ids = self._word_ids.get(w)
                 if ids:
@@ -225,17 +250,13 @@ class RecommendationService:
     def _ensure_index(self) -> None:
         """Lazy double-checked init: build the inverted index on first use."""
         if self._index_ready:
+            self._index.catch_up()
             return
         with self._index_init_lock:
             if self._index_ready:
                 return
             self._index.build()
             self._index_ready = True
-
-    def index_add(self, novel_id: str, title: str) -> None:
-        """Call when a novel is persisted so it appears in future title candidates."""
-        if self._index_ready:
-            self._index.add(novel_id, title)
 
     def index_remove(self, novel_id: str, title: str) -> None:
         """Call when a novel is deleted to keep the inverted index consistent."""

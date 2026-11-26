@@ -251,17 +251,9 @@ class Sources:
             raise ServerErrors.no_crawler.with_extra(source)
         return source
 
-    def get_info(self, domain: str) -> CrawlerInfo:
-        source = self.get_source(domain)
-        return self.info[source.crawler_id]
-
     def get_crawler(self, domain: str) -> Type[Crawler]:
         source = self.get_source(domain)
         return self.crawlers[source.crawler_id]
-
-    def find_crawler(self, url: str) -> Type[Crawler]:
-        self.ensure_load()
-        return self.get_crawler(self.get_domain(url))
 
     def init_crawler(
         self,

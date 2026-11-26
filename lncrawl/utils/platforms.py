@@ -25,11 +25,6 @@ class Platform:
 
     @static_cached_property
     @staticmethod
-    def java():
-        return Platform.system == "Java"
-
-    @static_cached_property
-    @staticmethod
     def mac():
         return Platform.system == "Darwin"
 
