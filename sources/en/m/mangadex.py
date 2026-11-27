@@ -48,6 +48,21 @@ class MangaDexCrawler(LegacyCrawler):
         # MangaDex enforces a global rate limit; keep requests modest
         self.init_executor(ratelimit=3)
 
+    can_rank = True
+
+    def popular(self):
+        """Manga by how many follow them on MangaDex, most first (the API stops at 10,000)."""
+        for offset in range(0, 10000, 100):
+            data = self.get_json(
+                f"{API}/manga?limit=100&offset={offset}&order[followedCount]=desc&{RATINGS}",
+                headers=API_HEADERS,
+            )
+            found = data.get("data") or []
+            if not found:
+                return
+            for manga in found:
+                yield f"https://mangadex.org/title/{manga['id']}"
+
     def image_headers(self, url: str) -> Dict[str, str]:
         headers = super().image_headers(url)
         # Covers live on uploads.mangadex.org, which answers a browser's

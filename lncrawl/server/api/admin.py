@@ -539,3 +539,19 @@ def stand_in_covers_status(user: User = Security(ensure_admin)) -> Dict[str, Any
     from ...services import covers
 
     return covers.status()
+
+
+@router.get("/ranks", summary="Sites whose ranking can be read, and how reading them goes")
+def rank_status(user: User = Security(ensure_admin)) -> Dict[str, Any]:
+    from ...services import ranking
+
+    return {"sites": ranking.rankable_sites(), "reading": ranking.status()}
+
+
+@router.post(
+    "/ranks", summary="Read each site's popularity ranking into the library, in the background"
+)
+def read_ranks(user: User = Security(ensure_admin)) -> Dict[str, Any]:
+    from ...services import ranking
+
+    return ranking.start(user.id)

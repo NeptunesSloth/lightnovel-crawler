@@ -20,6 +20,8 @@ class NovelCompleteness(BaseModel):
     missing: int
     failed: int
     empty: int
+    # chapters the reader chose to do without (they could not be had): not gaps
+    skipped: int = 0
     complete: bool
     gaps: List[ChapterGap]
 

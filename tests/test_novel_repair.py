@@ -363,6 +363,27 @@ class NovelRepairTests(unittest.TestCase):
         self.assertFalse(data["complete"])
         self.assertEqual([gap["serial"] for gap in data["gaps"]], [2, 3, 4])
 
+    def test_chapters_that_cannot_be_had_can_be_done_without(self) -> None:
+        # chapter 3 failed on the site, chapter 2 is empty; chapter 4 was never tried
+        with self.ctx.db.session() as session:
+            chapter = session.get(Chapter, "chapter-3")
+            chapter.extra = {**chapter.extra, "download_status": "failed", "download_error": "x"}
+            session.add(chapter)
+            session.commit()
+        data = self.client.post("/api/novel/novel/skip-unavailable").json()
+        self.assertEqual(data["skipped"], 2)  # the failed and the empty one
+        self.assertEqual([gap["serial"] for gap in data["gaps"]], [4])  # never tried: kept
+        self.assertEqual(self.ctx.novels.skipped_serials("novel"), [2, 3])
+        # a refresh of the novel's details keeps the choice
+        with self.ctx.db.session() as session:
+            novel = session.get(Novel, "novel")
+            novel.extra = {**novel.extra, "status": "ongoing"}
+            session.add(novel)
+            session.commit()
+        self.assertEqual(self.ctx.novels.skipped_serials("novel"), [2, 3])
+        data = self.client.delete("/api/novel/novel/skip-unavailable").json()
+        self.assertEqual((data["skipped"], len(data["gaps"])), (0, 3))
+
     def test_repair_downloads_only_gaps_and_rebuilds_real_epub(self) -> None:
         job = self.repair()
         self.assertEqual(job.status, JobStatus.SUCCESS, job.error)

@@ -300,6 +300,34 @@ class NovelService:
                     shelves.add(row.library_id)
             sess.commit()
 
+    def skipped_serials(self, novel_id: str) -> List[int]:
+        """Chapters of this novel the reader chose to do without."""
+        with ctx.db.session() as sess:
+            novel = sess.get(Novel, novel_id)
+            found = (novel.extra or {}).get("skipped") if novel is not None else None
+        return [int(s) for s in found] if isinstance(found, list) else []
+
+    def set_skipped(self, novel_id: str, serials: List[int]) -> None:
+        """Do without these chapters: a novel missing only them counts as complete.
+
+        For chapters that cannot be had (a page the site leaves empty, a manga
+        chapter hosted only on another site): without this the novel never
+        counted as downloaded, its e-book was never rebuilt, and every repair
+        tried them again.
+        """
+        with ctx.db.session() as sess:
+            novel = sess.get(Novel, novel_id)
+            if novel is None:
+                raise ServerErrors.no_such_novel
+            extra = dict(novel.extra or {})
+            if serials:
+                extra["skipped"] = sorted(set(int(s) for s in serials))
+            else:
+                extra.pop("skipped", None)
+            novel.extra = extra
+            sess.add(novel)
+            sess.commit()
+
     def find_by_url(self, novel_url: str) -> Optional[Novel]:
         with ctx.db.session() as sess:
             return sess.exec(sq.select(Novel).where(Novel.url == novel_url)).first()
