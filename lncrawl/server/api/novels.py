@@ -315,6 +315,33 @@ def heal_novel(
 
 
 @router.post(
+    "/{novel_id}/skip-unavailable",
+    summary="Do without the chapters that could not be had, so the novel counts as complete",
+)
+def skip_unavailable(
+    novel_id: str = Path(),
+    user: User = Security(ensure_user),
+) -> NovelCompleteness:
+    report = ctx.chapters.completeness(novel_id)
+    # only ones tried and failed or found empty: a chapter never tried is not given up on
+    given_up = [gap.serial for gap in report.gaps if gap.status in ("failed", "empty")]
+    ctx.novels.set_skipped(novel_id, ctx.novels.skipped_serials(novel_id) + given_up)
+    return ctx.chapters.completeness(novel_id)
+
+
+@router.delete(
+    "/{novel_id}/skip-unavailable",
+    summary="Count the skipped chapters as missing again",
+)
+def unskip_unavailable(
+    novel_id: str = Path(),
+    user: User = Security(ensure_user),
+) -> NovelCompleteness:
+    ctx.novels.set_skipped(novel_id, [])
+    return ctx.chapters.completeness(novel_id)
+
+
+@router.post(
     "/{novel_id}/heal-deep",
     summary="Create a job that searches other sites for this novel's missing chapters",
 )

@@ -36,8 +36,13 @@ class ChapterService:
                 .order_by(sq.col(Chapter.serial).asc())
             ).all()
         have = ctx.files.chapters_with_content(novel_id, serials)
+        novels = getattr(ctx, "novels", None)
+        skipped = (set(novels.skipped_serials(novel_id)) if novels is not None else set()) - set(
+            have
+        )
         gaps: List[ChapterGap] = []
-        for chapter in self._by_serials(novel_id, [s for s in serials if s not in have]):
+        lacking = [s for s in serials if s not in have and s not in skipped]
+        for chapter in self._by_serials(novel_id, lacking):
             status = "missing"
             if (
                 ctx.files.exists(chapter.content_file)
@@ -58,10 +63,11 @@ class ChapterService:
         return NovelCompleteness(
             novel_id=novel_id,
             total=len(serials),
-            downloaded=len(serials) - len(gaps),
+            downloaded=len(serials) - len(gaps) - len(skipped & set(serials)),
             missing=sum(gap.status == "missing" for gap in gaps),
             failed=sum(gap.status == "failed" for gap in gaps),
             empty=sum(gap.status == "empty" for gap in gaps),
+            skipped=len(skipped & set(serials)),
             complete=bool(serials) and not gaps,
             gaps=gaps,
         )

@@ -355,6 +355,31 @@ async function clearFilters(page) {
   check("no errors downloading an e-book", E.errors.length === 0, E.errors);
   await E.close();
 
+  console.log("Chapters that cannot be had");
+  {
+    const W = await open(browser);
+    let skipped = 0;
+    const report = () => ({ novel_id: IDS["Reading Now"], total: 5, downloaded: 4, missing: 0,
+      failed: skipped ? 0 : 1, empty: 0, skipped: skipped, complete: !!skipped, gaps: [] });
+    await W.route(/\/api\/novel\/[^/]+\/completeness$/, (r) => r.fulfill({ json: report() }));
+    await W.route(/\/api\/novel\/[^/]+\/skip-unavailable$/, (r) => { skipped = 1; r.fulfill({ json: report() }); });
+    await W.route(/\/api\/novel\/[^/]+\/chapters\?limit=100&offset=0$/, (r) => r.fulfill({ json: { total: 2, offset: 0, limit: 100, items: [
+      { id: "w1", serial: 1, title: "Chapter 1", is_available: true, extra: {} },
+      { id: "w2", serial: 2, title: "Chapter 2", is_available: false,
+        extra: { download_status: "failed", download_error: "Not readable", not_here: { upload: "u", at: "https://kmanga.kodansha.com/x" } } }] } }));
+    await search(W, "reading now");
+    await W.click("#lib-list .libcard h3"); await W.waitForTimeout(700);
+    const why = await W.textContent("#chap-list .chap.unavail");
+    check("a missing chapter says why", /only on kmanga\.kodansha\.com/.test(why), why);
+    check("chapters that can't be had can be done without", await W.isVisible("#skip-btn"));
+    await W.click("#skip-btn"); await W.waitForTimeout(600);
+    const line = await W.textContent("#novel-completeness");
+    check("then the novel counts as complete", /^Complete/.test(line) && /1 done without/.test(line), line);
+    check("and it can be undone", await W.isVisible("#unskip-link"));
+    check("no errors with chapters that cannot be had", W.errors.length === 0, W.errors);
+    await W.close();
+  }
+
   console.log("Going to a chapter in a long novel");
   const J = await open(browser);
   const asks = [];

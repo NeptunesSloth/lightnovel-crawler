@@ -583,6 +583,8 @@ _READER_HTML = """<!DOCTYPE html>
     <button id="getch-btn" class="hidden" style="margin-bottom:12px">⬇ Download all chapters</button>
     <button id="repair-btn" style="margin-bottom:12px">Retry missing chapters and rebuild EPUB</button>
     <button id="repair-download" class="hidden" style="margin-bottom:12px">Download repaired EPUB</button>
+    <button id="skip-btn" class="hidden secondary" style="margin-bottom:12px" title="These chapters were tried and could not be had (the site gives an empty page, or the chapter is only on another site). Do without them: the novel then counts as complete and its e-book is made without them.">Do without them</button>
+    <a id="unskip-link" class="see-all hidden" title="Count the chapters done without as missing again, so repairs try them">count skipped as missing</a>
     <p id="repair-status" class="muted" aria-live="polite"></p>
     <div id="novel-tags" class="tags"></div>
     <p id="novel-synopsis"></p>
@@ -978,7 +980,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","read-progress","aa-spacing","aa-fit","aa-tap","chap-jump-wrap","chap-jump","chap-jump-go","chap-jump-here","chap-jump-start","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-nonsfw","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
+  ["nav-back","search","skip-btn","unskip-link","read-progress","aa-spacing","aa-fit","aa-tap","chap-jump-wrap","chap-jump","chap-jump-go","chap-jump-here","chap-jump-start","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-nonsfw","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -1799,7 +1801,10 @@ _READER_HTML = """<!DOCTYPE html>
   }
   // "complete", "partial" or "none": how much of a novel is downloaded
   function downloadState(n) {
+    // chapters done without (they could not be had) count as there
+    var skipped = (n.extra && Array.isArray(n.extra.skipped)) ? n.extra.skipped.length : 0;
     var got = (lib.got && lib.got[n.id]) || 0, total = n.chapter_count || 0;
+    if (got) got += skipped;
     if (!got) return "none";
     return got >= total ? "complete" : "partial";
   }
@@ -2794,7 +2799,13 @@ _READER_HTML = """<!DOCTYPE html>
       if (!current.novel || current.novel.id !== novelId) return;
       els["novel-completeness"].textContent =
         (report.complete ? "Complete" : "Incomplete") + " · " + report.downloaded + "/" + report.total +
-        " downloaded · " + report.missing + " missing · " + report.failed + " failed · " + report.empty + " empty";
+        " downloaded · " + report.missing + " missing · " + report.failed + " failed · " + report.empty + " empty" +
+        (report.skipped ? " · " + report.skipped + " done without" : "");
+      // chapters tried and lost can be done without, so the novel counts as complete
+      var lost = (report.failed || 0) + (report.empty || 0);
+      els["skip-btn"].textContent = "Do without the " + lost + " that can't be had";
+      els["skip-btn"].classList.toggle("hidden", !lost);
+      els["unskip-link"].classList.toggle("hidden", !report.skipped);
       els["novel-completeness"].title = (report.gaps || []).slice(0, 20).map(function (gap) {
         return "#" + gap.serial + " " + gap.title + ": " + gap.status + (gap.error ? " — " + gap.error : "");
       }).join("\\n");
@@ -2803,6 +2814,45 @@ _READER_HTML = """<!DOCTYPE html>
         els["novel-completeness"].textContent = "Couldn't check completeness: " + error.message;
       }
     });
+  }
+  // The library counts a novel missing only these as complete.
+  function noteSkipped(novelId, count) {
+    var mark = function (n) { if (n && n.id === novelId) { n.extra = n.extra || {}; n.extra.skipped = new Array(count).fill(0); } };
+    (lib.everything || []).forEach(mark); (lib.all || []).forEach(mark); mark(current.novel);
+  }
+  els["skip-btn"].addEventListener("click", function () {
+    if (!current.novel) return;
+    var novelId = current.novel.id, btn = this;
+    btn.disabled = true;
+    api("/novel/" + novelId + "/skip-unavailable", { method: "POST" }).then(function (report) {
+      noteSkipped(novelId, report.skipped || 0);
+      return refreshCompleteness(novelId);
+    }).then(function () {
+      current.chapters = []; current.offset = current.listFrom || 0; els["chap-list"].innerHTML = ""; loadChapters();
+    }).catch(function (e) { alert("Couldn't do without them: " + e.message); })
+      .finally(function () { btn.disabled = false; });
+  });
+  els["unskip-link"].addEventListener("click", function () {
+    if (!current.novel) return;
+    var novelId = current.novel.id;
+    api("/novel/" + novelId + "/skip-unavailable", { method: "DELETE" }).then(function () {
+      noteSkipped(novelId, 0);
+      return refreshCompleteness(novelId);
+    }).then(function () {
+      current.chapters = []; current.offset = current.listFrom || 0; els["chap-list"].innerHTML = ""; loadChapters();
+    }).catch(function (e) { alert("Couldn't do that: " + e.message); });
+  });
+  // Why a chapter is not here, in a few words (its whole error as a tooltip).
+  function whyMissing(ch) {
+    var ex = ch.extra || {};
+    var skipped = ((current.novel && current.novel.extra && current.novel.extra.skipped) || []).indexOf(ch.serial) >= 0;
+    var at = ex.not_here && ex.not_here.at, host = "";
+    if (at) { try { host = new URL(at).hostname.replace(/^www[.]/, ""); } catch (e) { host = ""; } }
+    var why = at ? "only on " + (host || "another site")
+      : ex.download_status === "empty" ? "the site gives an empty page"
+      : ex.download_status === "failed" ? "failed: " + String(ex.download_error || "").split("\\n")[0].slice(0, 70)
+      : "not downloaded";
+    return { text: (skipped ? "done without · " : "") + why, title: ex.download_error || "", link: at || "" };
   }
   function pollRepair(novelId, jobId) {
     api("/job/" + jobId + "?light=true").then(function (job) {
@@ -3006,7 +3056,14 @@ _READER_HTML = """<!DOCTYPE html>
         }
         row.appendChild(rd); row.appendChild(n); row.appendChild(t);
         if (ch.is_available) row.addEventListener("click", function () { openChapter(ch.id); });
-        else { gaps = true; var u = document.createElement("span"); u.className = "muted"; u.textContent = "not downloaded"; row.appendChild(u); }
+        else {
+          gaps = true;
+          var why = whyMissing(ch);
+          var u = document.createElement(why.link ? "a" : "span"); u.className = "muted"; u.textContent = why.text;
+          if (why.title) u.title = why.title;
+          if (why.link) { u.href = why.link; u.target = "_blank"; u.rel = "noopener"; }
+          row.appendChild(u);
+        }
         frag.appendChild(row);
       });
       els["chap-list"].appendChild(frag);
