@@ -821,6 +821,7 @@ class JobService:
         auto_tune: bool = True,
         update_only: bool = False,
         use_sitemap: bool = True,
+        most_popular_first: bool = True,
         urls: Optional[List[str]] = None,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
@@ -834,8 +835,12 @@ class JobService:
     ) -> Job:
         domain = ctx.sources.get_domain(url)
         source = ctx.sources.get_source(domain)
-        # finding a site's novels needs its search; downloading listed ones does not
-        if not urls and not source.can_search:
+        # finding a site's novels needs its search (or its ranking); listed ones need neither
+        try:
+            ranks = bool(getattr(ctx.sources.get_crawler(domain), "can_rank", False))
+        except Exception:
+            ranks = False
+        if not urls and not source.can_search and not ranks:
             raise ServerErrors.search_not_supported.with_extra(domain)
         data["domain"] = source.domain
         data["url"] = source.url
@@ -850,6 +855,7 @@ class JobService:
         data["auto_tune"] = bool(auto_tune)
         data["update_only"] = bool(update_only)
         data["use_sitemap"] = bool(use_sitemap)
+        data["most_popular_first"] = bool(most_popular_first)
         data["parallel_novels"] = max(1, min(4, int(parallel_novels)))
         data["until_done"] = bool(until_done)
         data["library_only"] = bool(library_only)

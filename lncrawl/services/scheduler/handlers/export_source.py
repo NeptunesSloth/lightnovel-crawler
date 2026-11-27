@@ -686,6 +686,10 @@ class ExportSourceHandler(BaseHandler):
         rather than giving up; otherwise that is a clear failure.
         """
         until_done = bool(self.job.extra.get("until_done"))
+        if self.job.extra.get("most_popular_first", True) and getattr(crawler, "can_rank", False):
+            ranked, capped = self._discover_ranked(crawler, domain, budget)
+            if ranked:
+                return ranked, capped
         for attempt in range(len(COOLDOWNS) + 1):
             # drive the progress bar with search progress so a slow site isn't a silent 0%
             def _on_discover(done: int, seeds: int, found: int) -> None:
@@ -726,6 +730,45 @@ class ExportSourceHandler(BaseHandler):
             "the source is likely throttling or blocking automated requests. "
             "Try a smaller limit, enable polite mode, or use a different source."
         )
+
+    def _discover_ranked(self, crawler, domain: str, budget: float) -> Tuple[List[str], bool]:
+        """The site's novels from its own ranking, most popular first; (urls, capped).
+
+        Discovery by search took novels in whatever order the searches turned
+        them up, so a site download got the obscure ones as soon as the best.
+        A site that ranks its novels (NovelFire, MangaDex, Weeb Central) is read
+        from #1 down instead: a limit of 100 is then its top 100, and a
+        download stopped part way has the most popular ones. Nothing found
+        this way (the ranking pages changed, the site refused) falls back to
+        the search.
+        """
+        limit = int(self.job.extra.get("limit") or 0)
+        found: List[str] = []
+        capped = False
+        started = monotonic()
+        try:
+            for url in crawler.popular():
+                if self.signal.is_set():
+                    raise AbortedException()
+                found.append(url)
+                if len(found) % 24 == 0:
+                    self._set_extra(phase="discovering", found=len(found), order="ranked")
+                if limit and len(found) >= limit:
+                    break
+                if monotonic() - started >= budget:
+                    capped = True
+                    break
+        except AbortedException:
+            raise
+        except Exception as error:
+            ctx.logger.warn(f"Could not read the ranking of {domain}: {error}")
+        if found:
+            ctx.logger.info(
+                f"{len(found)} novel(s) on {domain} from its ranking, most popular first"
+                + (" (stopped at the time cap)" if capped else "")
+            )
+            self._set_extra(phase="downloading", discovered=len(found), discovery_capped=capped)
+        return found, capped
 
     def _wait(self, seconds: float, phase: str, **extra) -> None:
         """Wait ``seconds``, showing why and when it resumes, and stay alive.
