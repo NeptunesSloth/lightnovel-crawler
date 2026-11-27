@@ -12,6 +12,8 @@ from lncrawl.utils.novel_status import from_page
 logger = logging.getLogger(__name__)
 
 ULID = r"[0-9A-Z]{26}"
+# Series looked at for a ranking at most (the site lists about this many).
+_POPULAR_MOST = 40000
 search_url = (
     "https://weebcentral.com/search/data?text=%s"
     "&sort=Best+Match&order=Descending&official=Any&display_mode=Full+Display&limit=30"
@@ -21,7 +23,27 @@ search_url = (
 class WeebCentralCrawler(LegacyCrawler):
     has_manga = True
     can_search = True
+    can_rank = True
     base_url = ["https://weebcentral.com/"]
+
+    def popular(self):
+        """Every series, most popular first, from the site's own search sorted that way."""
+        seen = set()
+        for offset in range(0, _POPULAR_MOST, 32):
+            soup = self.get_soup(
+                "https://weebcentral.com/search/data?limit=32&offset=%d&sort=Popularity"
+                "&order=Descending&official=Any&anime=Any&adult=Any&display_mode=Full+Display"
+                % offset
+            )
+            fresh = []
+            for a in soup.select("a[href*='/series/']"):
+                match = re.search(r"/series/(" + ULID + ")", a["href"])
+                if match and match.group(1) not in seen:
+                    seen.add(match.group(1))
+                    fresh.append(f"https://weebcentral.com/series/{match.group(1)}")
+            if not fresh:
+                return  # past the last page
+            yield from fresh
 
     def search_novel(self, query):
         soup = self.get_soup(search_url % quote_plus(query))

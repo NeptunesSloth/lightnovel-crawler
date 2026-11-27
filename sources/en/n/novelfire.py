@@ -22,6 +22,10 @@ _MOST_PAGES = 1000
 _Mapping = Tuple[str, str, str]
 
 
+# The popular listing has about 800 pages; more than that is not followed.
+_POPULAR_PAGES = 1500
+
+
 def _mapping(url: str, final_url: str) -> Optional[_Mapping]:
     """How ``url`` turned into ``final_url``, as prefixes around a shared path tail."""
     source, final = urlsplit(url), urlsplit(final_url)
@@ -128,9 +132,28 @@ class NovelFireCrawler(LegacyCrawler):
     has_mtl = False
     has_manga = False
     can_search = True
+    can_rank = True
 
     def initialize(self) -> None:
         self.init_executor(workers=self.workers, ratelimit=3)
+
+    def popular(self):
+        """Every novel on the site, most popular first (its "popular" listing, 24 a page)."""
+        seen: Set[str] = set()
+        for page in range(1, _POPULAR_PAGES + 1):
+            soup = self.get_soup(
+                f"https://novelfire.net/genre-all/sort-popular/status-all/all-novel?page={page}"
+            )
+            fresh = []
+            for a in soup.select("a[href]"):
+                path = urlsplit(self.absolute_url(a["href"])).path.rstrip("/")
+                parts = path.split("/")
+                if len(parts) == 3 and parts[1] == "book" and path not in seen:
+                    seen.add(path)
+                    fresh.append(f"https://novelfire.net{path}")
+            if not fresh:
+                return  # past the last page
+            yield from fresh
 
     def read_novel_info(self) -> None:
         soup = self.get_soup(self.novel_url)

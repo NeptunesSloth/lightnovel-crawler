@@ -8,7 +8,7 @@ from io import BytesIO
 import math
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Union
 from urllib.parse import urlsplit
 
 from pydantic.networks import HttpUrl
@@ -101,6 +101,8 @@ class Crawler(ABC):
 
     can_login = False
     can_search = False
+    # lists its novels most popular first (see `popular`)
+    can_rank = False
 
     chapters_per_volume = 100
     auto_generate_cover = True
@@ -280,6 +282,14 @@ class Crawler(ABC):
         with marked:
             response = self.scraper.fetch("GET", url, headers=headers, navigation=False)
         return response.content
+
+    def popular(self) -> Iterator[str]:
+        """The site's novels, most popular first, as the site itself ranks them.
+
+        A source that can list them sets ``can_rank`` and gives their addresses
+        here, page by page, as the site's own ranking pages show them.
+        """
+        return iter(())
 
     def image_headers(self, url: str) -> Dict[str, str]:
         """The headers an image (a cover or a manga page) is asked for with.

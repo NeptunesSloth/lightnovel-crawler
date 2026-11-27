@@ -424,6 +424,7 @@ _READER_HTML = """<!DOCTYPE html>
         <option value="rating">My rating</option>
         <option value="status">Status: ongoing first</option>
         <option value="status-done">Status: completed first</option>
+        <option value="popular">Most popular on its site</option>
       </select>
       <button id="lib-layout" title="Show the library as covers or as a list">☰ List</button>
       <button id="lib-filters-btn" title="Show or hide the filters">Filters</button>
@@ -433,6 +434,7 @@ _READER_HTML = """<!DOCTYPE html>
           <button id="lib-auto-btn" title="New chapters: automatic checks and notifications">🔔 New chapters</button>
           <button id="lib-bmks-btn" title="Every bookmark, across all novels">🔖 Bookmarks</button>
           <button id="lib-update" title="Re-check every novel on its source for new chapters">⟳ Check updates</button>
+          <button id="lib-rank" title="Read each site's own popularity ranking (NovelFire, MangaDex, Weeb Central), so the library can be sorted by it and chapters are got from the most popular down">📈 Read site rankings</button>
           <button id="lib-fill" class="hidden" title="Re-read the details (status, genres, description) of novels that are missing them">✚ Fill in details</button>
           <button id="lib-stats-btn" title="How much you have been reading">📊 Reading stats</button>
           <button id="lib-shelves-btn" title="Rename, delete or reorder your shelves">📚 Manage shelves</button>
@@ -980,7 +982,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","skip-btn","unskip-link","read-progress","aa-spacing","aa-fit","aa-tap","chap-jump-wrap","chap-jump","chap-jump-go","chap-jump-here","chap-jump-start","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-nonsfw","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
+  ["nav-back","search","lib-rank","skip-btn","unskip-link","read-progress","aa-spacing","aa-fit","aa-tap","chap-jump-wrap","chap-jump","chap-jump-go","chap-jump-here","chap-jump-start","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-nonsfw","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -1563,6 +1565,7 @@ _READER_HTML = """<!DOCTYPE html>
       else if (sort === "newch") d = ((lib.latest || {})[b.id] || 0) - ((lib.latest || {})[a.id] || 0);
       else if (sort === "status") d = statusRank(a, ONGOING_FIRST) - statusRank(b, ONGOING_FIRST);
       else if (sort === "status-done") d = statusRank(a, COMPLETED_FIRST) - statusRank(b, COMPLETED_FIRST);
+      else if (sort === "popular") d = rankOf(a) - rankOf(b);
       else d = (b.created_at || 0) - (a.created_at || 0);  // recent
       return d || byText(a, b, "title");
     });
@@ -1853,12 +1856,61 @@ _READER_HTML = """<!DOCTYPE html>
       if (Object.keys(getchWatch.ids).length) getchWatch.timer = later(tickGetChapters, 15000);
     });
   }
+  // A novel's place on its site's popularity ranking (unranked ones last).
+  function rankOf(n) {
+    var r = n && n.extra && n.extra.rank;
+    return typeof r === "number" && r > 0 ? r : Infinity;
+  }
+  function byRank(list) {
+    return list.slice().sort(function (a, b) {
+      var d = rankOf(a) - rankOf(b);
+      return d === d ? d : 0;  // two unranked (Infinity - Infinity) keep their order
+    });
+  }
   els["lib-getch"].addEventListener("click", function () {
-    var todo = (lib.everything || []).filter(detailsOnly);
+    var todo = byRank((lib.everything || []).filter(detailsOnly));
     if (!todo.length) return;
-    if (!confirm("Download every chapter of " + todo.length + " novel(s) that have only their details?")) return;
-    getChapters(todo);
+    var ranked = todo.filter(function (n) { return rankOf(n) !== Infinity; }).length;
+    var answer = prompt("Get the chapters of how many details-only novels, from the most popular down? " +
+      "(" + todo.length + " in all; " + (ranked ? ranked + " have a site ranking" :
+        "none has a site ranking yet: More › Read site rankings first") + ". Leave empty for all.)", ranked ? String(Math.min(ranked, 50)) : "");
+    if (answer === null) return;
+    var n = parseInt(answer, 10);
+    getChapters(n > 0 ? todo.slice(0, n) : todo);
   });
+  // ---- Site rankings ----
+  var rankTimer = null;
+  function showRanking(s) {
+    var btn = els["lib-rank"];
+    if (s.running) {
+      btn.textContent = "📈 Reading rankings… " + (s.site || "") + " · " + s.looked + " looked at, " + s.ranked + " of yours found";
+      return;
+    }
+    btn.textContent = "📈 Read site rankings";
+  }
+  els["lib-rank"].addEventListener("click", function () {
+    api("/admin/ranks").then(function (r) {
+      var sites = Object.keys(r.sites || {});
+      if (r.reading && r.reading.running) { watchRanking(); return; }
+      if (!sites.length) { alert("None of your library's sites has a ranking the app can read yet (NovelFire, MangaDex and Weeb Central do)."); return; }
+      if (!confirm("Read the popularity ranking of " + sites.join(", ") + "? It runs in the background at each site's own pace (NovelFire's full list takes 15 minutes or so). Then sort by Most popular, and details-only novels get their chapters from the top down.")) return;
+      return api("/admin/ranks", { method: "POST" }).then(function () { watchRanking(); });
+    }).catch(function (e) { alert("Couldn't read the rankings: " + e.message); });
+  });
+  function watchRanking() {
+    if (rankTimer) return;
+    (function tick() {
+      api("/admin/ranks").then(function (r) {
+        var s = r.reading || {};
+        showRanking(s);
+        if (s.running) { rankTimer = later(function () { rankTimer = null; tick(); }, 4000); return; }
+        rankTimer = null;
+        loadLibrary();
+        els["lib-sort"].value = "popular"; renderLibrary();
+        if (s.error) alert("Rankings read, with a problem: " + s.error);
+      }).catch(function () { rankTimer = null; });
+    })();
+  }
   // Everything not fully downloaded goes, or only one kind of it, except what a
   // download still running, queued or paused is working on: the server says
   // which and how many. A bar shows how far the deleting has got.
@@ -2953,7 +3005,8 @@ _READER_HTML = """<!DOCTYPE html>
   });
   function renderNovelHeader(novel) {
     els["novel-title"].textContent = novel.title || "Untitled";
-    els["novel-meta"].textContent = [novel.authors || "", (novel.chapter_count || 0) + " chapters", novel.domain || ""]
+    els["novel-meta"].textContent = [novel.authors || "", (novel.chapter_count || 0) + " chapters", novel.domain || "",
+      rankOf(novel) !== Infinity ? "#" + novel.extra.rank + " on " + (novel.domain || "its site") : ""]
       .filter(Boolean).join("  ·  ");
 
     var cover = els["novel-cover"];
