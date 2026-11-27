@@ -1096,6 +1096,7 @@ _READER_HTML = """<!DOCTYPE html>
       renderFilterOptions();
       renderCategories();
       renderLibrary();
+      if (lib.got) renderGetChapters();  // the counts may have come before the novels
       if (lib.latest) notifyNew();
     }).catch(function (e) { els["lib-status"].textContent = "Couldn't load library: " + e.message; });
   }
@@ -1797,7 +1798,7 @@ _READER_HTML = """<!DOCTYPE html>
       lib.got = m;
       if (!same && lib.all.length) renderLibrary();  // nothing new: not drawn again
       renderGetChapters();
-    }).catch(function () { lib.got = null; });
+    }).catch(function () { /* a failed ask keeps what was known: it said "0 details-only" */ });
   }
   function detailsOnly(n) {
     return !!lib.got && !lib.got[n.id];
