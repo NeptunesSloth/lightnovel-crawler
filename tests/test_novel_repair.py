@@ -105,6 +105,22 @@ class NovelRepairTests(unittest.TestCase):
                 self.assertEqual(discovery.call_count, int(discover))
         return self.ctx.jobs.get(job.id)
 
+    def test_a_site_that_ranks_its_novels_is_downloaded_from_its_ranking(self) -> None:
+        url = "https://novelfire.net/book/example"
+        walked = []
+
+        def popular():
+            for found in (url, "https://novelfire.net/book/less-popular"):
+                walked.append(found)
+                yield found
+
+        self.source.can_rank = True
+        self.source.popular = popular
+        job = self.export_novel(discover=True, check_discovery=False, limit=1)
+        self.assertEqual(job.extra["urls"], [url])  # the top 1, not a search's first
+        self.assertEqual(walked, [url])  # a limit stops reading the ranking
+        self.assertEqual(job.extra.get("discovered"), 1)
+
     def test_export_reuses_zip_after_individual_ebook_and_chapters_are_removed(self) -> None:
         first = self.export_novel(discover=True)
         self.assertEqual(first.status, JobStatus.SUCCESS, first.error)

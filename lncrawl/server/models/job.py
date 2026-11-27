@@ -159,6 +159,11 @@ class ExportSourceRequest(BaseModel):
         description="Re-check novels finished in a prior run for newly released chapters and "
         "grab just those (with resume on); novels with nothing new are reused as-is",
     )
+    most_popular_first: bool = Field(
+        default=True,
+        description="On a site that ranks its novels (NovelFire, MangaDex, Weeb Central), "
+        "find them from its ranking and download them in that order, the most popular first",
+    )
     use_sitemap: bool = Field(
         default=True,
         description="Enumerate the catalogue from the site's sitemap as well as its search; "

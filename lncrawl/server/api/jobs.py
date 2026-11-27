@@ -454,6 +454,7 @@ def export_source(
         auto_tune=body.auto_tune,
         update_only=body.update_only,
         use_sitemap=body.use_sitemap,
+        most_popular_first=body.most_popular_first,
         parallel_novels=body.parallel_novels,
         until_done=body.until_done,
         library_only=body.library_only,

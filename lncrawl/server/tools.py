@@ -408,6 +408,10 @@ _TOOLS_HTML = """<!DOCTYPE html>
         <label for="exp-autotune" style="margin:0">Auto-tune rate — slow down when blocked, speed up when clear</label>
       </div>
       <div class="row checkbox">
+        <input id="exp-popular" type="checkbox" checked />
+        <label for="exp-popular" style="margin:0">Most popular first — on sites that rank their novels (NovelFire, MangaDex, Weeb Central), download them in the site's ranking order, #1 first; a limit of 100 is then the top 100</label>
+      </div>
+      <div class="row checkbox">
         <input id="exp-sitemap" type="checkbox" checked />
         <label for="exp-sitemap" style="margin:0">Use the site's sitemap — finds the whole catalogue instead of the one page of results a search returns</label>
       </div>
@@ -1352,6 +1356,7 @@ _TOOLS_HTML = """<!DOCTYPE html>
     body.auto_tune = document.getElementById("exp-autotune").checked;
     body.update_only = document.getElementById("exp-update").checked;
     body.use_sitemap = document.getElementById("exp-sitemap").checked;
+    body.most_popular_first = document.getElementById("exp-popular").checked;
     body.parallel_novels = parseInt(document.getElementById("exp-lanes").value, 10) || 2;
     // a roomier drive: the ZIP is written there only, not also to the Desktop
     var saveDir = document.getElementById("exp-savedir").value.trim();
