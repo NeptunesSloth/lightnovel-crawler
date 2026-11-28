@@ -442,6 +442,7 @@ _READER_HTML = """<!DOCTYPE html>
           <button id="lib-restore" title="Load a backup made here, adding it to what you have">⤒ Restore a backup</button>
           <input id="lib-restore-file" type="file" accept="application/json,.json" class="hidden" />
           <button id="lib-getch" class="hidden" title="Download the chapters of every novel that has only its details (added by a discovery)">⬇ Get chapters for details-only novels</button>
+          <button id="lib-finish" class="hidden" title="Download the missing chapters of every novel that has only some of its chapters, most popular first">⬇ Finish partly downloaded novels</button>
           <button id="lib-unfinished" title="Delete every novel that has only its details or only some of its chapters downloaded (admins)">🗑 Delete unfinished novels</button>
           <button id="lib-select" title="Select novels to delete or download">☑ Select</button>
         </div>
@@ -702,7 +703,7 @@ _READER_HTML = """<!DOCTYPE html>
   function loadPos() { try { return JSON.parse(localStorage.getItem(POS) || "{}"); } catch (e) { return {}; } }
   function posOf(novelId) {
     var v = (posMemo || loadPos())[novelId];
-    if (!v) return null;
+    if (!v || v.gone) return null;  // gone: marked unread (kept so the sync does not bring it back)
     if (typeof v === "string") return { id: v, serial: null, ts: 0 };  // legacy
     return v;
   }
@@ -982,7 +983,7 @@ _READER_HTML = """<!DOCTYPE html>
   }
 
   var els = {};
-  ["nav-back","search","lib-rank","skip-btn","unskip-link","read-progress","aa-spacing","aa-fit","aa-tap","chap-jump-wrap","chap-jump","chap-jump-go","chap-jump-here","chap-jump-start","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-nonsfw","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
+  ["nav-back","search","lib-finish","lib-rank","skip-btn","unskip-link","read-progress","aa-spacing","aa-fit","aa-tap","chap-jump-wrap","chap-jump","chap-jump-go","chap-jump-here","chap-jump-start","view-library","lib-continue-wrap","lib-continue","lib-continue-all","lib-sort","lib-kind","lib-tag","lib-tag-list","lib-source","lib-lang","lib-progress","lib-state","lib-favonly","lib-len","lib-len-custom","lib-len-min","lib-len-max","lib-nobl","lib-nonsfw","lib-dupes","lib-shelf","lib-filters-btn","lib-filters","lib-more","lib-stats-btn","lib-stats","lib-stats-note","lib-stats-body","lib-shelves-btn","lib-shelves","lib-shelves-list","lib-backup","lib-restore","lib-restore-file","lib-auto-btn","lib-auto","auto-on","auto-scope","auto-dl","auto-notify","auto-note","rate-box","prog-done","prog-unread","prog-set","shelf-btn","shelf-box","lib-fill","lib-views","lib-view-save","lib-view-del","lib-web-btn","lib-web-row","lib-web-scope","offline-btn","ebook-btn","offline-msg","lib-web","lib-web-status","lib-web-stop","lib-web-list","lib-bmks-btn","lib-bmks","lib-bmks-count","lib-bmks-list","lib-nomtl","lib-noch","lib-dl","lib-layout","lib-getch","lib-unfinished","lib-unf","unf-pick","unf-details","unf-partial","unf-all","unf-note","unf-go","unf-close","unf-progress","unf-bar","unf-text","lib-getsel","lib-here","lib-todrive","getch-btn","lib-clear","lib-cats",
    "lib-update","lib-status","lib-list","view-novel","novel-cover","novel-title","novel-meta","novel-tags",
    "novel-synopsis","continue-btn","heal-btn","heal-msg","chap-list","chap-more-wrap","chap-more",
    "view-reader","reader-title","reader-content","prev-btn","next-btn","reader-pos","font-up",
@@ -1816,6 +1817,13 @@ _READER_HTML = """<!DOCTYPE html>
     var n = (lib.everything || []).filter(detailsOnly).length;
     els["lib-getch"].textContent = "⬇ Get chapters for " + n + " details-only novel(s)";
     els["lib-getch"].classList.toggle("hidden", !n);
+    var part = partlyDownloaded().length;
+    els["lib-finish"].textContent = "⬇ Finish " + part + " partly downloaded novel(s)";
+    els["lib-finish"].classList.toggle("hidden", !part);
+  }
+  function partlyDownloaded() {
+    if (!lib.got) return [];
+    return (lib.everything || []).filter(function (n) { return downloadState(n) === "partial" && !unreachable(n); });
   }
   // The bulk download engine gets every chapter of these novels: one job per
   // site, which tunes its speed to the site, waits out blocks and hangs, and
@@ -1878,6 +1886,13 @@ _READER_HTML = """<!DOCTYPE html>
     if (answer === null) return;
     var n = parseInt(answer, 10);
     getChapters(n > 0 ? todo.slice(0, n) : todo);
+  });
+  els["lib-finish"].addEventListener("click", function () {
+    var todo = byRank(partlyDownloaded());
+    if (!todo.length) return;
+    if (!confirm("Download the missing chapters of " + todo.length + " partly downloaded novel(s)? " +
+        "Chapters already here are skipped. Ones a site cannot give stay missing: open such a novel to do without them.")) return;
+    getChapters(todo);
   });
   // ---- Site rankings ----
   var rankTimer = null;
@@ -2591,9 +2606,14 @@ _READER_HTML = """<!DOCTYPE html>
   });
   els["prog-unread"].addEventListener("click", function () {
     if (!current.novel || !confirm("Forget your place in “" + current.novel.title + "”?")) return;
-    var p = loadPos(); delete p[current.novel.id];
+    // Not deleted: the place is also kept on the server for your other devices,
+    // and a deleted one came straight back from there at the next sync. It is
+    // marked as given up, with the time, so that wins everywhere.
+    var p = loadPos(); p[current.novel.id] = { gone: true, ts: Date.now() };
     localStorage.setItem(POS, JSON.stringify(p));
+    posMemo = null;
     schedulePush();
+    renderContinue();
     openNovel(current.novel);
   });
   els["prog-set"].addEventListener("click", function () {
@@ -2854,6 +2874,8 @@ _READER_HTML = """<!DOCTYPE html>
         (report.complete ? "Complete" : "Incomplete") + " · " + report.downloaded + "/" + report.total +
         " downloaded · " + report.missing + " missing · " + report.failed + " failed · " + report.empty + " empty" +
         (report.skipped ? " · " + report.skipped + " done without" : "");
+      // the library's badge counted fewer than are here: it is counted again
+      if (lib.got && (lib.got[novelId] || 0) !== report.downloaded) loadDownloadedCounts();
       // chapters tried and lost can be done without, so the novel counts as complete
       var lost = (report.failed || 0) + (report.empty || 0);
       els["skip-btn"].textContent = "Do without the " + lost + " that can't be had";

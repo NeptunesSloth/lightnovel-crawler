@@ -36,6 +36,7 @@ class ChapterService:
                 .order_by(sq.col(Chapter.serial).asc())
             ).all()
         have = ctx.files.chapters_with_content(novel_id, serials)
+        self._mark_downloaded(novel_id, have)
         novels = getattr(ctx, "novels", None)
         skipped = (set(novels.skipped_serials(novel_id)) if novels is not None else set()) - set(
             have
@@ -71,6 +72,35 @@ class ChapterService:
             complete=bool(serials) and not gaps,
             gaps=gaps,
         )
+
+    def _mark_downloaded(self, novel_id: str, have: Any) -> None:
+        """Say so in the database for chapters whose text is here but not marked.
+
+        The library's "1957/1958 downloaded" counts the marks, the novel's page
+        counts the files: a chapter saved just as the app closed (or put back
+        from a copy of the database) left the two a chapter apart for good.
+        """
+        if not have:
+            return
+        try:
+            with ctx.db.session() as sess:
+                unmarked = sess.exec(
+                    sq.select(Chapter.serial).where(
+                        Chapter.novel_id == novel_id, sq.col(Chapter.is_done).is_(False)
+                    )
+                ).all()
+                stale = [serial for serial in unmarked if serial in have]
+                for start in range(0, len(stale), 500):
+                    sess.exec(
+                        sq.update(Chapter)  # type: ignore[call-overload]
+                        .where(sq.col(Chapter.novel_id) == novel_id)
+                        .where(sq.col(Chapter.serial).in_(stale[start : start + 500]))
+                        .values(is_done=True)
+                    )
+                if stale:
+                    sess.commit()
+        except Exception:
+            pass  # a count that stays off by one is not worth failing the page for
 
     def _by_serials(self, novel_id: str, serials: List[int]) -> List[Chapter]:
         """These chapters of a novel, in serial order (asked a few hundred at a time)."""
