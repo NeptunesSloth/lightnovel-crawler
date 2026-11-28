@@ -119,6 +119,32 @@ class NovelService:
                 stmt = stmt.where(Novel.domain != exclude_domain)
             return [t for t in sess.exec(stmt).all() if t]
 
+    def downloaded_titles(self, exclude_domain: Optional[str] = None) -> Dict[str, int]:
+        """Titles of novels with every listed chapter downloaded, and how many that is.
+
+        (The most, where a title is there more than once.)
+        """
+        with ctx.db.session() as sess:
+            counted = sess.exec(
+                sq.select(
+                    Chapter.novel_id,
+                    sq.func.count(),
+                    sq.func.sum(sq.case((sq.col(Chapter.is_done).is_(True), 1), else_=0)),
+                ).group_by(sq.col(Chapter.novel_id))
+            ).all()
+            stmt = sq.select(Novel)
+            if exclude_domain:
+                stmt = stmt.where(Novel.domain != exclude_domain)
+            novels = [(n.id, n.title) for n in sess.exec(stmt).all()]
+        full = {
+            novel_id: int(done or 0) for novel_id, total, done in counted if total and done == total
+        }
+        found: Dict[str, int] = {}
+        for novel_id, title in novels:
+            if title and novel_id in full:
+                found[title] = max(found.get(title, 0), full[novel_id])
+        return found
+
     def titles_by_id(self, novel_ids: List[str]) -> Dict[str, str]:
         """Titles for the given novel ids, in one query."""
         if not novel_ids:

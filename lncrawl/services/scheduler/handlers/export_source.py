@@ -1004,11 +1004,19 @@ class ExportSourceHandler(BaseHandler):
         # every run records it, which is what tells a job from before the split
         self._set_extra(current_rps=requests_per_sec)
 
-        # Seed the de-dupe set with titles already in the library from *other*
-        # sources, so a story grabbed from one site isn't redone from another.
-        seen_titles: Set[str] = set()
+        # Titles already downloaded in full from *other* sources, with how many
+        # chapters that copy has, so a story grabbed from one site isn't redone
+        # from another. A copy with only its details, or a stub (MangaDex keeps
+        # three chapters of a licensed series), is not having the story: it made
+        # a full copy asked for from another site "already had", and skipped it.
+        # Novels the user named themselves are never skipped: that copy was asked for.
+        named = bool(self.job.extra.get("urls")) and not self.job.extra.get("found_by_discovery")
+        dedupe = dedupe and not named
+        seen_titles: Dict[str, int] = {}
         if dedupe:
-            seen_titles = {_norm_title(t) for t in ctx.novels.list_titles(exclude_domain=domain)}
+            for title, chapters in ctx.novels.downloaded_titles(exclude_domain=domain).items():
+                key = _norm_title(title)
+                seen_titles[key] = max(seen_titles.get(key, 0), chapters)
 
         # Paused or stopped while it was still starting (a worker process can
         # take two minutes to come up): it used to be marked running regardless,
@@ -1978,7 +1986,7 @@ def _download_novel(
     novel_url: str,
     fmt: OutputFormat,
     signal,
-    seen_titles: Optional[Set[str]] = None,
+    seen_titles: Optional[Dict[str, int]] = None,
     dedupe: bool = False,
     max_chapters: int = 0,
     on_novel: Optional[Callable[[str, int, int], None]] = None,
@@ -2018,7 +2026,12 @@ def _download_novel(
         novel = ctx.crawler.fetch_novel(user_id, novel_url, signal=signal, custom=crawler)
 
     norm = _norm_title(novel.title)
-    if dedupe and seen_titles is not None and norm in seen_titles:
+    # had already only if that copy holds (nearly) as many chapters as this one lists
+    if (
+        dedupe
+        and seen_titles is not None
+        and seen_titles.get(norm, 0) >= max(1, int((novel.chapter_count or 0) * 0.9))
+    ):
         return {"file": None, "missing": 0, "duplicate": True}
     books = getattr(ctx, "books", None)
     if books is not None and books.unavailable(novel.id):
@@ -2148,7 +2161,7 @@ def _download_novel(
 
     if not build:
         if seen_titles is not None and missing == 0:
-            seen_titles.add(norm)
+            seen_titles[norm] = max(seen_titles.get(norm, 0), novel.chapter_count or 0)
         return {
             "file": None,
             "missing": missing,
@@ -2174,5 +2187,6 @@ def _download_novel(
     if artifact and artifact.is_available:
         file = ctx.files.resolve(artifact.output_file)
         if seen_titles is not None and missing == 0:
-            seen_titles.add(norm)  # remember it so other sources skip this story
+            # remember it so other sources skip this story
+            seen_titles[norm] = max(seen_titles.get(norm, 0), novel.chapter_count or 0)
     return {"file": file, "missing": missing, "duplicate": False, "errors": errors}
