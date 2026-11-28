@@ -434,6 +434,19 @@ class NovelRepairTests(unittest.TestCase):
         self.assertFalse(data["complete"])
         self.assertEqual([gap["serial"] for gap in data["gaps"]], [2, 3, 4])
 
+    def test_a_chapter_here_but_not_marked_downloaded_is_marked_when_the_novel_is_opened(
+        self,
+    ) -> None:
+        with self.ctx.db.session() as session:
+            chapter = session.get(Chapter, "chapter-1")  # its text is there
+            chapter.is_done = False
+            session.add(chapter)
+            session.commit()
+        self.ctx.chapters.completeness("novel")
+        with self.ctx.db.session() as session:
+            self.assertTrue(session.get(Chapter, "chapter-1").is_done)
+            self.assertFalse(session.get(Chapter, "chapter-3").is_done)  # not here: not marked
+
     def test_chapters_that_cannot_be_had_can_be_done_without(self) -> None:
         # chapter 3 failed on the site, chapter 2 is empty; chapter 4 was never tried
         with self.ctx.db.session() as session:
