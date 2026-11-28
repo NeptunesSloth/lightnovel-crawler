@@ -17,7 +17,10 @@ class OneNovelDownloadTests(unittest.TestCase):
             return object()
 
         fake = SimpleNamespace(
-            sources=SimpleNamespace(get_domain=lambda url: url.split("/")[2], get_source=get_source)
+            db=None,  # no ranks to be had: the order given is kept
+            sources=SimpleNamespace(
+                get_domain=lambda url: url.split("/")[2], get_source=get_source
+            ),
         )
         patcher = patch.object(service, "ctx", fake)
         patcher.start()

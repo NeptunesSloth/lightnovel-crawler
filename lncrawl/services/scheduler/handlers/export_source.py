@@ -2,6 +2,7 @@ import errno
 import hashlib
 from html import escape
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -27,6 +28,7 @@ from ....utils.keep_awake import keep_awake
 from ....utils.notify import notify_finished
 from ....utils.time_utils import current_timestamp
 from ...crawl_engine import CrawlStalledError, crawl_items
+from ...ranking import note_places, url_key
 from ._base import AbortedException, BaseHandler, HandlerException
 from .export_pace import RPS_MAX, PaceController, estimate_left, pressure
 
@@ -259,6 +261,19 @@ def _run_lanes(count: int, lane: Callable[[int], None]) -> None:
     if errors:
         errors.sort(key=lambda error: isinstance(error, AbortedException))
         raise errors[0]
+
+
+logger = logging.getLogger(__name__)
+
+
+def _note_places(domain: str, places: Optional[Dict[str, int]]) -> None:
+    """Keep the ranking places just read with the library's novels (for its sort)."""
+    if not places:
+        return
+    try:
+        note_places(domain, places)
+    except Exception as error:
+        logger.warning(f"Could not keep the ranking of {domain}: {error}")
 
 
 def _select_novels(urls: List[str], limit: Optional[int] = None) -> List[str]:
@@ -767,8 +782,50 @@ class ExportSourceHandler(BaseHandler):
                 f"{len(found)} novel(s) on {domain} from its ranking, most popular first"
                 + (" (stopped at the time cap)" if capped else "")
             )
-            self._set_extra(phase="downloading", discovered=len(found), discovery_capped=capped)
+            self._set_extra(
+                phase="downloading",
+                discovered=len(found),
+                discovery_capped=capped,
+                ranked_order=True,
+            )
+            # kept by this job, and noted again once its novels are in the library
+            self._places = {url_key(url): place for place, url in enumerate(found, 1)}
+            _note_places(domain, self._places)
         return found, capped
+
+    def _rank_listed(self, crawler, domain: str, urls: List[str], budget: float) -> List[str]:
+        """These novels in the site's ranking order; ones not on the ranking after, as they were."""
+        keys = {url_key(url): url for url in urls}
+        places: Dict[str, int] = {}
+        started = monotonic()
+        self._set_extra(phase="discovering", order="ranked")
+        try:
+            for place, url in enumerate(crawler.popular(), start=1):
+                if self.signal.is_set():
+                    raise AbortedException()
+                key = url_key(url)
+                if key in keys and key not in places:
+                    places[key] = place
+                    if len(places) == len(keys):
+                        break
+                if monotonic() - started >= budget:
+                    break
+        except AbortedException:
+            raise
+        except Exception as error:
+            ctx.logger.warn(f"Could not read the ranking of {domain}: {error}")
+        self._set_extra(phase="downloading")
+        if not places:
+            return urls
+        self._places = places
+        _note_places(domain, places)
+        ranked = [keys[key] for key in sorted(places, key=lambda key: places[key])]
+        rest = [url for url in urls if url_key(url) not in places]
+        ctx.logger.info(
+            f"{len(ranked)} of {len(urls)} novel(s) on {domain} put in its ranking order; "
+            f"{len(rest)} not on the ranking follow"
+        )
+        return ranked + rest
 
     def _wait(self, seconds: float, phase: str, **extra) -> None:
         """Wait ``seconds``, showing why and when it resumes, and stay alive.
@@ -947,11 +1004,19 @@ class ExportSourceHandler(BaseHandler):
         # every run records it, which is what tells a job from before the split
         self._set_extra(current_rps=requests_per_sec)
 
-        # Seed the de-dupe set with titles already in the library from *other*
-        # sources, so a story grabbed from one site isn't redone from another.
-        seen_titles: Set[str] = set()
+        # Titles already downloaded in full from *other* sources, with how many
+        # chapters that copy has, so a story grabbed from one site isn't redone
+        # from another. A copy with only its details, or a stub (MangaDex keeps
+        # three chapters of a licensed series), is not having the story: it made
+        # a full copy asked for from another site "already had", and skipped it.
+        # Novels the user named themselves are never skipped: that copy was asked for.
+        named = bool(self.job.extra.get("urls")) and not self.job.extra.get("found_by_discovery")
+        dedupe = dedupe and not named
+        seen_titles: Dict[str, int] = {}
         if dedupe:
-            seen_titles = {_norm_title(t) for t in ctx.novels.list_titles(exclude_domain=domain)}
+            for title, chapters in ctx.novels.downloaded_titles(exclude_domain=domain).items():
+                key = _norm_title(title)
+                seen_titles[key] = max(seen_titles.get(key, 0), chapters)
 
         # Paused or stopped while it was still starting (a worker process can
         # take two minutes to come up): it used to be marked running regardless,
@@ -1002,6 +1067,17 @@ class ExportSourceHandler(BaseHandler):
                 # apply and must not silently drop any of them. This is also
                 # the resume path: the list persisted below was already capped.
                 urls = _select_novels(list(selected))
+                if (
+                    found_here
+                    and not self.job.extra.get("ranked_order")
+                    and self.job.extra.get("most_popular_first", True)
+                    and getattr(crawler, "can_rank", False)
+                ):
+                    # a download begun before sites' rankings were read (or one
+                    # carried over from an older build) has its list in the order
+                    # a search found it: put into ranking order once, on resuming
+                    urls = self._rank_listed(crawler, domain, urls, discovery_timeout)
+                    self._set_extra(urls=urls, ranked_order=True)
             else:
                 urls, capped = self._discover(
                     crawler, domain, discovery_timeout, polite, use_sitemap
@@ -1650,6 +1726,8 @@ class ExportSourceHandler(BaseHandler):
                 self._set_progress(len(complete) + len(partial) + len(skipped), total)
                 pending = pending + _run_passes(new_urls)
 
+            # the novels are in the library now: their places with them
+            _note_places(domain, getattr(self, "_places", None))
             # speed memory: remember the rate the tuner settled on for next run
             if auto_tune and self.pace.rate > 0:
                 _save_manifest(domain, manifest, tuned_rps=self.pace.rate)
@@ -1908,7 +1986,7 @@ def _download_novel(
     novel_url: str,
     fmt: OutputFormat,
     signal,
-    seen_titles: Optional[Set[str]] = None,
+    seen_titles: Optional[Dict[str, int]] = None,
     dedupe: bool = False,
     max_chapters: int = 0,
     on_novel: Optional[Callable[[str, int, int], None]] = None,
@@ -1948,7 +2026,12 @@ def _download_novel(
         novel = ctx.crawler.fetch_novel(user_id, novel_url, signal=signal, custom=crawler)
 
     norm = _norm_title(novel.title)
-    if dedupe and seen_titles is not None and norm in seen_titles:
+    # had already only if that copy holds (nearly) as many chapters as this one lists
+    if (
+        dedupe
+        and seen_titles is not None
+        and seen_titles.get(norm, 0) >= max(1, int((novel.chapter_count or 0) * 0.9))
+    ):
         return {"file": None, "missing": 0, "duplicate": True}
     books = getattr(ctx, "books", None)
     if books is not None and books.unavailable(novel.id):
@@ -2078,7 +2161,7 @@ def _download_novel(
 
     if not build:
         if seen_titles is not None and missing == 0:
-            seen_titles.add(norm)
+            seen_titles[norm] = max(seen_titles.get(norm, 0), novel.chapter_count or 0)
         return {
             "file": None,
             "missing": missing,
@@ -2104,5 +2187,6 @@ def _download_novel(
     if artifact and artifact.is_available:
         file = ctx.files.resolve(artifact.output_file)
         if seen_titles is not None and missing == 0:
-            seen_titles.add(norm)  # remember it so other sources skip this story
+            # remember it so other sources skip this story
+            seen_titles[norm] = max(seen_titles.get(norm, 0), novel.chapter_count or 0)
     return {"file": file, "missing": missing, "duplicate": False, "errors": errors}

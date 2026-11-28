@@ -121,6 +121,24 @@ class NovelRepairTests(unittest.TestCase):
         self.assertEqual(walked, [url])  # a limit stops reading the ranking
         self.assertEqual(job.extra.get("discovered"), 1)
 
+    def test_a_download_resumed_from_before_rankings_is_put_in_ranking_order(self) -> None:
+        url = "https://novelfire.net/book/example"
+        other = "https://novelfire.net/book/unranked"
+        self.source.can_rank = True
+        self.source.popular = lambda: iter(["https://novelfire.net/book/top", url + "/"])
+        self.stack.enter_context(patch("lncrawl.services.ranking.ctx", self.ctx))
+        job = self.export_novel(
+            discover=True,  # (keeps the list given here)
+            check_discovery=False,
+            urls=[other, url],
+            found_by_discovery=True,
+            discovery_done=True,
+        )
+        self.assertEqual(job.extra["urls"], [url, other])  # ranked first, the rest after
+        self.assertTrue(job.extra["ranked_order"])
+        with self.ctx.db.session() as session:
+            self.assertEqual(session.get(Novel, "novel").extra.get("rank"), 2)
+
     def test_export_reuses_zip_after_individual_ebook_and_chapters_are_removed(self) -> None:
         first = self.export_novel(discover=True)
         self.assertEqual(first.status, JobStatus.SUCCESS, first.error)
@@ -156,6 +174,43 @@ class NovelRepairTests(unittest.TestCase):
         self.assertEqual(job.extra["complete"], 1)
         self.assertEqual(job.extra["incomplete"], 0)
         self.assertEqual(attempts.count(2), 2)
+
+    def other_copy(self, chapters: int) -> None:
+        """The same title from another site, with this many chapters, all downloaded."""
+        with self.ctx.db.session() as session:
+            session.add(
+                Novel(id="other", title="Test Novel", url="https://o.com/n", domain="o.com")
+            )
+            for serial in range(1, chapters + 1):
+                session.add(
+                    Chapter(
+                        id=f"other-{serial}",
+                        novel_id="other",
+                        serial=serial,
+                        title=f"Chapter {serial}",
+                        url=f"https://o.com/n/{serial}",
+                        is_done=True,
+                    )
+                )
+            session.commit()
+
+    def test_a_stub_of_the_title_from_another_site_does_not_count_as_having_it(self) -> None:
+        self.other_copy(1)  # one chapter of four: not the story
+        job = self.export_novel(discover=True, check_discovery=False, dedupe=True)
+        self.assertEqual(job.extra["complete"], 1, job.extra)
+        self.assertEqual(job.extra.get("skipped", 0), 0)
+
+    def test_a_full_copy_from_another_site_is_not_downloaded_again_by_a_site_download(self) -> None:
+        self.other_copy(4)
+        job = self.export_novel(discover=True, check_discovery=False, dedupe=True)
+        self.assertEqual(job.extra.get("skipped"), 1, job.extra)
+        self.assertEqual(self.downloads, [])
+
+    def test_a_novel_asked_for_by_its_link_is_downloaded_whatever_else_is_there(self) -> None:
+        self.other_copy(4)
+        job = self.export_novel(dedupe=True)  # named: its address was given
+        self.assertEqual(job.extra["complete"], 1, job.extra)
+        self.assertEqual(job.extra.get("skipped", 0), 0)
 
     def test_sample_export_does_not_satisfy_later_full_export(self) -> None:
         sample = self.export_novel(max_chapters=2)

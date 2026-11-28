@@ -129,6 +129,17 @@ def _rank_site(user_id: str, site: str) -> None:
     _save(found)
 
 
+def note_places(site: str, places: Dict[str, int]) -> None:
+    """Record places read elsewhere (a site download walking the ranking), by `url_key`."""
+    with ctx.db.session() as sess:
+        novels = sess.exec(sq.select(Novel.id, Novel.url).where(Novel.domain == site)).all()
+    found = {
+        novel_id: places[url_key(url)] for novel_id, url in novels if url and url_key(url) in places
+    }
+    for start in range(0, len(found), _SAVE_EVERY):
+        _save(dict(list(found.items())[start : start + _SAVE_EVERY]))
+
+
 def _save(ranks: Dict[str, int]) -> None:
     if not ranks:
         return

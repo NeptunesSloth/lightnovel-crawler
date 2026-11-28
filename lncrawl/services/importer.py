@@ -683,12 +683,17 @@ def _placeholder_url(book: ParsedBook, member: str) -> str:
     return f"https://{IMPORTED_HOST}/{slug.lower() or 'novel'}"
 
 
-def _named_like(member: str) -> Optional[Novel]:
+def _named_like(member: str, serials: Optional[Set[int]] = None) -> Optional[Novel]:
     """The one novel in the library whose e-book would be named like ``member``.
 
     For a book that says nothing of where it came from (a CBZ made before they
     did): e-book files are named from the novel's title, so the name leads
     back to the novel. None unless exactly one fits.
+
+    ``serials``: the book's chapters. A book of this novel made here holds no
+    chapter the novel does not list; one that does is the same title from
+    somewhere else (a full Komi beside a MangaDex Komi of three chapters), and
+    merging it in by place put its chapter 1 on the novel's chapter 288.
     """
     stem = _title_of(posixpath.basename(member)).casefold()
     with ctx.db.session() as sess:
@@ -705,14 +710,21 @@ def _named_like(member: str) -> Optional[Novel]:
     if len(fits) != 1:
         return None
     with ctx.db.session() as sess:
-        return sess.get(Novel, fits[0])
+        novel = sess.get(Novel, fits[0])
+        if novel is not None and serials:
+            listed = set(
+                sess.exec(sq.select(Chapter.serial).where(Chapter.novel_id == novel.id)).all()
+            )
+            if not serials <= listed:
+                return None  # another copy of the title: kept as one of its own
+        return novel
 
 
 def _upsert_novel(book: ParsedBook, member: str) -> Tuple[Novel, bool]:
     url = book.source_url or _placeholder_url(book, member)
     novel = None
     if not book.source_url and book.manga:
-        novel = _named_like(member)
+        novel = _named_like(member, {chapter.serial for chapter in book.chapters})
         if novel is not None:
             url = novel.url
             book.title = novel.title  # the name read off the file is the rougher one
