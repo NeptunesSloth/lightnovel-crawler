@@ -23,7 +23,8 @@ import zipfile
 import sqlmodel as sq
 
 from ..context import ctx
-from ..dao import Artifact, ChapterImage
+from ..core.models import Chapter as CrawlerChapter
+from ..dao import Artifact, Chapter, ChapterImage
 from ..enums import OutputFormat
 from ..utils.file_tools import atomic_write
 
@@ -40,6 +41,8 @@ _hint: Dict[str, str] = {}  # (kept for callers that clear it)
 # are not looked for again for a while (each look was the same, slow, miss).
 _given_up: Dict[str, float] = {}
 GIVE_UP_FOR = 600.0
+_relearn_lock = threading.Lock()
+_relearned: Dict[str, float] = {}  # chapters read from their site again, and when
 _said: Set[str] = set()  # chapters already said to be past saving, so the log says it once
 # Seconds a page may take to download again while the Reader waits for it.
 DOWNLOAD_WAIT = 40.0
@@ -140,6 +143,65 @@ def _download(image_id: str, novel_id: str, chapter_id: str, user_id: str) -> Op
     return file if file.is_file() and file.stat().st_size > 0 else None
 
 
+def _relearn(chapter: Chapter, named: List[str], user_id: str) -> None:
+    """Read the chapter from its site again to learn where its pages are.
+
+    For a chapter whose page records are gone altogether (deleted with another
+    copy of the manga that had them): the chapter's own address is still
+    known, a page's id is made from that and the page's address, so reading
+    the chapter again gives the same ids with their addresses, and the pages
+    can be downloaded. The chapter's stored text is left as it is. Once per
+    chapter in a while, whoever asks.
+    """
+    if not str(chapter.url or "").startswith(("http://", "https://")):
+        return
+    with _relearn_lock:
+        if monotonic() - _relearned.get(chapter.id, -GIVE_UP_FOR) < GIVE_UP_FOR:
+            return
+        _relearned[chapter.id] = monotonic()
+        with ctx.db.session() as sess:
+            rows = {
+                image.id: image
+                for image in sess.exec(
+                    sq.select(ChapterImage).where(sq.col(ChapterImage.id).in_(named))
+                ).all()
+            }
+        if all(i in rows and str(rows[i].url).startswith("http") for i in named):
+            return  # every page's address is known already
+        novel = ctx.novels.get(chapter.novel_id)
+        stop = Event()
+        timer = threading.Timer(DOWNLOAD_WAIT, stop.set)
+        timer.start()
+        try:
+            with ctx.crawler.prepare_crawler(user_id, novel.url, stop, pooled=True) as crawler:
+                model = CrawlerChapter(url=str(chapter.url), id=chapter.serial, title=chapter.title)
+                model.update(chapter.extra)
+                crawler.download_chapter(model)
+                crawler.format_chapter(model)
+        finally:
+            timer.cancel()
+        learned = {i: url for i, url in (model.images or {}).items() if i in named}
+        if not learned:
+            return
+        with ctx.db.session() as sess:
+            for image_id, url in learned.items():
+                image = sess.get(ChapterImage, image_id)
+                if image is None:
+                    image = ChapterImage(
+                        id=image_id, url=url, chapter_id=chapter.id, novel_id=chapter.novel_id
+                    )
+                else:
+                    image.url = url
+                    image.chapter_id = chapter.id
+                    image.novel_id = chapter.novel_id
+                sess.add(image)
+            sess.commit()
+        logger.info(
+            f"Learned again where {len(learned)} page(s) of chapter {chapter.serial} of "
+            f"novel {chapter.novel_id} are"
+        )
+
+
 def _say_once(chapter_id: str, message: str) -> None:
     if chapter_id not in _said:
         _said.add(chapter_id)
@@ -214,6 +276,7 @@ def restore(image_id: str, chapter_id: str, user_id: Optional[str] = None) -> Op
 
     if user_id:
         try:
+            _relearn(chapter, named, user_id)
             found = _download(image_id, novel_id, chapter_id, user_id)
             if found is not None:
                 return found

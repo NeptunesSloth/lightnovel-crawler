@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
@@ -24,6 +26,7 @@ class PageRescueTests(unittest.TestCase):
         page_rescue._books.clear()
         page_rescue._hint.clear()
         page_rescue._given_up.clear()
+        page_rescue._relearned.clear()
         body = "".join(f'<p><img src="images/{i}.jpg" alt="{i}"/></p>' for i in (FIRST, SECOND))
         self.ctx.files.save_text("novels/novel/chapters/000001.zst", body)
         book = self.ctx.files.resolve("novels/novel/artifacts/Test Novel.cbz")
@@ -108,6 +111,42 @@ class PageRescueTests(unittest.TestCase):
             self.assertIsNone(page_rescue.restore(FIRST, "chapter-1", "user"))
             self.assertIsNone(page_rescue.restore(SECOND, "chapter-1", "user"))
         self.assertEqual(looks, [FIRST])  # the second page was not searched for again
+
+    def test_pages_whose_records_are_gone_are_learned_again_from_the_chapter(self) -> None:
+        self.ctx.files.resolve("novels/novel/artifacts/Test Novel.cbz").unlink()
+        with self.ctx.db.session() as sess:  # no record of either page is left
+            for image in sess.exec(page_rescue.sq.select(ChapterImage)).all():
+                sess.delete(image)
+            sess.commit()
+        read = []
+
+        def download_chapter(model) -> None:
+            read.append(model.url)
+            model.images = {FIRST: "https://cdn.test/1.png", SECOND: "https://cdn.test/2.png"}
+
+        crawler = SimpleNamespace(download_chapter=download_chapter, format_chapter=lambda m: None)
+
+        @contextmanager
+        def prepare_crawler(*args, **kwargs):
+            yield crawler
+
+        def fetch(user_id, image_id, signal, refresh=False):
+            image = self.ctx.images.get(image_id)
+            file = self.ctx.files.resolve(image.image_file)
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(image.url.encode())
+            return image
+
+        with (
+            patch.object(self.ctx.crawler, "prepare_crawler", prepare_crawler),
+            patch.object(self.ctx.crawler, "fetch_image", fetch),
+        ):
+            first = page_rescue.restore(FIRST, "chapter-1", "user")
+            second = page_rescue.restore(SECOND, "chapter-1", "user")
+        assert first is not None and second is not None
+        self.assertEqual(first.read_bytes(), b"https://cdn.test/1.png")
+        self.assertEqual(second.read_bytes(), b"https://cdn.test/2.png")
+        self.assertEqual(len(read), 1)  # the chapter was read from its site once
 
 
 if __name__ == "__main__":
