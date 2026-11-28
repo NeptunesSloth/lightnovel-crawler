@@ -67,6 +67,25 @@ class RankingTests(unittest.TestCase):
             assert gem is not None
             self.assertNotIn("rank", gem.extra or {})
 
+    def test_any_request_for_chapters_goes_most_popular_first(self) -> None:
+        from lncrawl.services.jobs import service
+
+        with self.ctx.db.session() as sess:
+            for novel_id, rank in (("second-best", 2), ("novel", 9)):
+                novel = sess.get(Novel, novel_id)
+                assert novel is not None
+                novel.extra = {**(novel.extra or {}), "rank": rank}
+                sess.add(novel)
+            sess.commit()
+        asked = [
+            "https://www.novelfire.net/book/unknown-gem/",
+            "https://novelfire.net/book/example",
+            "https://www.novelfire.net/book/second-best/",
+        ]
+        with patch.object(service, "ctx", self.ctx):
+            ordered = service.JobService._by_rank(asked)
+        self.assertEqual(ordered, [asked[2], asked[1], asked[0]])  # 2nd, 9th, then unranked
+
     def test_addresses_match_however_they_are_written(self) -> None:
         self.assertEqual(
             ranking.url_key("https://www.NovelFire.net/book/x/"),

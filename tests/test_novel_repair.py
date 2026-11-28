@@ -121,6 +121,24 @@ class NovelRepairTests(unittest.TestCase):
         self.assertEqual(walked, [url])  # a limit stops reading the ranking
         self.assertEqual(job.extra.get("discovered"), 1)
 
+    def test_a_download_resumed_from_before_rankings_is_put_in_ranking_order(self) -> None:
+        url = "https://novelfire.net/book/example"
+        other = "https://novelfire.net/book/unranked"
+        self.source.can_rank = True
+        self.source.popular = lambda: iter(["https://novelfire.net/book/top", url + "/"])
+        self.stack.enter_context(patch("lncrawl.services.ranking.ctx", self.ctx))
+        job = self.export_novel(
+            discover=True,  # (keeps the list given here)
+            check_discovery=False,
+            urls=[other, url],
+            found_by_discovery=True,
+            discovery_done=True,
+        )
+        self.assertEqual(job.extra["urls"], [url, other])  # ranked first, the rest after
+        self.assertTrue(job.extra["ranked_order"])
+        with self.ctx.db.session() as session:
+            self.assertEqual(session.get(Novel, "novel").extra.get("rank"), 2)
+
     def test_export_reuses_zip_after_individual_ebook_and_chapters_are_removed(self) -> None:
         first = self.export_novel(discover=True)
         self.assertEqual(first.status, JobStatus.SUCCESS, first.error)

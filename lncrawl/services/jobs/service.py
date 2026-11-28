@@ -14,6 +14,7 @@ from ...dao import (
     JobStatus,
     JobType,
     LanguageCode,
+    Novel,
     OutputFormat,
     User,
     UserRole,
@@ -902,6 +903,10 @@ class JobService:
                 unknown.append(url)  # no source for it here; nothing could download it
                 continue
             by_site.setdefault(site, []).append(url)
+        # Whatever asked (the Reader's Get chapters, a selection, pasted links):
+        # each site's novels go most popular first, where their places are known.
+        for site, site_urls in by_site.items():
+            by_site[site] = self._by_rank(site_urls)
         if not by_site:
             if unknown:
                 raise ServerErrors.no_novels_to_download.with_extra(
@@ -920,6 +925,24 @@ class JobService:
             )
             for site_urls in by_site.values()
         ]
+
+    @staticmethod
+    def _by_rank(urls: List[str]) -> List[str]:
+        """These novels by their place on their site's ranking; unranked ones after, as given."""
+        try:
+            with ctx.db.session() as sess:
+                ranks = {}
+                for start in range(0, len(urls), 500):
+                    for novel in sess.exec(
+                        sq.select(Novel).where(sq.col(Novel.url).in_(urls[start : start + 500]))
+                    ).all():
+                        rank = (novel.extra or {}).get("rank")
+                        if isinstance(rank, int) and rank > 0:
+                            ranks[novel.url] = rank
+        except Exception:
+            return urls
+        ranked = sorted((url for url in urls if url in ranks), key=lambda url: ranks[url])
+        return ranked + [url for url in urls if url not in ranks]
 
     def import_archive(
         self,
