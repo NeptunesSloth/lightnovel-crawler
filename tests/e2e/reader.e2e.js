@@ -355,6 +355,26 @@ async function clearFilters(page) {
   check("no errors downloading an e-book", E.errors.length === 0, E.errors);
   await E.close();
 
+  console.log("Mark unread");
+  {
+    const M = await open(browser);
+    await search(M, "reading now");
+    await M.click("#lib-list .libcard h3"); await M.waitForSelector(".chap");
+    M.once("dialog", (d) => d.accept("2"));
+    await M.click("#prog-set"); await M.waitForTimeout(3500);  // set, and sent to the server
+    M.once("dialog", (d) => d.accept());
+    await M.click("#prog-unread"); await M.waitForTimeout(3500);
+    check("Mark unread forgets the place", await M.isHidden("#continue-btn"));
+    await M.reload();
+    await M.waitForFunction(() => /novel\(s\)/.test(document.getElementById("lib-status").textContent));
+    await M.waitForTimeout(1500);  // the sync with the server has run
+    const place = await M.evaluate((id) => JSON.parse(localStorage.getItem("lncrawl_reader_pos") || "{}")[id], IDS["Reading Now"]);
+    check("and the sync does not bring it back", place && place.gone === true && !place.id, place);
+    check("it leaves Continue reading", !/Reading Now/.test(await M.textContent("#lib-continue")));
+    check("no errors marking unread", M.errors.length === 0, M.errors);
+    await M.close();
+  }
+
   console.log("Chapters that cannot be had");
   {
     const W = await open(browser);

@@ -703,7 +703,7 @@ _READER_HTML = """<!DOCTYPE html>
   function loadPos() { try { return JSON.parse(localStorage.getItem(POS) || "{}"); } catch (e) { return {}; } }
   function posOf(novelId) {
     var v = (posMemo || loadPos())[novelId];
-    if (!v) return null;
+    if (!v || v.gone) return null;  // gone: marked unread (kept so the sync does not bring it back)
     if (typeof v === "string") return { id: v, serial: null, ts: 0 };  // legacy
     return v;
   }
@@ -2606,9 +2606,14 @@ _READER_HTML = """<!DOCTYPE html>
   });
   els["prog-unread"].addEventListener("click", function () {
     if (!current.novel || !confirm("Forget your place in “" + current.novel.title + "”?")) return;
-    var p = loadPos(); delete p[current.novel.id];
+    // Not deleted: the place is also kept on the server for your other devices,
+    // and a deleted one came straight back from there at the next sync. It is
+    // marked as given up, with the time, so that wins everywhere.
+    var p = loadPos(); p[current.novel.id] = { gone: true, ts: Date.now() };
     localStorage.setItem(POS, JSON.stringify(p));
+    posMemo = null;
     schedulePush();
+    renderContinue();
     openNovel(current.novel);
   });
   els["prog-set"].addEventListener("click", function () {

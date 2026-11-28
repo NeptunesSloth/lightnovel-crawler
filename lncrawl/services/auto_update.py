@@ -46,7 +46,12 @@ def _chosen_novels(user: User, scope: str) -> List[str]:
             favs = (state.get("favs") or {}).get("data") or []
             ids += [str(i) for i in favs if isinstance(i, str)]
     if scope in ("reading", "both"):
-        ids += [str(i) for i in (state.get("pos") or {})]
+        # (a place marked unread is kept as {"gone": true}: not being read)
+        ids += [
+            str(i)
+            for i, entry in (state.get("pos") or {}).items()
+            if not (isinstance(entry, dict) and entry.get("gone"))
+        ]
     return list(dict.fromkeys(ids))[:MAX_NOVELS]
 
 
