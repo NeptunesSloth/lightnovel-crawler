@@ -2,6 +2,7 @@ import errno
 import hashlib
 from html import escape
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -262,23 +263,17 @@ def _run_lanes(count: int, lane: Callable[[int], None]) -> None:
         raise errors[0]
 
 
-# The ranking places a site download read, by site: noted again once its
-# novels are in the library (most are not yet when the ranking is read).
-_places_read: Dict[str, Dict[str, int]] = {}
+logger = logging.getLogger(__name__)
 
 
-def _note_places(domain: str, places: Optional[Dict[str, int]] = None) -> None:
+def _note_places(domain: str, places: Optional[Dict[str, int]]) -> None:
     """Keep the ranking places just read with the library's novels (for its sort)."""
-    if places is None:
-        places = _places_read.get(domain) or {}
-    else:
-        _places_read[domain] = places
     if not places:
         return
     try:
         note_places(domain, places)
     except Exception as error:
-        ctx.logger.warn(f"Could not keep the ranking of {domain}: {error}")
+        logger.warning(f"Could not keep the ranking of {domain}: {error}")
 
 
 def _select_novels(urls: List[str], limit: Optional[int] = None) -> List[str]:
@@ -793,7 +788,9 @@ class ExportSourceHandler(BaseHandler):
                 discovery_capped=capped,
                 ranked_order=True,
             )
-            _note_places(domain, {url_key(url): place for place, url in enumerate(found, 1)})
+            # kept by this job, and noted again once its novels are in the library
+            self._places = {url_key(url): place for place, url in enumerate(found, 1)}
+            _note_places(domain, self._places)
         return found, capped
 
     def _rank_listed(self, crawler, domain: str, urls: List[str], budget: float) -> List[str]:
@@ -820,6 +817,7 @@ class ExportSourceHandler(BaseHandler):
         self._set_extra(phase="downloading")
         if not places:
             return urls
+        self._places = places
         _note_places(domain, places)
         ranked = [keys[key] for key in sorted(places, key=lambda key: places[key])]
         rest = [url for url in urls if url_key(url) not in places]
@@ -1720,7 +1718,8 @@ class ExportSourceHandler(BaseHandler):
                 self._set_progress(len(complete) + len(partial) + len(skipped), total)
                 pending = pending + _run_passes(new_urls)
 
-            _note_places(domain)  # the novels are in the library now: their places with them
+            # the novels are in the library now: their places with them
+            _note_places(domain, getattr(self, "_places", None))
             # speed memory: remember the rate the tuner settled on for next run
             if auto_tune and self.pace.rate > 0:
                 _save_manifest(domain, manifest, tuned_rps=self.pace.rate)
